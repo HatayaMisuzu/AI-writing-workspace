@@ -95,10 +95,12 @@ export function EditorSurface({ node, content, focusMode, onFocusMode, onSaved, 
 
   useEffect(() => onRegisterInsert(async (text) => {
     if (!editor || !text) return
+    await coordinator.flush()
+    await window.workspace.snapshots.create(node.projectId, node.id, 'ai_edit')
     pendingStyleSample.current = { origin: 'ai', text }
     if (!editor.chain().focus().insertContent(text).run()) throw new Error('无法把候选文本插入当前章节。')
     await coordinator.flush()
-  }), [coordinator, editor, onRegisterInsert])
+  }), [coordinator, editor, node.id, node.projectId, onRegisterInsert])
 
   useEffect(() => {
     if (!editor) return

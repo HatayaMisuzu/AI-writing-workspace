@@ -75,14 +75,18 @@ export class MemoryService {
     if (existing.status === 'confirmed') return existing
     if (existing.status === 'rejected' || existing.status === 'superseded') throw new Error('MEMORY_NOT_CONFIRMABLE')
     this.db.transaction(() => {
+      const now = Date.now()
       if (existing.supersedes) {
         const previous = this.get(projectId, existing.supersedes)
         if (previous.status !== 'confirmed') throw new Error('MEMORY_REPLACEMENT_TARGET_CHANGED')
         this.db.raw.prepare('UPDATE memories SET status = ?, updated_at = ? WHERE id = ? AND project_id = ?')
-          .run('superseded', Date.now(), previous.id, projectId)
+          .run('superseded', now, previous.id, projectId)
+        this.db.raw.prepare(`UPDATE memories SET status = 'rejected', updated_at = ?
+          WHERE project_id = ? AND supersedes = ? AND status = 'suggested' AND id != ?`)
+          .run(now, projectId, previous.id, memoryId)
       }
       this.db.raw.prepare('UPDATE memories SET status = ?, updated_at = ? WHERE id = ? AND project_id = ?')
-        .run('confirmed', Date.now(), memoryId, projectId)
+        .run('confirmed', now, memoryId, projectId)
     })
     return this.get(projectId, memoryId)
   }

@@ -47,3 +47,7 @@ export function resolveModelDisplayName(mode: RoutedTask, models: ModelConfig[],
   const model = route === 'default' ? fallback : models.find((item) => item.id === route && item.enabled) ?? fallback
   return model?.displayName ?? '未配置模型'
 }
+
+export function resolveDisplayedModelMode(inputMode: RoutedTask, activeRequestMode?: RoutedTask): RoutedTask {
+  return activeRequestMode ?? inputMode
+}

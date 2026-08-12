@@ -21,4 +21,17 @@ describe('history diff', () => {
     docs.restoreSnapshot(project.id, old.id)
     expect(docs.listSnapshots(project.id, chapter.id).some((snapshot) => snapshot.reason === 'pre_restore' && snapshot.plainText === '当前版本')).toBe(true)
   })
+
+  it('persists a restorable ai_edit snapshot from before candidate insertion', () => {
+    const db = createTestDb(); const project = new ProjectService(db).create({ title: '候选插入历史', projectType: 'novel' })
+    const docs = new DocumentService(db); const chapter = docs.listOrderedChapters(project.id)[0]
+    docs.saveContent({ projectId: project.id, documentId: chapter.id, editorJson: { type: 'doc' }, plainText: '插入前正文' })
+    const beforeInsertion = docs.createSnapshot(project.id, chapter.id, 'ai_edit')
+    docs.saveContent({ projectId: project.id, documentId: chapter.id, editorJson: { type: 'doc' }, plainText: '插入前正文候选续写' })
+
+    const restarted = new DocumentService(db)
+    expect(restarted.listSnapshots(project.id, chapter.id).find((snapshot) => snapshot.id === beforeInsertion.id))
+      .toMatchObject({ reason: 'ai_edit', plainText: '插入前正文' })
+    expect(restarted.restoreSnapshot(project.id, beforeInsertion.id).plainText).toBe('插入前正文')
+  })
 })

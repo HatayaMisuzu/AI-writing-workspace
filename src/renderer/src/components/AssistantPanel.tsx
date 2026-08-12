@@ -1,8 +1,8 @@
 import { Bot, Check, ChevronRight, Copy, FileSearch, MessageSquarePlus, PenLine, RefreshCw, Send, Sparkles, Square, Trash2 } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { AIMode, ChatThread, ContextBundle, DigestStatus, MemoryProposal, Project, RoutedTask } from '../../../shared/domain'
+import type { AIMode, ChatThread, ContextBundle, DigestStatus, MemoryProposal, ModelConfig, Project, RoutedTask } from '../../../shared/domain'
 import type { EditorSelection } from './EditorSurface'
-import { canInsertCandidate, mapChatHistory, resolveModelDisplayName, retryInputForMessage, type AssistantHistoryMessage } from '../services/assistant-history'
+import { canInsertCandidate, mapChatHistory, resolveDisplayedModelMode, resolveModelDisplayName, retryInputForMessage, type AssistantHistoryMessage } from '../services/assistant-history'
 
 type ContextSummary = { count: number; tokens: number; items: Array<{ kind: string; title: string; reason: string; preview: string }> }
 type ViewMessage = AssistantHistoryMessage & { selection?: EditorSelection; proposals?: MemoryProposal[]; proposalError?: string; recorded?: boolean; context?: ContextSummary }
@@ -28,14 +28,17 @@ export function AssistantPanel({ project, documentId, documentRevision, selectio
   const [loadingHistory, setLoadingHistory] = useState(true)
   const [hasEarlier, setHasEarlier] = useState(false)
   const [runningId, setRunningId] = useState<string>()
+  const [activeRequestMode, setActiveRequestMode] = useState<RoutedTask>()
   const [digestStatus, setDigestStatus] = useState<DigestStatus>()
   const [digestBusy, setDigestBusy] = useState(false)
-  const [modelName, setModelName] = useState('未配置模型')
+  const [modelRouting, setModelRouting] = useState<{ models: ModelConfig[]; routes: Record<RoutedTask, string | 'default'> }>()
   const cleanups = useRef(new Map<string, () => void>())
   const streamed = useRef(new Map<string, string>())
   const chatScroll = useRef<HTMLDivElement>(null)
   const followLatest = useRef(true)
-  const routedMode = inferMode(input, mode) as RoutedTask
+  const inputMode = inferMode(input, mode) as RoutedTask
+  const displayedModelMode = resolveDisplayedModelMode(inputMode, activeRequestMode)
+  const modelName = modelRouting ? resolveModelDisplayName(displayedModelMode, modelRouting.models, modelRouting.routes) : '未配置模型'
 
   const loadThread = useCallback(async (targetThreadId?: string): Promise<void> => {
     setLoadingHistory(true)
@@ -50,10 +53,12 @@ export function AssistantPanel({ project, documentId, documentRevision, selectio
   useEffect(() => { void loadThread().catch((error) => { setLoadingHistory(false); setMessages([{ id: crypto.randomUUID(), role: 'assistant',
     content: `读取历史失败：${error instanceof Error ? error.message : String(error)}`, status: 'error', createdAt: Date.now() }]) }) }, [loadThread])
   useEffect(() => {
+    let active = true
     void Promise.all([window.workspace.providers.models(), window.workspace.providers.routes()])
-      .then(([models, routes]) => setModelName(resolveModelDisplayName(routedMode, models, routes)))
-      .catch(() => setModelName('未配置模型'))
-  }, [routedMode])
+      .then(([models, routes]) => { if (active) setModelRouting({ models, routes }) })
+      .catch(() => { if (active) setModelRouting(undefined) })
+    return () => { active = false }
+  }, [])
   useEffect(() => {
     if (!documentId) { setDigestStatus(undefined); return }
     void window.workspace.digests.status(project.id, documentId).then(setDigestStatus)
@@ -82,6 +87,7 @@ export function AssistantPanel({ project, documentId, documentRevision, selectio
     const requestedMode = inferMode(text, mode); const now = Date.now()
     followLatest.current = true
     setRunningId(requestId)
+    setActiveRequestMode(requestedMode as RoutedTask)
     setMessages((current) => [...current, { id: messageId, role: 'user', content: text, mode: requestedMode, selection, createdAt: now },
       { id: assistantId, role: 'assistant', content: '', status: 'streaming', mode: requestedMode, selection, replyToUserId: messageId, createdAt: now + 1 }])
     setThreads((current) => current.map((thread) => thread.id === threadId && thread.title === '新对话'
@@ -90,6 +96,7 @@ export function AssistantPanel({ project, documentId, documentRevision, selectio
     try { await onBeforeAI() }
     catch (error) {
       setRunningId(undefined)
+      setActiveRequestMode(undefined)
       setMessages((current) => current.map((item) => item.id === assistantId ? { ...item, content: `发送前保存失败：${error instanceof Error ? error.message : String(error)}`, status: 'error' } : item))
       return
     }
@@ -112,6 +119,7 @@ export function AssistantPanel({ project, documentId, documentRevision, selectio
       } else if (event.type === 'done') {
         const finalText = streamed.current.get(requestId) ?? ''
         setRunningId(undefined)
+        setActiveRequestMode(undefined)
         setMessages((current) => current.map((item) => item.id === assistantId ? { ...item, content: finalText, status: undefined } : item))
         if (requestedMode === 'editing' && selection && finalText) void onCreatePatch(selection, finalText).catch((error) => {
           setMessages((current) => current.map((item) => item.id === assistantId ? { ...item, content: `${finalText}\n\n提案创建失败：${error instanceof Error ? error.message : String(error)}`, status: 'error' } : item))
@@ -119,6 +127,7 @@ export function AssistantPanel({ project, documentId, documentRevision, selectio
         cleanups.current.get(requestId)?.(); cleanups.current.delete(requestId); streamed.current.delete(requestId)
       } else {
         setRunningId(undefined)
+        setActiveRequestMode(undefined)
         setMessages((current) => current.map((item) => item.id === assistantId ? { ...item, content: event.message,
           status: event.code === 'PROVIDER_CANCELLED' ? 'cancelled' : 'error' } : item))
         cleanups.current.get(requestId)?.(); cleanups.current.delete(requestId); streamed.current.delete(requestId)
@@ -150,10 +159,15 @@ export function AssistantPanel({ project, documentId, documentRevision, selectio
   }
   const resolveProposal = async (messageId: string, proposalId: string, action: 'confirm' | 'reject'): Promise<void> => {
     try {
-      if (action === 'confirm') await window.workspace.memories.confirm(project.id, proposalId)
-      else await window.workspace.memories.reject(project.id, proposalId)
-      setMessages((current) => current.map((item) => item.id === messageId ? { ...item,
-        proposals: item.proposals?.filter((proposal) => proposal.id !== proposalId), recorded: action === 'confirm', proposalError: undefined } : item))
+      const resolved = action === 'confirm'
+        ? await window.workspace.memories.confirm(project.id, proposalId)
+        : await window.workspace.memories.reject(project.id, proposalId)
+      setMessages((current) => current.map((item) => {
+        const proposals = item.proposals?.filter((proposal) => proposal.id !== proposalId &&
+          !(action === 'confirm' && resolved.supersedes && proposal.supersedes === resolved.supersedes))
+        return item.id === messageId ? { ...item, proposals, recorded: action === 'confirm', proposalError: undefined }
+          : proposals?.length !== item.proposals?.length ? { ...item, proposals } : item
+      }))
     } catch (error) { setMessages((current) => current.map((item) => item.id === messageId
       ? { ...item, proposalError: `记忆提案处理失败：${error instanceof Error ? error.message : String(error)}` } : item)) }
   }
@@ -161,7 +175,7 @@ export function AssistantPanel({ project, documentId, documentRevision, selectio
   if (collapsed) return <button className="assistant-collapsed" onClick={onCollapse}><Bot size={18} /><span>同行者</span></button>
   return <aside className="assistant-panel">
     <header><div><h2>同行者</h2><span className="scope-notice">{modelName} · 仅使用《{project.title}》</span></div><div className="assistant-head-actions"><button className="icon-button" disabled={Boolean(runningId)} title="新对话" onClick={() => void newThread()}><MessageSquarePlus size={17} /></button><button className="icon-button" title="收起同行者" onClick={onCollapse}><ChevronRight size={18} /></button></div></header>
-    <div className="thread-picker"><label htmlFor="assistant-thread">对话</label><select id="assistant-thread" value={threadId ?? ''} disabled={Boolean(runningId) || loadingHistory} onChange={(event) => void loadThread(event.target.value)}>{threads.slice(0, 12).map((thread) => <option key={thread.id} value={thread.id}>{thread.title} · {new Date(thread.updatedAt).toLocaleDateString()}</option>)}</select></div>
+    <div className="thread-picker"><label htmlFor="assistant-thread">对话</label><select id="assistant-thread" value={threadId ?? ''} disabled={Boolean(runningId) || loadingHistory} onChange={(event) => void loadThread(event.target.value)}>{threads.map((thread) => <option key={thread.id} value={thread.id}>{thread.title} · {new Date(thread.updatedAt).toLocaleDateString()}</option>)}</select></div>
     <div className="assistant-tools"><button disabled={!documentId || digestBusy} onClick={() => void runDigest()}><FileSearch size={14} />{digestBusy ? '理解中…' : '理解本章'}</button><span className={digestStatus?.state === 'stale' ? 'stale' : ''}>{digestLabel(digestStatus)}</span></div>
     <div className="chat-scroll" ref={chatScroll} onScroll={(event) => {
       const node = event.currentTarget

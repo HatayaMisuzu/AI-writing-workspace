@@ -10,7 +10,7 @@ import { DocumentService } from '../src/main/services/document-service'
 import { MemoryService } from '../src/main/services/memory-service'
 import { ProjectService } from '../src/main/services/project-service'
 import { StyleSampleService } from '../src/main/services/style-sample-service'
-import { canInsertCandidate, mapChatHistory, resolveModelDisplayName, retryInputForMessage } from '../src/renderer/src/services/assistant-history'
+import { canInsertCandidate, mapChatHistory, resolveDisplayedModelMode, resolveModelDisplayName, retryInputForMessage } from '../src/renderer/src/services/assistant-history'
 import { findTextRanges } from '../src/renderer/src/services/prosemirror-range'
 import { createTestDb, testCodec } from './helpers'
 
@@ -23,6 +23,7 @@ describe('product hardening invariants', () => {
     const old = memories.create({ projectId: project.id, type: 'fact', content: '钥匙藏在钟楼', status: 'suggested', sourceType: 'author', sourceId: 'author' })
     memories.confirm(project.id, old.id, 'user')
     const replacement = memories.proposeReplacement(project.id, old.id, '钥匙藏在旧车站')
+    const competingReplacement = memories.proposeReplacement(project.id, old.id, '钥匙藏在河岸仓库')
 
     expect(memories.list(project.id).find((item) => item.id === old.id)?.status).toBe('confirmed')
     const before = new ContextEngine(db).build({ mode: 'discussion', writePermission: 'none', userIntent: '钥匙藏在哪里', projectId: project.id })
@@ -33,6 +34,7 @@ describe('product hardening invariants', () => {
     const after = memories.list(project.id)
     expect(after.find((item) => item.id === old.id)?.status).toBe('superseded')
     expect(after.find((item) => item.id === replacement.id)).toMatchObject({ status: 'confirmed', supersedes: old.id })
+    expect(after.find((item) => item.id === competingReplacement.id)?.status).toBe('rejected')
     const active = new ContextEngine(db).build({ mode: 'discussion', writePermission: 'none', userIntent: '钥匙藏在哪里', projectId: project.id })
     expect(JSON.stringify(active)).toContain('钥匙藏在旧车站')
     expect(JSON.stringify(active)).not.toContain('钥匙藏在钟楼')
@@ -84,6 +86,8 @@ describe('product hardening invariants', () => {
     const routes = { discussion: 'default', brainstorm: 'default', generation: 'writer', editing: 'default', organization: 'default', chapter_digest: 'default', proofreading: 'default' } as const
     expect(resolveModelDisplayName('generation', models, routes)).toBe('续写模型')
     expect(resolveModelDisplayName('generation', models.map((model) => model.id === 'writer' ? { ...model, enabled: false } : model), routes)).toBe('默认模型')
+    expect(resolveDisplayedModelMode('discussion', 'generation')).toBe('generation')
+    expect(resolveDisplayedModelMode('brainstorm')).toBe('brainstorm')
   })
 
   it('grounds duplicate proofreading issues to the requested occurrence and rejects ambiguous results', async () => {
