@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { z } from 'zod'
 import type { AppDatabase } from '../database/database'
+import type { DigestStatus } from '../../shared/domain'
 import { DocumentService } from '../services/document-service'
 import { MemoryService } from '../services/memory-service'
 
@@ -57,5 +58,13 @@ export class ChapterDigestService {
     return rows.map((row) => ({ id: row.id as string, chapterId: row.chapter_id as string, revision: row.chapter_revision as number,
       summary: row.summary as string, payload: chapterDigestSchema.parse(JSON.parse(row.structured_payload as string)),
       stale: Boolean(row.stale), createdAt: row.created_at as number }))
+  }
+
+  status(projectId: string, chapterId: string): DigestStatus {
+    const current = this.documents.getContent(projectId, chapterId)
+    const latest = this.list(projectId, chapterId)[0]
+    if (!latest) return { state: 'missing' }
+    if (!latest.stale && latest.revision === current.revision) return { state: 'fresh', digestId: latest.id, chapterRevision: latest.revision }
+    return { state: 'stale', digestId: latest.id, digestRevision: latest.revision, currentRevision: current.revision }
   }
 }

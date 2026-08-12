@@ -29,8 +29,9 @@ export function WorkspaceScreen({ project, onProjectChanged, onSettings, onRegis
   const [searchResults, setSearchResults] = useState<SearchResult[]>([])
   const [patchOpen, setPatchOpen] = useState(false)
   const [nodeCreator, setNodeCreator] = useState<{ type: 'volume' | 'chapter'; parentId?: string; title: string }>()
+  const [nodeEditor, setNodeEditor] = useState<{ node: DocumentNode; action: 'rename' | 'delete'; title: string }>()
   const [navigationError, setNavigationError] = useState<string>()
-  const [insertCandidate, setInsertCandidate] = useState<(text: string) => void>(() => () => undefined)
+  const [insertCandidate, setInsertCandidate] = useState<(text: string) => Promise<void>>(() => async () => undefined)
   const editorController = useRef<EditorController | undefined>(undefined)
   const navigationSequence = useRef(0)
 
@@ -81,7 +82,27 @@ export function WorkspaceScreen({ project, onProjectChanged, onSettings, onRegis
   }
   const requestCreateNode = async (type: 'volume' | 'chapter', parentId?: string): Promise<void> => {
     try { await flushEditor() } catch (error) { setNavigationError(`保存失败，未创建新节点：${error instanceof Error ? error.message : String(error)}`); return }
+    if (type === 'chapter' && !parentId) {
+      setNavigationError('请先新建一卷，再在卷中添加章节。')
+      return
+    }
     setNodeCreator({ type, parentId, title: type === 'volume' ? '新卷' : '新章节' })
+  }
+  const updateNode = async (): Promise<void> => {
+    if (!nodeEditor) return
+    try {
+      await flushEditor()
+      if (nodeEditor.action === 'rename') {
+        if (!nodeEditor.title.trim()) throw new Error('名称不能为空。')
+        await window.workspace.documents.rename(project.id, nodeEditor.node.id, nodeEditor.title.trim())
+      } else {
+        await window.workspace.documents.delete(project.id, nodeEditor.node.id)
+        if (nodeEditor.node.id === selected?.id || (nodeEditor.node.type === 'volume' && selected?.parentId === nodeEditor.node.id)) {
+          setSelected(undefined); setContent(undefined); setSelection(undefined)
+        }
+      }
+      setNodeEditor(undefined); await refreshTree(); onProjectChanged()
+    } catch (error) { setNavigationError(`操作失败：${error instanceof Error ? error.message : String(error)}`) }
   }
   const createNode = async (): Promise<void> => {
     if (!nodeCreator?.title.trim()) return
@@ -108,13 +129,13 @@ export function WorkspaceScreen({ project, onProjectChanged, onSettings, onRegis
   }, [onProjectChanged, refreshTree, selected?.id])
 
   return <div className={focusMode ? 'workspace-screen is-focus' : 'workspace-screen'}>
-    {!focusMode && <ProjectSidebar project={project} tree={tree} selectedId={selected?.id} section={section} onSection={(next) => void changeSection(next)} onSelect={(node) => void openDocument(node)} onNewVolume={() => void requestCreateNode('volume')} onNewChapter={(parent) => void requestCreateNode('chapter', parent)} onReorder={async (documentId, parentId, orderIndex) => { try { await flushEditor(); await window.workspace.documents.reorder(project.id, documentId, parentId, orderIndex); await refreshTree() } catch (error) { setNavigationError(String(error)) } }} />}
+    {!focusMode && <ProjectSidebar project={project} tree={tree} selectedId={selected?.id} section={section} onSection={(next) => void changeSection(next)} onSelect={(node) => void openDocument(node)} onNewVolume={() => void requestCreateNode('volume')} onNewChapter={(parent) => void requestCreateNode('chapter', parent)} onRename={(node) => setNodeEditor({ node, action: 'rename', title: node.title })} onDelete={(node) => setNodeEditor({ node, action: 'delete', title: node.title })} onReorder={async (documentId, parentId, orderIndex) => { try { await flushEditor(); await window.workspace.documents.reorder(project.id, documentId, parentId, orderIndex); await refreshTree() } catch (error) { setNavigationError(String(error)) } }} />}
     <div className="workspace-main">
       <div className="workspace-actions"><button onClick={() => setSearchOpen(true)}><Search size={16} />全文检索</button><button onClick={() => setIdeaOpen(true)}><Lightbulb size={16} />快速灵感 <kbd>Ctrl J</kbd></button>{selected && <button onClick={() => setPatchOpen(true)}><SlidersHorizontal size={16} />修改提案</button>}<span />{focusMode && <button onClick={() => setFocusMode(false)}><SidebarClose size={16} />退出专注</button>}</div>
       {navigationError && <div className="navigation-error" role="alert">{navigationError}</div>}
-      {section === 'manuscript' && selected && content ? <EditorSurface node={selected} content={content} focusMode={focusMode} onFocusMode={setFocusMode} onSaved={(saved) => { setContent(saved); void refreshTree(); onProjectChanged() }} onSelection={setSelection} onRegisterInsert={(handler) => setInsertCandidate(() => handler)} onRegisterController={registerController} />
+      {section === 'manuscript' && selected && content ? <EditorSurface node={selected} content={content} focusMode={focusMode} onFocusMode={setFocusMode} onSaved={(saved) => { setContent(saved); void refreshTree(); onProjectChanged() }} onSelection={setSelection} onRegisterInsert={(handler) => setInsertCandidate(() => handler)} onRegisterController={registerController} onOpenPatches={() => setPatchOpen(true)} />
         : section === 'ideas' ? <IdeasView projectId={project.id} />
-        : section === 'history' ? <HistoryView projectId={project.id} document={selected} onRestored={(restored) => { setContent(restored); void refreshTree() }} />
+        : section === 'history' ? <HistoryView projectId={project.id} document={selected} currentContent={content} onRestored={(restored) => { setContent(restored); void refreshTree() }} />
         : section === 'ai-data' ? <MemoryView projectId={project.id} />
         : section === 'story' ? <NotesView projectId={project.id} section="story" />
         : section === 'references' ? <NotesView projectId={project.id} section="reference" />
@@ -122,10 +143,11 @@ export function WorkspaceScreen({ project, onProjectChanged, onSettings, onRegis
         : <section className="project-view placeholder-view"><FilePlus2 size={34} /><h1>内容</h1><p>这是辅助层，不要求作者维护复杂结构。</p></section>}
       <footer className="workspace-status"><span className="saved-dot" />本地项目<span>本章 {content?.wordCount.toLocaleString() ?? 0} 字</span><span>全书 {totalWords.toLocaleString()} 字</span><span>项目内容严格隔离</span></footer>
     </div>
-    {!focusMode && <AssistantPanel project={project} documentId={selected?.id} selection={selection} collapsed={assistantCollapsed} onCollapse={() => setAssistantCollapsed(!assistantCollapsed)} onInsertCandidate={insertCandidate} onCreatePatch={createPatch} onBeforeAI={flushEditor} onOpenSettings={onSettings} />}
+    {!focusMode && <AssistantPanel project={project} documentId={selected?.id} documentRevision={content?.revision} selection={selection} collapsed={assistantCollapsed} onCollapse={() => setAssistantCollapsed(!assistantCollapsed)} onInsertCandidate={insertCandidate} onCreatePatch={createPatch} onBeforeAI={flushEditor} onOpenSettings={onSettings} />}
     {ideaOpen && <div className="quick-idea-popover"><header><strong>快速记录灵感</strong><kbd>Ctrl J</kbd></header><textarea autoFocus value={ideaText} onChange={(event) => setIdeaText(event.target.value)} placeholder="记下一闪而过的想法…" /><div><button onClick={() => setIdeaOpen(false)}>取消</button><button className="primary" onClick={async () => { if (ideaText.trim()) await window.workspace.ideas.create(project.id, ideaText); setIdeaText(''); setIdeaOpen(false) }}>保存并返回正文</button></div></div>}
     {searchOpen && <Modal title={`在《${project.title}》中检索`} onClose={() => setSearchOpen(false)} width={680}><div className="search-dialog"><div className="dialog-search"><input autoFocus value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') void runSearch() }} placeholder="输入关键词；只检索当前作品" /><button className="primary" onClick={() => void runSearch()}>搜索</button></div><div className="search-results">{searchResults.map((result) => <button key={result.documentId} onClick={async () => { const node = tree.find((item) => item.id === result.documentId); if (node) await openDocument(node); setSearchOpen(false) }}><strong>{result.title}</strong><p>{renderSnippet(result.snippet)}</p></button>)}</div></div></Modal>}
     {patchOpen && selected && <PatchDrawer projectId={project.id} documentId={selected.id} onClose={() => setPatchOpen(false)} onAccept={acceptPatch} />}
     {nodeCreator && <Modal title={nodeCreator.type === 'volume' ? '新建卷' : '新建章节'} onClose={() => setNodeCreator(undefined)}><form className="node-create-form" onSubmit={(event) => { event.preventDefault(); void createNode() }}><label><span>{nodeCreator.type === 'volume' ? '卷名' : '章节名'}</span><input autoFocus value={nodeCreator.title} onChange={(event) => setNodeCreator({ ...nodeCreator, title: event.target.value })} /></label><div className="modal-actions"><button type="button" onClick={() => setNodeCreator(undefined)}>取消</button><button className="primary" type="submit">创建</button></div></form></Modal>}
+    {nodeEditor && <Modal title={nodeEditor.action === 'rename' ? `重命名${nodeEditor.node.type === 'volume' ? '卷' : '章节'}` : `删除${nodeEditor.node.type === 'volume' ? '卷' : '章节'}`} onClose={() => setNodeEditor(undefined)}><div className="node-create-form">{nodeEditor.action === 'rename' ? <label><span>名称</span><input autoFocus value={nodeEditor.title} onChange={(event) => setNodeEditor({ ...nodeEditor, title: event.target.value })} onKeyDown={(event) => { if (event.key === 'Enter') void updateNode() }} /></label> : <p>确定删除“{nodeEditor.node.title}”吗？{nodeEditor.node.type === 'volume' ? '卷内全部章节也会删除。' : '此操作无法撤销。'}</p>}<div className="modal-actions"><button onClick={() => setNodeEditor(undefined)}>取消</button><button className={nodeEditor.action === 'delete' ? 'danger-button' : 'primary'} onClick={() => void updateNode()}>{nodeEditor.action === 'rename' ? '保存' : '确认删除'}</button></div></div></Modal>}
   </div>
 }

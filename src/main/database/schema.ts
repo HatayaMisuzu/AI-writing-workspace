@@ -162,6 +162,20 @@ CREATE TABLE IF NOT EXISTS style_feedback (
   created_at INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS style_samples (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  document_id TEXT REFERENCES document_nodes(id) ON DELETE CASCADE,
+  origin TEXT NOT NULL CHECK(origin IN ('human','ai','ai_edited_by_human','mixed')),
+  text TEXT NOT NULL,
+  text_hash TEXT NOT NULL,
+  source_revision INTEGER,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  UNIQUE(project_id, origin, text_hash)
+);
+CREATE INDEX IF NOT EXISTS idx_style_samples_project_origin ON style_samples(project_id, origin, updated_at DESC);
+
 CREATE TABLE IF NOT EXISTS provider_configs (
   id TEXT PRIMARY KEY,
   provider_type TEXT NOT NULL,

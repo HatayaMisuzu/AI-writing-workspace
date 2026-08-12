@@ -36,5 +36,8 @@ export class AppDatabase {
       this.raw.exec('ALTER TABLE text_patches ADD COLUMN document_revision INTEGER NOT NULL DEFAULT -1')
       this.raw.prepare("UPDATE text_patches SET status = 'stale' WHERE status = 'proposed'").run()
     }
+    this.raw.prepare("UPDATE chat_messages SET status = 'error' WHERE status = 'streaming'").run()
+    this.raw.prepare(`INSERT INTO app_settings(key, value_json, updated_at) VALUES ('schema_version', '3', ?)
+      ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at`).run(Date.now())
   }
 }

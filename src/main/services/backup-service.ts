@@ -32,6 +32,7 @@ interface BackupPayload {
   digests: Array<Record<string, unknown>>
   origins: Array<Record<string, unknown>>
   feedback: Array<Record<string, unknown>>
+  styles?: Array<Record<string, unknown>>
   patches: Array<Record<string, unknown>>
 }
 
@@ -51,7 +52,8 @@ export class BackupService {
       characters: rows(this.db, 'characters', projectId), memories: rows(this.db, 'memories', projectId),
       threads: rows(this.db, 'chat_threads', projectId), messages: rows(this.db, 'chat_messages', projectId),
       digests: rows(this.db, 'chapter_digests', projectId), origins: rows(this.db, 'text_origins', projectId),
-      feedback: rows(this.db, 'style_feedback', projectId), patches: rows(this.db, 'text_patches', projectId)
+      feedback: rows(this.db, 'style_feedback', projectId), styles: rows(this.db, 'style_samples', projectId),
+      patches: rows(this.db, 'text_patches', projectId)
     }
     await writeFile(path, JSON.stringify(payload, (_key, value) => Buffer.isBuffer(value) ? value.toString('base64') : value, 2), 'utf8')
   }
@@ -72,6 +74,7 @@ export class BackupService {
     payload.digests.forEach((item) => idMap.set(item.id as string, randomUUID()))
     payload.origins.forEach((item) => idMap.set(item.id as string, randomUUID()))
     payload.feedback.forEach((item) => idMap.set(item.id as string, randomUUID()))
+    payload.styles?.forEach((item) => idMap.set(item.id as string, randomUUID()))
     payload.patches.forEach((item) => idMap.set(item.id as string, randomUUID()))
     const now = Date.now()
     this.db.transaction(() => {
@@ -112,6 +115,10 @@ export class BackupService {
       payload.origins.forEach((item) => originInsert.run(...[idMap.get(item.id as string), projectId, idMap.get(item.document_id as string), item.from_pos, item.to_pos, item.origin, item.created_at].map(sqlValue)))
       const feedbackInsert = this.db.raw.prepare(`INSERT INTO style_feedback(id,project_id,text_sample,feedback_type,comment,created_at) VALUES (?,?,?,?,?,?)`)
       payload.feedback.forEach((item) => feedbackInsert.run(...[idMap.get(item.id as string), projectId, item.text_sample, item.feedback_type, item.comment, item.created_at].map(sqlValue)))
+      const styleInsert = this.db.raw.prepare(`INSERT INTO style_samples(id,project_id,document_id,origin,text,text_hash,source_revision,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)`)
+      payload.styles?.forEach((item) => styleInsert.run(...[idMap.get(item.id as string), projectId,
+        item.document_id ? idMap.get(item.document_id as string) : null, item.origin, item.text, item.text_hash,
+        item.source_revision, item.created_at, item.updated_at].map(sqlValue)))
       const patchInsert = this.db.raw.prepare(`INSERT INTO text_patches(id,project_id,document_id,block_id,document_revision,from_pos,to_pos,original_hash,original_text,replacement,status,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`)
       payload.patches.forEach((item) => patchInsert.run(...[idMap.get(item.id as string), projectId, idMap.get(item.document_id as string), item.block_id ?? 'pm-range', item.document_revision ?? -1, item.from_pos, item.to_pos, item.original_hash, item.original_text, item.replacement, item.document_revision === undefined && item.status === 'proposed' ? 'stale' : item.status, item.created_at].map(sqlValue)))
     })

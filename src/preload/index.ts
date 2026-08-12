@@ -32,17 +32,19 @@ const api: WorkspaceApi = {
   ideas: { list: (projectId) => invoke('ideas:list', projectId), create: (projectId, content, tags) => invoke('ideas:create', projectId, content, tags) },
   notes: { list: (projectId, section) => invoke('notes:list', projectId, section), save: (input) => invoke('notes:save', input), delete: (projectId, id) => invoke('notes:delete', projectId, id) },
   characters: { list: (projectId) => invoke('characters:list', projectId), save: (input) => invoke('characters:save', input), delete: (projectId, id) => invoke('characters:delete', projectId, id) },
-  memories: { list: (projectId) => invoke('memories:list', projectId), confirm: (projectId, id) => invoke('memories:confirm', projectId, id), reject: (projectId, id) => invoke('memories:reject', projectId, id), proposeFromChat: (projectId, sourceId, content) => invoke('memories:propose-from-chat', projectId, sourceId, content) },
+  memories: { list: (projectId) => invoke('memories:list', projectId), confirm: (projectId, id) => invoke('memories:confirm', projectId, id), reject: (projectId, id) => invoke('memories:reject', projectId, id), proposeFromChat: (projectId, sourceId, content) => invoke('memories:propose-from-chat', projectId, sourceId, content), extractIntent: (projectId, sourceId, content) => invoke('memories:extract-intent', projectId, sourceId, content) },
+  chat: { listThreads: (projectId) => invoke('chat:list-threads', projectId), listMessages: (projectId, threadId, before, limit) => invoke('chat:list-messages', projectId, threadId, before, limit), newThread: (projectId, title) => invoke('chat:new-thread', projectId, title) },
   patches: {
     propose: (input) => invoke('patches:propose', input), list: (projectId, documentId) => invoke('patches:list', projectId, documentId),
     prepare: (projectId, id, revision, currentText) => invoke('patches:prepare', projectId, id, revision, currentText),
     complete: (projectId, id, revision) => invoke('patches:complete', projectId, id, revision), reject: (projectId, id) => invoke('patches:reject', projectId, id)
   },
   linter: { run: (text) => invoke('linter:run', text) },
-  digests: { store: (projectId, chapterId, raw) => invoke('digests:store', projectId, chapterId, raw), run: (projectId, chapterId) => invoke('digests:run', projectId, chapterId), list: (projectId, chapterId) => invoke('digests:list', projectId, chapterId) },
+  digests: { store: (projectId, chapterId, raw) => invoke('digests:store', projectId, chapterId, raw), run: (projectId, chapterId) => invoke('digests:run', projectId, chapterId), list: (projectId, chapterId) => invoke('digests:list', projectId, chapterId), status: (projectId, chapterId) => invoke('digests:status', projectId, chapterId) },
+  proofreading: { run: (projectId, documentId) => invoke('proofreading:run', projectId, documentId) },
   providers: {
     list: () => invoke('providers:list'), save: (input) => invoke('providers:save', input), models: () => invoke('providers:models'),
-    saveModel: (model) => invoke('providers:save-model', model), setRoute: (route) => invoke('providers:set-route', route),
+    saveModel: (model) => invoke('providers:save-model', model), routes: () => invoke('providers:routes'), setRoute: (route) => invoke('providers:set-route', route),
     test: (providerId, modelId) => invoke('providers:test', providerId, modelId)
   },
   backup: {

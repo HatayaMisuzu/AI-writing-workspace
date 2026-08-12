@@ -9,6 +9,7 @@ import { ChapterDigestService } from '../src/main/ai/chapter-digest-service'
 import { StyleEngine } from '../src/main/ai/style-engine'
 import { BackupService } from '../src/main/services/backup-service'
 import { ProjectContentService } from '../src/main/services/project-content-service'
+import { StyleSampleService } from '../src/main/services/style-sample-service'
 
 describe('digest, style retrieval, reorder and complete project backup', () => {
   const tempDirs: string[] = []
@@ -26,14 +27,15 @@ describe('digest, style retrieval, reorder and complete project backup', () => {
     expect(memory).toEqual({ status: 'suggested', source_id: chapter.id })
   })
 
-  it('prioritizes human style samples above raw AI samples', () => {
+  it('uses confirmed human style samples and excludes raw AI samples', () => {
     const db = createTestDb(); const project = new ProjectService(db).create({ title: 'Style', projectType: 'novel' }); const docs = new DocumentService(db)
     const chapter = docs.listTree(project.id).find((node) => node.type === 'chapter')!
-    docs.saveContent({ projectId: project.id, documentId: chapter.id, editorJson: { type: 'doc' }, plainText: '这是作者亲手写下的一段足够长的文字，用来作为风格样本。' })
-    db.raw.prepare(`INSERT INTO text_origins(id,project_id,document_id,from_pos,to_pos,origin,created_at) VALUES ('ai',?,?,0,30,'ai',2)`).run(project.id, chapter.id)
+    const authorText = '这是作者亲手写下的一段安静文字。'.repeat(12)
+    docs.saveContent({ projectId: project.id, documentId: chapter.id, editorJson: { type: 'doc' }, plainText: authorText })
+    new StyleSampleService(db).record({ projectId: project.id, documentId: chapter.id, origin: 'ai', text: '这是未经作者修改的模型生成文字，绝不能成为风格样本。' })
     const samples = new StyleEngine(db).retrieve(project.id)
     expect(samples[0].origin).toBe('human')
-    expect(samples.at(-1)?.origin).toBe('ai')
+    expect(samples.some((sample) => sample.origin === 'ai')).toBe(false)
   })
 
   it('reorders chapters without transient unique conflicts', () => {

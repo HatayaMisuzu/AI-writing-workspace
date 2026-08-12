@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import type { Idea, MemoryItem, MemoryProposal, MemoryStatus, MemoryType } from '../../shared/domain'
+import type { Idea, MemoryIntentProposal, MemoryItem, MemoryProposal, MemoryStatus, MemoryType } from '../../shared/domain'
 import type { AppDatabase } from '../database/database'
 import { relevanceScore } from '../ai/relevance'
 
@@ -55,16 +55,17 @@ export class MemoryService {
   }
 
   proposeFromChat(projectId: string, sourceId: string, rawContent: string): MemoryProposal | null {
-    const explicit = /记一下|记住|就这么定|确定下来|定了/.test(rawContent)
-    if (!explicit) return null
-    const content = rawContent
-      .replace(/^(?:好[，,。\s]*)?就这么定[，,。\s]*/u, '')
-      .replace(/[，,。\s]*(?:请)?(?:帮我)?(?:记一下|记住)[。！!\s]*$/u, '')
-      .trim()
-    if (!content) return null
-    const exists = this.db.raw.prepare('SELECT 1 AS found FROM projects WHERE id = ?').get(projectId) as { found: number } | undefined
-    if (!exists) throw new Error('PROJECT_NOT_FOUND')
-    return this.create({ projectId, type: 'fact', content, status: 'suggested', sourceType: 'chat', sourceId, sourceLocation: '作者明确要求记录' }) as MemoryProposal
+    const strict = rawContent.match(/^(?:记一下[：:]|就这么定[，,：:]?)(.+?)(?:[，,]?这个记一下)?[。！!]?$/u)?.[1]?.trim()
+    if (!strict || /不要记|别记|别定|不确定|要不要|如果/.test(rawContent)) return null
+    return this.createProposals(projectId, sourceId, [{ type: 'fact', content: strict, confidence: 1 }])[0] ?? null
+  }
+
+  createProposals(projectId: string, sourceId: string, proposals: MemoryIntentProposal[]): MemoryProposal[] {
+    if (!this.db.raw.prepare('SELECT 1 AS found FROM projects WHERE id = ?').get(projectId)) throw new Error('PROJECT_NOT_FOUND')
+    return proposals.slice(0, 3).filter((proposal) => proposal.content.trim()).map((proposal) => this.create({
+      projectId, type: proposal.type, content: proposal.content.trim(), status: 'suggested', sourceType: 'chat', sourceId,
+      sourceLocation: '作者明确要求记录', confidence: proposal.confidence
+    }) as MemoryProposal)
   }
 
   confirm(projectId: string, memoryId: string, confirmedBy: 'user'): MemoryItem {

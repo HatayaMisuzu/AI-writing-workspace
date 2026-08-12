@@ -1,6 +1,7 @@
 import type {
-  AITaskEnvelope, Character, DocumentContent, DocumentNode, Idea, LocalLintIssue, MemoryItem, MemoryProposal, ModelConfig,
-  Project, ProjectNote, ProjectType, ProviderConfig, ProviderInput, SearchResult, Snapshot, TaskModelRoute, TextPatch
+  AITaskEnvelope, Character, ChatMessage, ChatThread, DigestStatus, DocumentContent, DocumentNode, Idea, LocalLintIssue,
+  MemoryItem, MemoryProposal, ModelConfig, Project, ProjectNote, ProjectType, ProofreadIssue, ProviderConfig,
+  ProviderInput, RoutedTask, SearchResult, Snapshot, TaskModelRoute, TextOrigin, TextPatch
 } from './domain'
 
 export interface WorkspaceApi {
@@ -23,7 +24,7 @@ export interface WorkspaceApi {
     rename(projectId: string, documentId: string, title: string): Promise<void>
     reorder(projectId: string, documentId: string, parentId: string | null, orderIndex: number): Promise<void>
     delete(projectId: string, documentId: string): Promise<void>
-    save(input: { projectId: string; documentId: string; editorJson: Record<string, unknown>; plainText: string; expectedRevision?: number }): Promise<DocumentContent>
+    save(input: { projectId: string; documentId: string; editorJson: Record<string, unknown>; plainText: string; expectedRevision?: number; styleSample?: { origin: TextOrigin; text: string } }): Promise<DocumentContent>
     search(projectId: string, query: string): Promise<SearchResult[]>
   }
   snapshots: {
@@ -47,6 +48,12 @@ export interface WorkspaceApi {
     confirm(projectId: string, memoryId: string): Promise<MemoryItem>
     reject(projectId: string, memoryId: string): Promise<MemoryItem>
     proposeFromChat(projectId: string, sourceId: string, content: string): Promise<MemoryProposal | null>
+    extractIntent(projectId: string, sourceId: string, content: string): Promise<MemoryProposal[]>
+  }
+  chat: {
+    listThreads(projectId: string): Promise<ChatThread[]>
+    listMessages(projectId: string, threadId: string, before?: number, limit?: number): Promise<ChatMessage[]>
+    newThread(projectId: string, title?: string): Promise<ChatThread>
   }
   patches: {
     propose(input: { projectId: string; documentId: string; documentRevision: number; fromPm: number; toPm: number; originalText: string; replacement: string }): Promise<TextPatch>
@@ -60,12 +67,15 @@ export interface WorkspaceApi {
     store(projectId: string, chapterId: string, raw: string): Promise<{ id: string; payload: unknown }>
     run(projectId: string, chapterId: string): Promise<{ id: string; payload: unknown; repaired: boolean }>
     list(projectId: string, chapterId?: string): Promise<Array<{ id: string; chapterId: string; revision: number; summary: string; stale: boolean; createdAt: number }>>
+    status(projectId: string, chapterId: string): Promise<DigestStatus>
   }
+  proofreading: { run(projectId: string, documentId: string): Promise<ProofreadIssue[]> }
   providers: {
     list(): Promise<ProviderConfig[]>
     save(input: ProviderInput): Promise<ProviderConfig>
     models(): Promise<ModelConfig[]>
     saveModel(model: ModelConfig): Promise<ModelConfig>
+    routes(): Promise<Record<RoutedTask, string | 'default'>>
     setRoute(route: TaskModelRoute): Promise<void>
     test(providerId: string, modelId: string): Promise<{ ok: boolean; message?: string }>
   }
@@ -86,6 +96,7 @@ export interface AIStartRequest {
   task: AITaskEnvelope
   threadId: string
   userMessageId: string
+  assistantMessageId: string
 }
 
 export type AIStreamEvent =

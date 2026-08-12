@@ -1,4 +1,4 @@
-import type { AppErrorShape, ModelConfig, ProviderCapabilities, ProviderConfig, ProviderInput } from '../../shared/domain'
+import type { AppErrorShape, ModelConfig, ProviderCapabilities, ProviderConfig, ProviderInput, RoutedTask } from '../../shared/domain'
 import type { AppDatabase } from '../database/database'
 import { randomUUID } from 'node:crypto'
 
@@ -12,6 +12,7 @@ type ProviderRow = { id: string; provider_type: 'openai-compatible'; display_nam
 const normalizeBaseUrl = (url: string): string => url.trim().replace(/\/+$/, '')
 export const adapterCapabilities: ProviderCapabilities = { streaming: true, tools: false, structuredOutput: false, cancellation: true }
 const truthfulCapabilities = (capabilities: ProviderCapabilities): ProviderCapabilities => ({ ...capabilities, tools: false, structuredOutput: false, streaming: true, cancellation: true })
+export const routedTasks: RoutedTask[] = ['discussion', 'brainstorm', 'generation', 'editing', 'organization', 'chapter_digest', 'proofreading']
 
 export class ProviderService {
   constructor(private readonly db: AppDatabase, private readonly codec: SecretCodec) {}
@@ -62,6 +63,7 @@ export class ProviderService {
         display_name=excluded.display_name, capabilities_json=excluded.capabilities_json,
         enabled=excluded.enabled, is_default=excluded.is_default`)
       .run(model.id || randomUUID(), model.providerId, model.modelId, model.displayName, JSON.stringify(truthfulCapabilities(model.capabilities)), model.enabled ? 1 : 0, model.isDefault ? 1 : 0)
+    if (!model.enabled) this.db.raw.prepare("UPDATE task_model_routes SET model_id = 'default' WHERE model_id = ?").run(model.id)
     return this.listModels().find((item) => item.id === model.id) ?? this.listModels()[0]
   }
 
@@ -76,7 +78,18 @@ export class ProviderService {
     return model
   }
 
-  setRoute(taskType: string, modelId: string | 'default'): void {
+  listRoutes(): Record<RoutedTask, string | 'default'> {
+    const rows = this.db.raw.prepare('SELECT task_type, model_id FROM task_model_routes').all() as Array<{ task_type: string; model_id: string }>
+    const enabledIds = new Set(this.listModels().filter((model) => model.enabled).map((model) => model.id))
+    return Object.fromEntries(routedTasks.map((task) => {
+      const configured = rows.find((row) => row.task_type === task)?.model_id ?? 'default'
+      return [task, configured === 'default' || enabledIds.has(configured) ? configured : 'default']
+    })) as Record<RoutedTask, string | 'default'>
+  }
+
+  setRoute(taskType: RoutedTask, modelId: string | 'default'): void {
+    if (!routedTasks.includes(taskType)) throw new Error('MODEL_ROUTE_TASK_UNSUPPORTED')
+    if (modelId !== 'default' && !this.listModels().some((model) => model.id === modelId && model.enabled)) throw new Error('MODEL_ROUTE_MODEL_UNAVAILABLE')
     this.db.raw.prepare(`INSERT INTO task_model_routes(task_type, model_id) VALUES (?, ?)
       ON CONFLICT(task_type) DO UPDATE SET model_id=excluded.model_id`).run(taskType, modelId)
   }

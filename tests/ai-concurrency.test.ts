@@ -3,6 +3,7 @@ import { AIEventRouter } from '../src/preload/ai-event-router'
 import { AICreativeRuntime } from '../src/main/ai/runtime'
 import { ProviderService } from '../src/main/ai/provider'
 import { ProjectService } from '../src/main/services/project-service'
+import { ChatService } from '../src/main/services/chat-service'
 import { createTestDb, testCodec } from './helpers'
 
 describe('AI request event isolation', () => {
@@ -27,10 +28,11 @@ describe('AI request event isolation', () => {
     const db = createTestDb()
     const project = new ProjectService(db).create({ title: '请求清理', projectType: 'novel' })
     const runtime = new AICreativeRuntime(db, new ProviderService(db, testCodec))
+    const thread = new ChatService(db).createThread(project.id, '失败测试')
     const task = { mode: 'discussion' as const, writePermission: 'none' as const,
       userIntent: '测试失败后的清理', projectId: project.id }
 
-    await expect(runtime.run('reusable-id', task, 'thread')[Symbol.asyncIterator]().next()).rejects.toThrow('DEFAULT_MODEL_NOT_CONFIGURED')
-    await expect(runtime.run('reusable-id', task, 'thread')[Symbol.asyncIterator]().next()).rejects.toThrow('DEFAULT_MODEL_NOT_CONFIGURED')
+    await expect(runtime.run('reusable-id', task, thread.id, 'user-1', 'assistant-1')[Symbol.asyncIterator]().next()).rejects.toThrow('DEFAULT_MODEL_NOT_CONFIGURED')
+    await expect(runtime.run('reusable-id', task, thread.id, 'user-2', 'assistant-2')[Symbol.asyncIterator]().next()).rejects.toThrow('DEFAULT_MODEL_NOT_CONFIGURED')
   })
 })

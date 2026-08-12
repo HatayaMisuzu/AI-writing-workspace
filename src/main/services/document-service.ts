@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
-import type { DocumentContent, DocumentNode, DocumentType, SearchResult, Snapshot } from '../../shared/domain'
+import type { DocumentContent, DocumentNode, DocumentType, SearchResult, Snapshot, TextOrigin } from '../../shared/domain'
 import type { AppDatabase } from '../database/database'
+import { StyleSampleService } from './style-sample-service'
 
 type NodeRow = {
   id: string; project_id: string; parent_id: string | null; type: DocumentType; title: string
@@ -30,7 +31,8 @@ export const countChineseWords = (text: string): number => {
 }
 
 export class DocumentService {
-  constructor(private readonly db: AppDatabase) {}
+  private readonly styleSamples: StyleSampleService
+  constructor(private readonly db: AppDatabase) { this.styleSamples = new StyleSampleService(db) }
 
   private assertNode(projectId: string, documentId: string): NodeRow {
     const row = this.db.raw.prepare(`
@@ -75,7 +77,10 @@ export class DocumentService {
   }
 
   createNode(input: { projectId: string; parentId?: string | null; type: DocumentType; title: string }): DocumentNode {
-    if (input.parentId) this.assertNode(input.projectId, input.parentId)
+    const parent = input.parentId ? this.assertNode(input.projectId, input.parentId) : undefined
+    if (input.type === 'volume' && parent) throw new Error('VOLUME_MUST_BE_ROOT')
+    if (input.type === 'chapter' && parent?.type !== 'volume') throw new Error('CHAPTER_REQUIRES_VOLUME')
+    if (!input.title.trim()) throw new Error('DOCUMENT_TITLE_REQUIRED')
     const id = randomUUID()
     const now = Date.now()
     const max = this.db.raw.prepare(`
@@ -103,6 +108,7 @@ export class DocumentService {
 
   rename(projectId: string, documentId: string, title: string): void {
     this.assertNode(projectId, documentId)
+    if (!title.trim()) throw new Error('DOCUMENT_TITLE_REQUIRED')
     this.db.transaction(() => {
       this.db.raw.prepare('UPDATE document_nodes SET title = ?, updated_at = ? WHERE id = ? AND project_id = ?')
         .run(title.trim(), Date.now(), documentId, projectId)
@@ -112,8 +118,10 @@ export class DocumentService {
   }
 
   reorder(projectId: string, documentId: string, parentId: string | null, orderIndex: number): void {
-    this.assertNode(projectId, documentId)
-    if (parentId) this.assertNode(projectId, parentId)
+    const node = this.assertNode(projectId, documentId)
+    const parent = parentId ? this.assertNode(projectId, parentId) : undefined
+    if (node.type === 'volume' && parent) throw new Error('VOLUME_MUST_BE_ROOT')
+    if (node.type === 'chapter' && parent?.type !== 'volume') throw new Error('CHAPTER_REQUIRES_VOLUME')
     this.db.transaction(() => {
       const siblings = this.db.raw.prepare(`
         SELECT id FROM document_nodes WHERE project_id = ? AND parent_id IS ? AND id != ? ORDER BY order_index
@@ -140,7 +148,7 @@ export class DocumentService {
     })
   }
 
-  saveContent(input: { projectId: string; documentId: string; editorJson: Record<string, unknown>; plainText: string; expectedRevision?: number }): DocumentContent {
+  saveContent(input: { projectId: string; documentId: string; editorJson: Record<string, unknown>; plainText: string; expectedRevision?: number; styleSample?: { origin: TextOrigin; text: string } }): DocumentContent {
     const current = this.getContent(input.projectId, input.documentId)
     if (input.expectedRevision !== undefined && current.revision !== input.expectedRevision) throw new Error('REVISION_CONFLICT')
     const deletion = current.plainText.length - input.plainText.length
@@ -166,12 +174,9 @@ export class DocumentService {
         .run(input.projectId, input.documentId, node.title, input.plainText)
       this.db.raw.prepare('UPDATE chapter_digests SET stale = 1 WHERE chapter_id = ? AND project_id = ? AND chapter_revision < ?')
         .run(input.documentId, input.projectId, revision)
-      const hasOrigin = this.db.raw.prepare('SELECT 1 AS found FROM text_origins WHERE project_id = ? AND document_id = ? LIMIT 1')
-        .get(input.projectId, input.documentId) as { found: number } | undefined
-      if (!hasOrigin && input.plainText.trim()) {
-        this.db.raw.prepare(`INSERT INTO text_origins(id,project_id,document_id,from_pos,to_pos,origin,created_at)
-          VALUES (?,?,?,?,?,'human',?)`).run(randomUUID(), input.projectId, input.documentId, 0, input.plainText.length, now)
-      }
+      if (input.styleSample) this.styleSamples.record({ projectId: input.projectId, documentId: input.documentId,
+        origin: input.styleSample.origin, text: input.styleSample.text, sourceRevision: revision })
+      else this.styleSamples.recordHumanIfSafe(input.projectId, input.documentId, input.plainText, revision)
     })
     return this.getContent(input.projectId, input.documentId)
   }

@@ -14,6 +14,9 @@ import { ProjectContentService } from '../services/project-content-service'
 import type { ModelConfig, ProviderInput, TaskModelRoute } from '../../shared/domain'
 import type { AIStartRequest } from '../../shared/ipc'
 import { cancelClose, confirmClose } from '../window-close'
+import { ChatService } from '../services/chat-service'
+import { MemoryIntentRunner } from '../ai/memory-intent'
+import { ProofreadingRunner } from '../ai/proofreading-runner'
 
 const handle = <T extends unknown[], R>(channel: string, fn: (...args: T) => R | Promise<R>): void => {
   ipcMain.handle(channel, (_event, ...args: T) => fn(...args))
@@ -31,6 +34,9 @@ export function registerIpc(db: AppDatabase, codec: SecretCodec): void {
   const digests = new ChapterDigestService(db)
   const digestRunner = new ChapterDigestRunner(db, providers)
   const projectContent = new ProjectContentService(db)
+  const chat = new ChatService(db)
+  const memoryIntent = new MemoryIntentRunner(db, providers)
+  const proofreading = new ProofreadingRunner(db, providers)
 
   handle('window:minimize', () => BrowserWindow.getFocusedWindow()?.minimize())
   handle('window:toggle-maximize', () => {
@@ -74,6 +80,10 @@ export function registerIpc(db: AppDatabase, codec: SecretCodec): void {
   handle('memories:confirm', (projectId: string, memoryId: string) => memories.confirm(projectId, memoryId, 'user'))
   handle('memories:reject', (projectId: string, memoryId: string) => memories.reject(projectId, memoryId))
   handle('memories:propose-from-chat', (projectId: string, sourceId: string, content: string) => memories.proposeFromChat(projectId, sourceId, content))
+  handle('memories:extract-intent', (projectId: string, sourceId: string, content: string) => memoryIntent.extractAndCreate(projectId, sourceId, content))
+  handle('chat:list-threads', (projectId: string) => chat.listThreads(projectId))
+  handle('chat:list-messages', (projectId: string, threadId: string, before?: number, limit?: number) => chat.listMessages(projectId, threadId, before, limit))
+  handle('chat:new-thread', (projectId: string, title?: string) => chat.createThread(projectId, title))
   handle('patches:propose', (input: Parameters<PatchService['propose']>[0]) => patches.propose(input))
   handle('patches:list', (projectId: string, documentId?: string) => patches.list(projectId, documentId))
   handle('patches:prepare', (projectId: string, patchId: string, revision: number, currentText: string) => patches.prepare(projectId, patchId, revision, currentText))
@@ -83,11 +93,14 @@ export function registerIpc(db: AppDatabase, codec: SecretCodec): void {
   handle('digests:store', (projectId: string, chapterId: string, raw: string) => digests.storeFromModel(projectId, chapterId, raw))
   handle('digests:run', (projectId: string, chapterId: string) => digestRunner.run(projectId, chapterId))
   handle('digests:list', (projectId: string, chapterId?: string) => digests.list(projectId, chapterId))
+  handle('digests:status', (projectId: string, chapterId: string) => digests.status(projectId, chapterId))
+  handle('proofreading:run', (projectId: string, documentId: string) => proofreading.run(projectId, documentId))
 
   handle('providers:list', () => providers.list())
   handle('providers:save', (input: ProviderInput) => providers.save(input))
   handle('providers:models', () => providers.listModels())
   handle('providers:save-model', (model: ModelConfig) => providers.saveModel(model))
+  handle('providers:routes', () => providers.listRoutes())
   handle('providers:set-route', (route: TaskModelRoute) => providers.setRoute(route.taskType, route.modelId))
   handle('providers:test', async (providerId: string, modelId: string) => {
     try {
@@ -123,7 +136,7 @@ export function registerIpc(db: AppDatabase, codec: SecretCodec): void {
 
   ipcMain.on('ai:start', async (event, request: AIStartRequest) => {
     try {
-      for await (const result of runtime.run(request.requestId, request.task, request.threadId, request.userMessageId)) {
+      for await (const result of runtime.run(request.requestId, request.task, request.threadId, request.userMessageId, request.assistantMessageId)) {
         event.sender.send('ai:event', { type: 'chunk', requestId: request.requestId, chunk: result.chunk, context: result.context })
       }
       event.sender.send('ai:event', { type: 'done', requestId: request.requestId })

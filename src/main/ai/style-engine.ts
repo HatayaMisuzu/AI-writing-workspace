@@ -10,13 +10,11 @@ export class StyleEngine {
 
   retrieve(projectId: string, limit = 8): StyleSample[] {
     const rows = this.db.raw.prepare(`
-      SELECT o.id, o.document_id, o.from_pos, o.to_pos, o.origin, c.plain_text
-      FROM text_origins o JOIN document_contents c ON c.document_id = o.document_id AND c.project_id = o.project_id
-      WHERE o.project_id = ? ORDER BY o.created_at DESC
-    `).all(projectId) as Array<{ id: string; document_id: string; from_pos: number; to_pos: number; origin: TextOrigin; plain_text: string }>
-    return rows.map((row) => ({ id: row.id, documentId: row.document_id,
-      text: row.plain_text.slice(row.from_pos, Math.min(row.to_pos, row.plain_text.length)), origin: row.origin, score: rank[row.origin] }))
-      .filter((sample) => sample.text.trim().length >= 12)
+      SELECT id, document_id, origin, text FROM style_samples
+      WHERE project_id = ? AND origin != 'ai' ORDER BY updated_at DESC
+    `).all(projectId) as Array<{ id: string; document_id: string | null; origin: TextOrigin; text: string }>
+    return rows.map((row) => ({ id: row.id, documentId: row.document_id ?? '',
+      text: row.text, origin: row.origin, score: rank[row.origin] }))
       .toSorted((a, b) => b.score - a.score)
       .slice(0, limit)
   }

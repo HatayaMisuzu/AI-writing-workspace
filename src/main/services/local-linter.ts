@@ -4,6 +4,8 @@ import type { LocalLintIssue } from '../../shared/domain'
 export function lintChineseText(text: string): LocalLintIssue[] {
   const issues: LocalLintIssue[] = []
   const rules: Array<{ regex: RegExp; kind: string; message: string; replacement?: (value: string) => string }> = [
+    { regex: /(?<!\.)\.{2}(?!\.)/g, kind: 'repeated_punctuation', message: '连续句点可能是误输入；中文句末通常使用句号。', replacement: () => '。' },
+    { regex: /。{2,}/g, kind: 'repeated_punctuation', message: '连续句号可能是误输入。', replacement: () => '。' },
     { regex: /[!！]{2,}/g, kind: 'repeated_punctuation', message: '连续感叹号可能是误输入。', replacement: () => '！' },
     { regex: /[?？]{2,}/g, kind: 'repeated_punctuation', message: '连续问号可能是误输入。', replacement: () => '？' },
     { regex: /\.\.\.(?!\.)/g, kind: 'ellipsis', message: '中文省略号通常使用六点“……”。', replacement: () => '……' },

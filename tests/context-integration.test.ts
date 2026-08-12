@@ -29,7 +29,8 @@ describe('context engine source integration', () => {
 
   it('adds human-priority style only to generation/editing', () => {
     const db = createTestDb(); const project = new ProjectService(db).create({ title: '风格', projectType: 'novel' }); const docs = new DocumentService(db); const chapter = docs.listOrderedChapters(project.id)[0]
-    docs.saveContent({ projectId: project.id, documentId: chapter.id, editorJson: { type: 'doc' }, plainText: '这是作者亲手写下的、足够长的一段安静文字。' })
+    const authorText = '这是作者亲手写下的一段安静文字。'.repeat(12)
+    docs.saveContent({ projectId: project.id, documentId: chapter.id, editorJson: { type: 'doc' }, plainText: authorText })
     const engine = new ContextEngine(db)
     const discussion = engine.build({ mode: 'discussion', writePermission: 'none', userIntent: '讨论这一段', projectId: project.id, documentId: chapter.id })
     const generation = engine.build({ mode: 'generation', writePermission: 'none', userIntent: '续写这一段', projectId: project.id, documentId: chapter.id })

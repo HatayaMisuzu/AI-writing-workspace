@@ -1,9 +1,10 @@
-import type { DocumentContent } from '../../../shared/domain'
+import type { DocumentContent, TextOrigin } from '../../../shared/domain'
 
 export interface EditorSnapshot {
   editorJson: Record<string, unknown>
   plainText: string
   baseRevision: number
+  styleSample?: { origin: TextOrigin; text: string }
 }
 
 export type SaveState = 'saved' | 'dirty' | 'saving' | 'error'
@@ -23,7 +24,8 @@ export class SaveCoordinator {
   ) { this.revision = initialRevision }
 
   markDirty(snapshot: Omit<EditorSnapshot, 'baseRevision'> & { baseRevision?: number }): void {
-    this.pending = { ...snapshot, baseRevision: snapshot.baseRevision ?? this.revision }
+    this.pending = { ...snapshot, styleSample: snapshot.styleSample ?? this.pending?.styleSample,
+      baseRevision: snapshot.baseRevision ?? this.revision }
     this.onState('dirty')
   }
 
