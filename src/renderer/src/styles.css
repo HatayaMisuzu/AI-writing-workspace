@@ -122,6 +122,15 @@ button.primary:hover { background: #146f72; }
 .save-indicator { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--muted); }
 .save-indicator.error { color: var(--danger); }
 .save-indicator.saving, .save-indicator.dirty { color: var(--warning); }
+.save-error, .navigation-error { padding: 7px 14px; color: #8f392f; background: #fff0ec; border-bottom: 1px solid #e9c4bd; font-size: 12px; }
+.app-error { position: fixed; z-index: 200; top: 42px; left: 50%; transform: translateX(-50%); display: flex; gap: 14px; align-items: center; max-width: 720px; padding: 10px 14px; color: #8f392f; background: #fff0ec; border: 1px solid #e9c4bd; border-radius: 8px; box-shadow: var(--shadow); }
+.app-error button { color: inherit; }
+.memory-proposal { margin-top: 10px; padding: 10px; border: 1px solid #b9d5d1; border-radius: 8px; background: #f1f8f7; }
+.memory-proposal p { margin: 6px 0; }
+.memory-proposal > span { color: var(--muted); font-size: 11px; }
+.memory-proposal > div { display: flex; justify-content: flex-end; gap: 7px; margin-top: 8px; }
+.inline-error { margin-top: 7px; color: var(--danger); font-size: 11px; }
+.settings-nav button:disabled { opacity: .48; cursor: not-allowed; }
 .writing-scroll { min-height: 0; overflow: auto; padding: 46px clamp(36px, 7vw, 110px) 120px; scroll-behavior: smooth; }
 .writing-page { max-width: 720px; margin: 0 auto; }
 .writing-page h1 { font: 600 30px/1.4 STSong, SimSun, "Noto Serif CJK SC", serif; margin: 0 0 36px; letter-spacing: .06em; }
@@ -234,6 +243,7 @@ button.primary:hover { background: #146f72; }
 .modal { max-width: calc(100vw - 40px); max-height: calc(100vh - 84px); background: #fff; border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 20px 60px #19271f38; overflow: auto; }
 .modal > header { height: 54px; padding: 0 18px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--line); }.modal h2 { font-size: 16px; margin: 0; }.modal-body { padding: 20px; }
 .project-form { display: grid; gap: 16px; }.project-form label { display: grid; gap: 7px; font-size: 12px; }.project-form textarea { resize: vertical; min-height: 70px; }.isolation-note { color: #4e7168; background: #f1f7f4; border-left: 3px solid var(--accent); padding: 10px; font-size: 11px; margin: 0; }.modal-actions { display: flex; justify-content: flex-end; gap: 9px; margin-top: 5px; }
+.node-create-form { display: grid; gap: 22px; }.node-create-form label { display: grid; gap: 8px; }.node-create-form input { border: 1px solid var(--line); border-radius: 7px; min-height: 38px; padding: 8px 10px; background: #fff; }
 .quick-idea-popover { position: absolute; z-index: 70; left: 110px; bottom: 48px; width: 390px; background: #fff; border: 1px solid #cbcfc9; border-radius: 8px; box-shadow: 0 13px 32px #25302835; padding: 13px; }.quick-idea-popover header { display: flex; justify-content: space-between; font-size: 12px; }.quick-idea-popover kbd { color: var(--muted); }.quick-idea-popover textarea { width: 100%; min-height: 90px; border: 0; outline: 0; resize: none; padding: 12px 0; }.quick-idea-popover > div { display: flex; justify-content: flex-end; gap: 8px; }
 .dialog-search { display: flex; gap: 8px; }.dialog-search input { flex: 1; border: 1px solid var(--line); border-radius: 7px; padding: 0 10px; }.search-results { max-height: 430px; overflow: auto; margin-top: 14px; }.search-results > button { width: 100%; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; background: transparent; display: block; text-align: left; padding: 12px 4px; }.search-results p { margin: 5px 0 0; color: var(--muted); font-size: 12px; }.search-results mark { background: #f6df9f; }
 .fatal-view { height: 100%; display: grid; place-items: center; color: var(--muted); }

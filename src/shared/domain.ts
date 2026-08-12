@@ -150,14 +150,19 @@ export interface TextPatch {
   id: string
   projectId: string
   documentId: string
-  blockId: string
-  from: number
-  to: number
+  documentRevision: number
+  fromPm: number
+  toPm: number
   originalHash: string
   originalText: string
   replacement: string
   status: 'proposed' | 'accepted' | 'rejected' | 'stale'
   createdAt: number
+}
+
+export interface MemoryProposal extends MemoryItem {
+  sourceType: 'chat'
+  status: 'suggested'
 }
 
 export interface AITaskEnvelope {
@@ -172,7 +177,7 @@ export interface AITaskEnvelope {
 
 export interface ContextItem {
   id: string
-  kind: 'selection' | 'document' | 'nearby' | 'memory' | 'note' | 'search' | 'conversation' | 'style'
+  kind: 'selection' | 'document' | 'nearby' | 'memory' | 'note' | 'search' | 'style' | 'character' | 'digest' | 'reference'
   title: string
   content: string
   projectId: string

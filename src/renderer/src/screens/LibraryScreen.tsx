@@ -1,4 +1,4 @@
-import { Archive, Clock3, Download, FileText, MoreHorizontal, Plus, Search, ShieldCheck } from 'lucide-react'
+import { Archive, Download, FileText, MoreHorizontal, Plus, Search, ShieldCheck } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import type { Project } from '../../../shared/domain'
 

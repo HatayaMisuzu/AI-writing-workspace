@@ -3,6 +3,8 @@ import { join } from 'node:path'
 import { AppDatabase } from './database/database'
 import { registerIpc } from './ipc/register'
 import type { SecretCodec } from './ai/provider'
+import { attachCloseHandshake } from './window-close'
+import { isAllowedExternalUrl } from './external-url'
 
 let database: AppDatabase | undefined
 
@@ -13,7 +15,11 @@ function createWindow(): void {
     webPreferences: { preload: join(__dirname, '../preload/index.mjs'), sandbox: false, contextIsolation: true, nodeIntegration: false }
   })
   win.on('ready-to-show', () => win.show())
-  win.webContents.setWindowOpenHandler(({ url }) => { void shell.openExternal(url); return { action: 'deny' } })
+  attachCloseHandshake(win)
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (isAllowedExternalUrl(url)) void shell.openExternal(url)
+    return { action: 'deny' }
+  })
   if (process.env.ELECTRON_RENDERER_URL) void win.loadURL(process.env.ELECTRON_RENDERER_URL)
   else void win.loadFile(join(__dirname, '../renderer/index.html'))
 }
@@ -36,4 +42,4 @@ app.whenReady().then(() => {
 })
 
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit() })
-app.on('before-quit', () => database?.close())
+app.on('will-quit', () => database?.close())

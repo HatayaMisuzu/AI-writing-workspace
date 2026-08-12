@@ -11,6 +11,7 @@ export class AppDatabase {
     this.raw = new DatabaseSync(path)
     this.raw.exec('PRAGMA foreign_keys = ON')
     this.raw.exec(schema)
+    this.migrate()
   }
 
   close(): void {
@@ -26,6 +27,14 @@ export class AppDatabase {
     } catch (error) {
       this.raw.exec('ROLLBACK')
       throw error
+    }
+  }
+
+  private migrate(): void {
+    const patchColumns = this.raw.prepare('PRAGMA table_info(text_patches)').all() as Array<{ name: string }>
+    if (!patchColumns.some((column) => column.name === 'document_revision')) {
+      this.raw.exec('ALTER TABLE text_patches ADD COLUMN document_revision INTEGER NOT NULL DEFAULT -1')
+      this.raw.prepare("UPDATE text_patches SET status = 'stale' WHERE status = 'proposed'").run()
     }
   }
 }

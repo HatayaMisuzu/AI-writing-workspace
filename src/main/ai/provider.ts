@@ -10,6 +10,8 @@ export interface SecretCodec {
 type ProviderRow = { id: string; provider_type: 'openai-compatible'; display_name: string; base_url: string; encrypted_api_key: Buffer | null; created_at: number; updated_at: number }
 
 const normalizeBaseUrl = (url: string): string => url.trim().replace(/\/+$/, '')
+export const adapterCapabilities: ProviderCapabilities = { streaming: true, tools: false, structuredOutput: false, cancellation: true }
+const truthfulCapabilities = (capabilities: ProviderCapabilities): ProviderCapabilities => ({ ...capabilities, tools: false, structuredOutput: false, streaming: true, cancellation: true })
 
 export class ProviderService {
   constructor(private readonly db: AppDatabase, private readonly codec: SecretCodec) {}
@@ -47,7 +49,7 @@ export class ProviderService {
   listModels(): ModelConfig[] {
     const rows = this.db.raw.prepare('SELECT * FROM model_configs ORDER BY is_default DESC, display_name').all() as Array<Record<string, unknown>>
     return rows.map((row) => ({ id: row.id as string, providerId: row.provider_id as string, modelId: row.model_id as string,
-      displayName: row.display_name as string, capabilities: JSON.parse(row.capabilities_json as string) as ProviderCapabilities,
+      displayName: row.display_name as string, capabilities: truthfulCapabilities(JSON.parse(row.capabilities_json as string) as ProviderCapabilities),
       enabled: Boolean(row.enabled), isDefault: Boolean(row.is_default) }))
   }
 
@@ -59,7 +61,7 @@ export class ProviderService {
       ON CONFLICT(id) DO UPDATE SET provider_id=excluded.provider_id, model_id=excluded.model_id,
         display_name=excluded.display_name, capabilities_json=excluded.capabilities_json,
         enabled=excluded.enabled, is_default=excluded.is_default`)
-      .run(model.id || randomUUID(), model.providerId, model.modelId, model.displayName, JSON.stringify(model.capabilities), model.enabled ? 1 : 0, model.isDefault ? 1 : 0)
+      .run(model.id || randomUUID(), model.providerId, model.modelId, model.displayName, JSON.stringify(truthfulCapabilities(model.capabilities)), model.enabled ? 1 : 0, model.isDefault ? 1 : 0)
     return this.listModels().find((item) => item.id === model.id) ?? this.listModels()[0]
   }
 
@@ -119,6 +121,21 @@ export class OpenAICompatibleAdapter {
         }
       }
     }
+  }
+
+  async complete(input: { model: string; messages: ProviderMessage[]; signal?: AbortSignal }): Promise<string> {
+    let response: Response
+    try {
+      response = await this.fetcher(`${normalizeBaseUrl(this.baseUrl)}/chat/completions`, {
+        method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${this.apiKey}` },
+        body: JSON.stringify({ model: input.model, messages: input.messages, stream: false }), signal: input.signal
+      })
+    } catch (error) { throw this.toNetworkError(error, input.signal) }
+    if (!response.ok) throw this.toError(response.status)
+    const payload = await response.json() as { choices?: Array<{ message?: { content?: string } }> }
+    const content = payload.choices?.[0]?.message?.content
+    if (typeof content !== 'string' || !content.trim()) throw new Error('EMPTY_PROVIDER_MESSAGE')
+    return content
   }
 
   async testConnection(model: string, signal?: AbortSignal): Promise<{ ok: boolean; message?: string }> {

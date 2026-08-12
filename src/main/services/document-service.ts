@@ -46,7 +46,22 @@ export class DocumentService {
     const rows = this.db.raw.prepare(`
       SELECT n.*, c.word_count, c.revision FROM document_nodes n
       LEFT JOIN document_contents c ON c.document_id = n.id
-      WHERE n.project_id = ? ORDER BY n.parent_id, n.order_index
+      LEFT JOIN document_nodes parent ON parent.id = n.parent_id AND parent.project_id = n.project_id
+      WHERE n.project_id = ?
+      ORDER BY CASE WHEN n.type = 'volume' THEN n.order_index ELSE COALESCE(parent.order_index, 2147483647) END,
+        CASE WHEN n.type = 'volume' THEN 0 ELSE 1 END, n.order_index, n.created_at
+    `).all(projectId) as NodeRow[]
+    return rows.map(mapNode)
+  }
+
+  listOrderedChapters(projectId: string): DocumentNode[] {
+    const rows = this.db.raw.prepare(`
+      SELECT chapter.*, content.word_count, content.revision
+      FROM document_nodes chapter
+      JOIN document_nodes volume ON volume.id = chapter.parent_id AND volume.project_id = chapter.project_id
+      LEFT JOIN document_contents content ON content.document_id = chapter.id
+      WHERE chapter.project_id = ? AND chapter.type = 'chapter' AND volume.type = 'volume'
+      ORDER BY volume.order_index, chapter.order_index, chapter.created_at
     `).all(projectId) as NodeRow[]
     return rows.map(mapNode)
   }
@@ -214,7 +229,9 @@ export class DocumentService {
         return { projectId: row.project_id, documentId: row.document_id, title: row.title, snippet: excerpt.replace(trimmed, `<mark>${trimmed}</mark>`), rank: 0 }
       })
     }
-    const sanitized = query.replace(/["'()*:^]/g, ' ').trim().split(/\s+/).map((term) => `"${term}"`).join(' OR ')
+    const cleaned = query.replace(/["'()*:^]/g, ' ').trim()
+    if (!cleaned) return []
+    const sanitized = cleaned.split(/\s+/).map((term) => `"${term}"`).join(' OR ')
     const rows = this.db.raw.prepare(`
       SELECT f.project_id, f.document_id, n.title,
         snippet(document_fts, 3, '<mark>', '</mark>', '…', 18) AS snippet,

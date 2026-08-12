@@ -25,4 +25,13 @@ describe('memory authority and model routing', () => {
     expect(service.route('discussion').id).toBe('a')
     expect(service.route('proofreading').id).toBe('b')
   })
+
+  it('never advertises unsupported tools or native structured output', () => {
+    const db = createTestDb(); const service = new ProviderService(db, testCodec)
+    const provider = service.save({ id: 'p', providerType: 'openai-compatible', displayName: '兼容服务', baseUrl: 'https://example.test/v1', apiKey: 'secret' })
+    const model = service.saveModel({ id: 'm', providerId: provider.id, modelId: 'model', displayName: 'Model',
+      capabilities: { streaming: true, cancellation: true, tools: true, structuredOutput: true }, enabled: true, isDefault: true })
+    expect(model.capabilities).toEqual({ streaming: true, cancellation: true, tools: false, structuredOutput: false })
+    expect(service.listModels()[0].capabilities.tools).toBe(false)
+  })
 })

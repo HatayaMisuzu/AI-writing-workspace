@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
-import type { Idea, MemoryItem, MemoryStatus, MemoryType } from '../../shared/domain'
+import type { Idea, MemoryItem, MemoryProposal, MemoryStatus, MemoryType } from '../../shared/domain'
 import type { AppDatabase } from '../database/database'
+import { relevanceScore } from '../ai/relevance'
 
 type MemoryRow = {
   id: string; project_id: string; type: MemoryType; content: string; status: MemoryStatus
@@ -29,6 +30,15 @@ export class MemoryService {
     return rows.map(mapMemory)
   }
 
+  searchRelevant(projectId: string, statuses: MemoryStatus[], query: string, limit = 12): MemoryItem[] {
+    return this.list(projectId, statuses)
+      .map((memory) => ({ memory, score: relevanceScore(memory.content, query) + (memory.status === 'confirmed' ? 5 : memory.status === 'observed' ? 3 : 0) }))
+      .filter((item) => item.score > 0)
+      .toSorted((a, b) => b.score - a.score || b.memory.updatedAt - a.memory.updatedAt)
+      .slice(0, limit)
+      .map((item) => item.memory)
+  }
+
   create(input: {
     projectId: string; type: MemoryType; content: string; status: Exclude<MemoryStatus, 'confirmed'>
     sourceType: MemoryItem['sourceType']; sourceId: string; sourceLocation?: string
@@ -42,6 +52,19 @@ export class MemoryService {
       .run(id, input.projectId, input.type, input.content, input.status, input.sourceType, input.sourceId,
         input.sourceLocation ?? null, input.confidence ?? null, input.readerVisibleFrom ?? null, input.supersedes ?? null, now, now)
     return this.get(input.projectId, id)
+  }
+
+  proposeFromChat(projectId: string, sourceId: string, rawContent: string): MemoryProposal | null {
+    const explicit = /记一下|记住|就这么定|确定下来|定了/.test(rawContent)
+    if (!explicit) return null
+    const content = rawContent
+      .replace(/^(?:好[，,。\s]*)?就这么定[，,。\s]*/u, '')
+      .replace(/[，,。\s]*(?:请)?(?:帮我)?(?:记一下|记住)[。！!\s]*$/u, '')
+      .trim()
+    if (!content) return null
+    const exists = this.db.raw.prepare('SELECT 1 AS found FROM projects WHERE id = ?').get(projectId) as { found: number } | undefined
+    if (!exists) throw new Error('PROJECT_NOT_FOUND')
+    return this.create({ projectId, type: 'fact', content, status: 'suggested', sourceType: 'chat', sourceId, sourceLocation: '作者明确要求记录' }) as MemoryProposal
   }
 
   confirm(projectId: string, memoryId: string, confirmedBy: 'user'): MemoryItem {

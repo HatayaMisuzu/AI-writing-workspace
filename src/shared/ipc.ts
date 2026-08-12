@@ -1,10 +1,13 @@
 import type {
-  AITaskEnvelope, Character, DocumentContent, DocumentNode, Idea, LocalLintIssue, MemoryItem, ModelConfig,
+  AITaskEnvelope, Character, DocumentContent, DocumentNode, Idea, LocalLintIssue, MemoryItem, MemoryProposal, ModelConfig,
   Project, ProjectNote, ProjectType, ProviderConfig, ProviderInput, SearchResult, Snapshot, TaskModelRoute, TextPatch
 } from './domain'
 
 export interface WorkspaceApi {
-  window: { minimize(): Promise<void>; toggleMaximize(): Promise<void>; close(): Promise<void> }
+  window: {
+    minimize(): Promise<void>; toggleMaximize(): Promise<void>; close(): Promise<void>
+    confirmClose(): Promise<void>; cancelClose(): Promise<void>; onBeforeClose(handler: () => void): () => void
+  }
   projects: {
     list(includeArchived?: boolean): Promise<Project[]>
     create(input: { title: string; projectType: ProjectType; description?: string }): Promise<Project>
@@ -43,16 +46,19 @@ export interface WorkspaceApi {
     list(projectId: string): Promise<MemoryItem[]>
     confirm(projectId: string, memoryId: string): Promise<MemoryItem>
     reject(projectId: string, memoryId: string): Promise<MemoryItem>
+    proposeFromChat(projectId: string, sourceId: string, content: string): Promise<MemoryProposal | null>
   }
   patches: {
-    propose(input: { projectId: string; documentId: string; blockId?: string; from: number; to: number; replacement: string }): Promise<TextPatch>
+    propose(input: { projectId: string; documentId: string; documentRevision: number; fromPm: number; toPm: number; originalText: string; replacement: string }): Promise<TextPatch>
     list(projectId: string, documentId?: string): Promise<TextPatch[]>
-    accept(projectId: string, patchId: string): Promise<TextPatch>
+    prepare(projectId: string, patchId: string, documentRevision: number, currentText: string): Promise<TextPatch>
+    complete(projectId: string, patchId: string, savedRevision: number): Promise<TextPatch>
     reject(projectId: string, patchId: string): Promise<TextPatch>
   }
   linter: { run(text: string): Promise<LocalLintIssue[]> }
   digests: {
     store(projectId: string, chapterId: string, raw: string): Promise<{ id: string; payload: unknown }>
+    run(projectId: string, chapterId: string): Promise<{ id: string; payload: unknown; repaired: boolean }>
     list(projectId: string, chapterId?: string): Promise<Array<{ id: string; chapterId: string; revision: number; summary: string; stale: boolean; createdAt: number }>>
   }
   providers: {
@@ -70,9 +76,16 @@ export interface WorkspaceApi {
     exportManuscript(projectId: string, format: 'txt' | 'md' | 'docx'): Promise<string | null>
   }
   ai: {
-    start(task: AITaskEnvelope, threadId: string, onEvent: (event: AIStreamEvent) => void): () => void
+    start(request: AIStartRequest, onEvent: (event: AIStreamEvent) => void): () => void
     cancel(requestId: string): Promise<void>
   }
+}
+
+export interface AIStartRequest {
+  requestId: string
+  task: AITaskEnvelope
+  threadId: string
+  userMessageId: string
 }
 
 export type AIStreamEvent =

@@ -11,9 +11,9 @@ describe('patch safety, provider failures and local linter', () => {
     const db = createTestDb(); const project = new ProjectService(db).create({ title: '补丁', projectType: 'novel' }); const docs = new DocumentService(db)
     const chapter = docs.listTree(project.id).find((node) => node.type === 'chapter')!
     docs.saveContent({ projectId: project.id, documentId: chapter.id, editorJson: { type: 'doc' }, plainText: '风吹过旧码头。' })
-    const patch = new PatchService(db).propose({ projectId: project.id, documentId: chapter.id, from: 0, to: 1, replacement: '雨' })
+    const patch = new PatchService(db).propose({ projectId: project.id, documentId: chapter.id, documentRevision: 1, fromPm: 1, toPm: 2, originalText: '风', replacement: '雨' })
     docs.saveContent({ projectId: project.id, documentId: chapter.id, editorJson: { type: 'doc' }, plainText: '雾吹过旧码头。' })
-    expect(new PatchService(db).apply(project.id, patch.id).status).toBe('stale')
+    expect(new PatchService(db).prepare(project.id, patch.id, 2, '雾').status).toBe('stale')
     expect(docs.getContent(project.id, chapter.id).plainText).toBe('雾吹过旧码头。')
   })
 
@@ -21,8 +21,10 @@ describe('patch safety, provider failures and local linter', () => {
     const db = createTestDb(); const project = new ProjectService(db).create({ title: '补丁', projectType: 'novel' }); const docs = new DocumentService(db)
     const chapter = docs.listTree(project.id).find((node) => node.type === 'chapter')!
     docs.saveContent({ projectId: project.id, documentId: chapter.id, editorJson: { type: 'doc' }, plainText: '风吹过旧码头。' })
-    const service = new PatchService(db); const patch = service.propose({ projectId: project.id, documentId: chapter.id, from: 0, to: 1, replacement: '雨' })
-    expect(service.apply(project.id, patch.id).status).toBe('accepted')
+    const service = new PatchService(db); const patch = service.propose({ projectId: project.id, documentId: chapter.id, documentRevision: 1, fromPm: 1, toPm: 2, originalText: '风', replacement: '雨' })
+    expect(service.prepare(project.id, patch.id, 1, '风').status).toBe('proposed')
+    const saved = docs.saveContent({ projectId: project.id, documentId: chapter.id, editorJson: { type: 'doc' }, plainText: '雨吹过旧码头。', expectedRevision: 1 })
+    expect(service.complete(project.id, patch.id, saved.revision).status).toBe('accepted')
     expect(docs.getContent(project.id, chapter.id).plainText).toBe('雨吹过旧码头。')
     expect(docs.listSnapshots(project.id, chapter.id)[0].reason).toBe('ai_edit')
   })

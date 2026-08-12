@@ -112,8 +112,8 @@ export class BackupService {
       payload.origins.forEach((item) => originInsert.run(...[idMap.get(item.id as string), projectId, idMap.get(item.document_id as string), item.from_pos, item.to_pos, item.origin, item.created_at].map(sqlValue)))
       const feedbackInsert = this.db.raw.prepare(`INSERT INTO style_feedback(id,project_id,text_sample,feedback_type,comment,created_at) VALUES (?,?,?,?,?,?)`)
       payload.feedback.forEach((item) => feedbackInsert.run(...[idMap.get(item.id as string), projectId, item.text_sample, item.feedback_type, item.comment, item.created_at].map(sqlValue)))
-      const patchInsert = this.db.raw.prepare(`INSERT INTO text_patches(id,project_id,document_id,block_id,from_pos,to_pos,original_hash,original_text,replacement,status,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`)
-      payload.patches.forEach((item) => patchInsert.run(...[idMap.get(item.id as string), projectId, idMap.get(item.document_id as string), item.block_id, item.from_pos, item.to_pos, item.original_hash, item.original_text, item.replacement, item.status, item.created_at].map(sqlValue)))
+      const patchInsert = this.db.raw.prepare(`INSERT INTO text_patches(id,project_id,document_id,block_id,document_revision,from_pos,to_pos,original_hash,original_text,replacement,status,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`)
+      payload.patches.forEach((item) => patchInsert.run(...[idMap.get(item.id as string), projectId, idMap.get(item.document_id as string), item.block_id ?? 'pm-range', item.document_revision ?? -1, item.from_pos, item.to_pos, item.original_hash, item.original_text, item.replacement, item.document_revision === undefined && item.status === 'proposed' ? 'stale' : item.status, item.created_at].map(sqlValue)))
     })
     return new ProjectService(this.db).get(projectId)
   }

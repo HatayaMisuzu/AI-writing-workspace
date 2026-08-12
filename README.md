@@ -27,7 +27,7 @@ npm run dev
 无需 `OPENAI_API_KEY`，也无需任何真实 API 凭据即可启动、构建、编辑、保存、检索、备份和运行本地测试。AI 功能使用前，在“设置 → 模型与服务”中添加自己的兼容 Provider、Base URL、API Key 和 Model ID。
 
 ```powershell
-npm run verify  # 类型检查、19 项测试、生产构建
+npm run verify  # 类型检查、41 项测试、生产构建
 npm run dist    # 生成 Windows NSIS 安装包
 ```
 
@@ -41,4 +41,4 @@ npm run dist    # 生成 Windows NSIS 安装包
 
 ## 说明
 
-本项目没有用 Mock UI 或伪响应宣称真实 AI 已验收。Provider 接口、任务路由、Streaming、取消与错误处理已做本地测试；由于未提供用户 API 凭据，真实联网 Provider 集成测试明确未执行。详见 [执行与验收报告](docs/EXECUTION_REPORT.md)。
+本项目没有用 Mock UI 或伪响应宣称真实 AI 已验收。Provider 接口、任务路由、Streaming、取消与错误处理已做本地测试；由于未提供用户 API 凭据，真实联网 Provider 集成测试明确未执行。详见 [核心正确性修复报告](docs/CORE_CORRECTNESS_REPORT.md)；此前执行证据保留在 [初版执行报告](docs/EXECUTION_REPORT.md)。

@@ -1,5 +1,4 @@
 import { BrowserWindow, dialog, ipcMain } from 'electron'
-import { basename, extname, join } from 'node:path'
 import type { AppDatabase } from '../database/database'
 import { ProjectService } from '../services/project-service'
 import { DocumentService } from '../services/document-service'
@@ -10,8 +9,11 @@ import { BackupService } from '../services/backup-service'
 import { OpenAICompatibleAdapter, ProviderService, type SecretCodec } from '../ai/provider'
 import { AICreativeRuntime } from '../ai/runtime'
 import { ChapterDigestService } from '../ai/chapter-digest-service'
+import { ChapterDigestRunner } from '../ai/digest-runner'
 import { ProjectContentService } from '../services/project-content-service'
-import type { AITaskEnvelope, ModelConfig, ProviderInput, TaskModelRoute } from '../../shared/domain'
+import type { ModelConfig, ProviderInput, TaskModelRoute } from '../../shared/domain'
+import type { AIStartRequest } from '../../shared/ipc'
+import { cancelClose, confirmClose } from '../window-close'
 
 const handle = <T extends unknown[], R>(channel: string, fn: (...args: T) => R | Promise<R>): void => {
   ipcMain.handle(channel, (_event, ...args: T) => fn(...args))
@@ -27,11 +29,19 @@ export function registerIpc(db: AppDatabase, codec: SecretCodec): void {
   const backup = new BackupService(db)
   const runtime = new AICreativeRuntime(db, providers)
   const digests = new ChapterDigestService(db)
+  const digestRunner = new ChapterDigestRunner(db, providers)
   const projectContent = new ProjectContentService(db)
 
   handle('window:minimize', () => BrowserWindow.getFocusedWindow()?.minimize())
-  handle('window:toggle-maximize', () => { const win = BrowserWindow.getFocusedWindow(); if (win) win.isMaximized() ? win.unmaximize() : win.maximize() })
+  handle('window:toggle-maximize', () => {
+    const win = BrowserWindow.getFocusedWindow()
+    if (!win) return
+    if (win.isMaximized()) win.unmaximize()
+    else win.maximize()
+  })
   handle('window:close', () => BrowserWindow.getFocusedWindow()?.close())
+  ipcMain.handle('window:confirm-close', (event) => confirmClose(event.sender))
+  ipcMain.handle('window:cancel-close', (event) => cancelClose(event.sender))
 
   handle('projects:list', (includeArchived?: boolean) => projects.list(includeArchived))
   handle('projects:create', (input: Parameters<ProjectService['create']>[0]) => projects.create(input))
@@ -63,12 +73,15 @@ export function registerIpc(db: AppDatabase, codec: SecretCodec): void {
   handle('memories:list', (projectId: string) => memories.list(projectId))
   handle('memories:confirm', (projectId: string, memoryId: string) => memories.confirm(projectId, memoryId, 'user'))
   handle('memories:reject', (projectId: string, memoryId: string) => memories.reject(projectId, memoryId))
+  handle('memories:propose-from-chat', (projectId: string, sourceId: string, content: string) => memories.proposeFromChat(projectId, sourceId, content))
   handle('patches:propose', (input: Parameters<PatchService['propose']>[0]) => patches.propose(input))
   handle('patches:list', (projectId: string, documentId?: string) => patches.list(projectId, documentId))
-  handle('patches:accept', (projectId: string, patchId: string) => patches.apply(projectId, patchId))
+  handle('patches:prepare', (projectId: string, patchId: string, revision: number, currentText: string) => patches.prepare(projectId, patchId, revision, currentText))
+  handle('patches:complete', (projectId: string, patchId: string, savedRevision: number) => patches.complete(projectId, patchId, savedRevision))
   handle('patches:reject', (projectId: string, patchId: string) => patches.reject(projectId, patchId))
   handle('linter:run', (text: string) => lintChineseText(text))
   handle('digests:store', (projectId: string, chapterId: string, raw: string) => digests.storeFromModel(projectId, chapterId, raw))
+  handle('digests:run', (projectId: string, chapterId: string) => digestRunner.run(projectId, chapterId))
   handle('digests:list', (projectId: string, chapterId?: string) => digests.list(projectId, chapterId))
 
   handle('providers:list', () => providers.list())
@@ -77,8 +90,10 @@ export function registerIpc(db: AppDatabase, codec: SecretCodec): void {
   handle('providers:save-model', (model: ModelConfig) => providers.saveModel(model))
   handle('providers:set-route', (route: TaskModelRoute) => providers.setRoute(route.taskType, route.modelId))
   handle('providers:test', async (providerId: string, modelId: string) => {
-    const { config, apiKey } = providers.getWithSecret(providerId)
-    return new OpenAICompatibleAdapter(config.baseUrl, apiKey).testConnection(modelId)
+    try {
+      const { config, apiKey } = providers.getWithSecret(providerId)
+      return new OpenAICompatibleAdapter(config.baseUrl, apiKey).testConnection(modelId)
+    } catch (error) { return { ok: false, message: error instanceof Error ? error.message : '服务配置不可用' } }
   })
 
   handle('backup:export-project', async (projectId: string) => {
@@ -106,17 +121,15 @@ export function registerIpc(db: AppDatabase, codec: SecretCodec): void {
     return result.filePath
   })
 
-  ipcMain.on('ai:start', async (event, request: { task: AITaskEnvelope; threadId: string }) => {
-    let requestId = 'pending'
+  ipcMain.on('ai:start', async (event, request: AIStartRequest) => {
     try {
-      for await (const result of runtime.run(request.task, request.threadId)) {
-        requestId = result.requestId
-        event.sender.send('ai:event', { type: 'chunk', requestId, chunk: result.chunk, context: result.context })
+      for await (const result of runtime.run(request.requestId, request.task, request.threadId, request.userMessageId)) {
+        event.sender.send('ai:event', { type: 'chunk', requestId: request.requestId, chunk: result.chunk, context: result.context })
       }
-      event.sender.send('ai:event', { type: 'done', requestId })
+      event.sender.send('ai:event', { type: 'done', requestId: request.requestId })
     } catch (error) {
       const shaped = error as Error & { code?: string }
-      event.sender.send('ai:event', { type: 'error', requestId, message: shaped.message, code: shaped.code })
+      event.sender.send('ai:event', { type: 'error', requestId: request.requestId, message: shaped.message, code: shaped.code })
     }
   })
   handle('ai:cancel', (requestId: string) => runtime.cancel(requestId))

@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronRight, FileText, Lightbulb, MoreHorizontal, Plus } from 'lucide-react'
+import { ChevronDown, FileText, Lightbulb, Plus } from 'lucide-react'
 import type { DocumentNode, Project } from '../../../shared/domain'
 
 export type ProjectSection = 'manuscript' | 'ideas' | 'story' | 'characters' | 'references' | 'ai-data' | 'history'
@@ -11,7 +11,7 @@ export function ProjectSidebar({ project, tree, selectedId, section, onSection, 
 }): React.JSX.Element {
   const volumes = tree.filter((node) => node.type === 'volume')
   return <aside className="project-sidebar">
-    <div className="project-name"><strong>{project.title}</strong><button className="icon-button"><MoreHorizontal size={17} /></button></div>
+    <div className="project-name"><strong>{project.title}</strong></div>
     <nav className="project-sections">{sections.map(([value, label]) => <button key={value} className={section === value ? 'active' : ''} onClick={() => onSection(value)}>{label}</button>)}</nav>
     {section === 'manuscript' ? <div className="manuscript-tree">
       {volumes.map((volume) => <div className="volume" key={volume.id}>

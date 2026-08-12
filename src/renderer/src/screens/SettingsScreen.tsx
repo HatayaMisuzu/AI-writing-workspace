@@ -1,8 +1,14 @@
 import { Check, Database, Eye, Keyboard, Palette, Plus, Save, Server, TestTube2, XCircle } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import type { AIMode, ModelConfig, ProviderConfig } from '../../../shared/domain'
 
-const defaultCapabilities = { streaming: true, tools: true, structuredOutput: true, cancellation: true }
+const defaultCapabilities = { streaming: true, tools: false, structuredOutput: false, cancellation: true }
+const capabilityLabel = (capabilities: ModelConfig['capabilities']): string => [
+  capabilities.streaming ? '流式' : undefined,
+  capabilities.cancellation ? '可取消' : undefined,
+  capabilities.tools ? '工具' : undefined,
+  capabilities.structuredOutput ? '原生结构化输出' : undefined
+].filter(Boolean).join(' · ')
 
 export function SettingsScreen(): React.JSX.Element {
   const [providers, setProviders] = useState<ProviderConfig[]>([])
@@ -13,13 +19,13 @@ export function SettingsScreen(): React.JSX.Element {
   const [model, setModel] = useState({ modelId: '', displayName: '' })
   const [notice, setNotice] = useState<{ ok: boolean; text: string }>()
 
-  const reload = async (): Promise<void> => {
+  const reload = useCallback(async (): Promise<void> => {
     const [nextProviders, nextModels] = await Promise.all([window.workspace.providers.list(), window.workspace.providers.models()])
     setProviders(nextProviders); setModels(nextModels)
-    if (!selectedId && nextProviders[0]) setSelectedId(nextProviders[0].id)
-  }
-  useEffect(() => { void reload() }, [])
-  useEffect(() => { if (selected) setForm({ displayName: selected.displayName, baseUrl: selected.baseUrl, apiKey: '' }) }, [selectedId])
+    setSelectedId((current) => current ?? nextProviders[0]?.id)
+  }, [])
+  useEffect(() => { void reload() }, [reload])
+  useEffect(() => { if (selected) setForm({ displayName: selected.displayName, baseUrl: selected.baseUrl, apiKey: '' }) }, [selected])
 
   const saveProvider = async (): Promise<void> => {
     const id = selectedId ?? crypto.randomUUID()
@@ -39,7 +45,7 @@ export function SettingsScreen(): React.JSX.Element {
   }
 
   return <main className="settings-screen">
-    <aside className="settings-nav"><button><Eye size={18} />写作</button><button><Palette size={18} />外观</button><button className="active"><Server size={18} />模型与服务</button><button><Keyboard size={18} />快捷键</button><button><Database size={18} />数据与备份</button></aside>
+    <aside className="settings-nav"><button disabled title="尚未实现"><Eye size={18} />写作</button><button disabled title="尚未实现"><Palette size={18} />外观</button><button className="active"><Server size={18} />模型与服务</button><button disabled title="尚未实现"><Keyboard size={18} />快捷键</button><button disabled title="尚未实现"><Database size={18} />数据与备份</button></aside>
     <section className="settings-content">
       <header><h1>模型与服务</h1><p>模型是可选能力。凭据仅保存在本机主进程；未配置模型时，写作、保存、检索与历史恢复仍可正常使用。</p></header>
       <div className="provider-layout">
@@ -54,7 +60,7 @@ export function SettingsScreen(): React.JSX.Element {
         </div>
       </div>
       <section className="model-section"><h2>模型</h2><div className="model-head"><span>Model ID</span><span>显示名称</span><span>能力</span><span>默认</span></div>
-        {models.filter((item) => item.providerId === selectedId).map((item) => <div className="model-row" key={item.id}><strong>{item.modelId}</strong><span>{item.displayName}</span><small>流式 · 工具 · 结构化 · 可取消</small><button className={item.isDefault ? 'default-model active' : 'default-model'} onClick={async () => { await window.workspace.providers.saveModel({ ...item, isDefault: true }); await reload() }}>{item.isDefault ? '默认模型' : '设为默认'}</button></div>)}
+        {models.filter((item) => item.providerId === selectedId).map((item) => <div className="model-row" key={item.id}><strong>{item.modelId}</strong><span>{item.displayName}</span><small>{capabilityLabel(item.capabilities)}</small><button className={item.isDefault ? 'default-model active' : 'default-model'} onClick={async () => { await window.workspace.providers.saveModel({ ...item, isDefault: true }); await reload() }}>{item.isDefault ? '默认模型' : '设为默认'}</button></div>)}
         {selectedId && <div className="model-add"><input value={model.modelId} onChange={(event) => setModel({ ...model, modelId: event.target.value })} placeholder="Model ID" /><input value={model.displayName} onChange={(event) => setModel({ ...model, displayName: event.target.value })} placeholder="显示名称（可选）" /><button onClick={() => void saveModel()}><Plus size={16} />添加模型</button></div>}
       </section>
       <section className="routing-section"><details><summary>任务模型路由（高级）<span>未单独设置的任务始终使用默认模型</span></summary><div className="route-grid">{(['discussion','generation','chapter_digest','proofreading','reader_review'] as AIMode[]).map((task) => <label key={task}><span>{task}</span><select defaultValue="default" onChange={(event) => void window.workspace.providers.setRoute({ taskType: task, modelId: event.target.value })}><option value="default">默认模型</option>{models.map((item) => <option key={item.id} value={item.id}>{item.displayName}</option>)}</select></label>)}</div></details></section>
