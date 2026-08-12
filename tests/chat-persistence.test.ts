@@ -13,6 +13,9 @@ describe('chat persistence', () => {
     expect(new ChatService(db).listMessages(a.id, thread.id)).toMatchObject([
       { id: 'u', status: 'complete', content: '继续写' }, { id: 'a', status: 'complete', content: '候选正文' }
     ])
+    const named = chat.createThread(a.id, '新对话')
+    chat.startTurn({ projectId: a.id, threadId: named.id, userMessageId: 'u2', assistantMessageId: 'a2', content: '讨论钟楼钥匙与红伞的关系', mode: 'discussion' })
+    expect(chat.listThreads(a.id).find((item) => item.id === named.id)?.title).toBe('讨论钟楼钥匙与红伞的关系')
     expect(chat.listThreads(b.id)).toHaveLength(0)
     expect(() => chat.listMessages(b.id, thread.id)).toThrow('CHAT_THREAD_NOT_FOUND_IN_PROJECT')
   })

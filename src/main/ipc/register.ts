@@ -79,6 +79,8 @@ export function registerIpc(db: AppDatabase, codec: SecretCodec): void {
   handle('memories:list', (projectId: string) => memories.list(projectId))
   handle('memories:confirm', (projectId: string, memoryId: string) => memories.confirm(projectId, memoryId, 'user'))
   handle('memories:reject', (projectId: string, memoryId: string) => memories.reject(projectId, memoryId))
+  handle('memories:retire', (projectId: string, memoryId: string) => memories.retire(projectId, memoryId))
+  handle('memories:replace', (projectId: string, memoryId: string, content: string) => memories.proposeReplacement(projectId, memoryId, content))
   handle('memories:propose-from-chat', (projectId: string, sourceId: string, content: string) => memories.proposeFromChat(projectId, sourceId, content))
   handle('memories:extract-intent', (projectId: string, sourceId: string, content: string) => memoryIntent.extractAndCreate(projectId, sourceId, content))
   handle('chat:list-threads', (projectId: string) => chat.listThreads(projectId))

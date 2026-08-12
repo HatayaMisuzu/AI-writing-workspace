@@ -10,12 +10,15 @@ export class StyleEngine {
 
   retrieve(projectId: string, limit = 8): StyleSample[] {
     const rows = this.db.raw.prepare(`
-      SELECT id, document_id, origin, text FROM style_samples
-      WHERE project_id = ? AND origin != 'ai' ORDER BY updated_at DESC
-    `).all(projectId) as Array<{ id: string; document_id: string | null; origin: TextOrigin; text: string }>
+      SELECT id, document_id, origin, text, updated_at FROM (
+        SELECT id, document_id, origin, text, updated_at,
+          ROW_NUMBER() OVER (PARTITION BY COALESCE(document_id, id), origin ORDER BY updated_at DESC) AS sample_rank
+        FROM style_samples WHERE project_id = ? AND origin != 'ai'
+      ) WHERE sample_rank <= 2 ORDER BY updated_at DESC
+    `).all(projectId) as Array<{ id: string; document_id: string | null; origin: TextOrigin; text: string; updated_at: number }>
     return rows.map((row) => ({ id: row.id, documentId: row.document_id ?? '',
-      text: row.text, origin: row.origin, score: rank[row.origin] }))
-      .toSorted((a, b) => b.score - a.score)
+      text: row.text, origin: row.origin, score: rank[row.origin], updatedAt: row.updated_at }))
+      .toSorted((a, b) => b.score - a.score || b.updatedAt - a.updatedAt)
       .slice(0, limit)
   }
 }

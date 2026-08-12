@@ -51,7 +51,9 @@ export class ChatService {
         VALUES (?, ?, ?, 'user', ?, ?, 'complete', ?)`).run(input.userMessageId, input.threadId, input.projectId, input.content, input.mode, now)
       this.db.raw.prepare(`INSERT INTO chat_messages(id, thread_id, project_id, role, content, task_mode, status, created_at)
         VALUES (?, ?, ?, 'assistant', '', ?, 'streaming', ?)`).run(input.assistantMessageId, input.threadId, input.projectId, input.mode, now + 1)
-      this.db.raw.prepare('UPDATE chat_threads SET updated_at = ? WHERE id = ? AND project_id = ?').run(now + 1, input.threadId, input.projectId)
+      const title = [...input.content.trim()].slice(0, 22).join('') || '新对话'
+      this.db.raw.prepare(`UPDATE chat_threads SET title = CASE WHEN title = '新对话' THEN ? ELSE title END,
+        updated_at = ? WHERE id = ? AND project_id = ?`).run(title, now + 1, input.threadId, input.projectId)
     })
   }
 

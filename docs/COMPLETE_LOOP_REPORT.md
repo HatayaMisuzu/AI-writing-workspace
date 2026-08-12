@@ -95,9 +95,11 @@ NOT RUN — no user supplied credential
 ## 10. Git Delivery
 
 ```text
-Implementation commit SHA: 16ee6758d0c9cdb54260c4f3a688ddc08f249fb5
+Implementation commit SHA: 16ee675109f93582934e701475b694b12d32c93c
 Push main: PASS
-origin/main at implementation delivery: 16ee6758d0c9cdb54260c4f3a688ddc08f249fb5
+origin/main at implementation delivery: 16ee675109f93582934e701475b694b12d32c93c
+
+Documentation follow-up commit SHA: ec84bc38b312697a36891e058d7a778c87485195
 Working tree clean after implementation delivery: PASS
 ```
 

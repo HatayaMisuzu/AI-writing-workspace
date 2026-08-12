@@ -47,6 +47,8 @@ export interface WorkspaceApi {
     list(projectId: string): Promise<MemoryItem[]>
     confirm(projectId: string, memoryId: string): Promise<MemoryItem>
     reject(projectId: string, memoryId: string): Promise<MemoryItem>
+    retire(projectId: string, memoryId: string): Promise<MemoryItem>
+    replace(projectId: string, memoryId: string, content: string): Promise<MemoryItem>
     proposeFromChat(projectId: string, sourceId: string, content: string): Promise<MemoryProposal | null>
     extractIntent(projectId: string, sourceId: string, content: string): Promise<MemoryProposal[]>
   }

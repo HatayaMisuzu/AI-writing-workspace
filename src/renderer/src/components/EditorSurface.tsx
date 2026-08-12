@@ -5,7 +5,7 @@ import StarterKit from '@tiptap/starter-kit'
 import { Check, Focus, LocateFixed, Redo2, Save, ShieldCheck, Sparkles, Undo2, X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { DocumentContent, DocumentNode, LocalLintIssue, ProofreadIssue, TextPatch } from '../../../shared/domain'
-import { findTextRange, plainTextRangeToPm } from '../services/prosemirror-range'
+import { findTextRange, findTextRanges, plainTextRangeToPm } from '../services/prosemirror-range'
 import { SaveCoordinator, type SaveState } from '../services/save-coordinator'
 
 export interface EditorSelection { fromPm: number; toPm: number; text: string }
@@ -35,11 +35,13 @@ export function EditorSurface({ node, content, focusMode, onFocusMode, onSaved, 
   const [aiIssues, setAiIssues] = useState<ProofreadIssue[]>([])
   const [proofreadOpen, setProofreadOpen] = useState(false)
   const [proofreadBusy, setProofreadBusy] = useState(false)
+  const [aiProofreadRan, setAiProofreadRan] = useState(false)
   const [proofreadError, setProofreadError] = useState<string>()
   const [ignoredIssues, setIgnoredIssues] = useState<Set<string>>(new Set())
   const [liveWordCount, setLiveWordCount] = useState(content.wordCount)
   const onSavedRef = useRef(onSaved)
   const pendingStyleSample = useRef<{ origin: 'ai'; text: string } | undefined>(undefined)
+  const renderedDocumentId = useRef(node.id)
   const initialRevision = useRef({ documentId: node.id, revision: content.revision })
   if (initialRevision.current.documentId !== node.id) initialRevision.current = { documentId: node.id, revision: content.revision }
   useEffect(() => { onSavedRef.current = onSaved }, [onSaved])
@@ -81,8 +83,15 @@ export function EditorSurface({ node, content, focusMode, onFocusMode, onSaved, 
   useEffect(() => {
     coordinator.resetRevision(content.revision)
     setLiveWordCount(content.wordCount)
+    const sameDocument = renderedDocumentId.current === content.documentId
+    renderedDocumentId.current = content.documentId
+    if (!sameDocument) { setAiIssues([]); setAiProofreadRan(false); setProofreadError(undefined) }
+    if (sameDocument && editor && !editor.isDestroyed && !coordinator.hasPending() && editor.getText({ blockSeparator: '\n\n' }) !== content.plainText) {
+      editor.commands.setContent(content.editorJson, { emitUpdate: false })
+      onSelection(undefined)
+    }
     void runLocalLint(content.plainText)
-  }, [content.documentId, content.revision, content.plainText, content.wordCount, coordinator, runLocalLint])
+  }, [content.documentId, content.editorJson, content.revision, content.plainText, content.wordCount, coordinator, editor, onSelection, runLocalLint])
 
   useEffect(() => onRegisterInsert(async (text) => {
     if (!editor || !text) return
@@ -147,6 +156,7 @@ export function EditorSurface({ node, content, focusMode, onFocusMode, onSaved, 
     try {
       await coordinator.flush()
       setAiIssues(await window.workspace.proofreading.run(node.projectId, node.id))
+      setAiProofreadRan(true)
     } catch (error) { setProofreadError(error instanceof Error ? error.message : String(error)) }
     finally { setProofreadBusy(false) }
   }
@@ -154,11 +164,15 @@ export function EditorSurface({ node, content, focusMode, onFocusMode, onSaved, 
   const createProofreadPatch = async (issue: ProofreadIssue): Promise<void> => {
     if (!editor || !issue.suggestion) return
     await coordinator.flush()
-    const range = findTextRange(editor.state.doc, issue.originalText)
+    if (issue.documentRevision !== coordinator.currentRevision()) throw new Error('正文已在校对后变化，请重新运行 AI 校对。')
+    const matches = findTextRanges(editor.state.doc, issue.originalText)
+    if (matches.length > 1 && !issue.occurrence) throw new Error('相同原文出现多次，无法安全定位，请重新运行 AI 校对。')
+    const range = findTextRange(editor.state.doc, issue.originalText, issue.occurrence ?? 1)
     if (!range) throw new Error('原文已经变化，请重新运行 AI 校对。')
     await window.workspace.patches.propose({ projectId: node.projectId, documentId: node.id,
       documentRevision: coordinator.currentRevision(), fromPm: range.from, toPm: range.to,
       originalText: issue.originalText, replacement: issue.suggestion })
+    setProofreadOpen(false)
     onOpenPatches()
   }
 
@@ -180,7 +194,7 @@ export function EditorSurface({ node, content, focusMode, onFocusMode, onSaved, 
       <div className="proofread-actions"><button onClick={() => void runLocalLint(editor?.getText({ blockSeparator: '\n\n' }) ?? '')}>重新检查本地规则</button><button className="primary" disabled={proofreadBusy} onClick={() => void runAiProofread()}><Sparkles size={15} />{proofreadBusy ? 'AI 校对中…' : '运行 AI 校对'}</button></div>
       {proofreadError && <div className="inline-error" role="alert">{proofreadError}</div>}
       <section><h3>本地规则 <span>{visibleLocalIssues.length}</span></h3>{visibleLocalIssues.length === 0 ? <p className="empty-copy">暂未发现明确的标点或空格问题。</p> : visibleLocalIssues.map((issue) => <article key={issue.id} className="proofread-issue"><span>{issueLabel(issue.kind)}</span><p>{issue.message}</p><small>原文：{(editor?.getText({ blockSeparator: '\n\n' }) ?? '').slice(issue.from, issue.to)}</small>{issue.replacement && <ins>建议：{issue.replacement}</ins>}<div><button onClick={() => jumpToLocalIssue(issue)}><LocateFixed size={14} />定位</button><button onClick={() => setIgnoredIssues((current) => new Set(current).add(issue.id))}>忽略</button>{issue.replacement && <button className="primary" onClick={() => void applyLocalIssue(issue).catch((error) => setProofreadError(error instanceof Error ? error.message : String(error)))}><Check size={14} />应用</button>}</div></article>)}</section>
-      <section><h3>AI 校对 <span>{aiIssues.length}</span></h3>{aiIssues.length === 0 ? <p className="empty-copy">需要已配置模型。运行后，建议不会直接改写正文。</p> : aiIssues.map((issue) => <article key={issue.id} className="proofread-issue"><span>{issueLabel(issue.category)}</span><p>{issue.reason}</p><small>原文：{issue.originalText}</small>{issue.suggestion && <ins>建议：{issue.suggestion}</ins>}<div><button className="primary" disabled={!issue.suggestion} onClick={() => void createProofreadPatch(issue).catch((error) => setProofreadError(error instanceof Error ? error.message : String(error)))}>加入修改提案</button></div></article>)}</section>
+      <section><h3>AI 校对 <span>{aiIssues.length}</span></h3>{aiIssues.length === 0 ? <p className="empty-copy">{aiProofreadRan ? 'AI 未发现需要处理的明确问题。' : '运行后，建议会先进入修改提案，不会直接改写正文。'}</p> : aiIssues.map((issue) => <article key={issue.id} className="proofread-issue"><span>{issueLabel(issue.category)}</span><p>{issue.reason}</p><small>原文：{issue.originalText}</small>{issue.suggestion && <ins>建议：{issue.suggestion}</ins>}<div><button className="primary" disabled={!issue.suggestion} onClick={() => void createProofreadPatch(issue).catch((error) => setProofreadError(error instanceof Error ? error.message : String(error)))}>加入修改提案</button></div></article>)}</section>
     </aside>}
   </section>
 }

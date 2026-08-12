@@ -64,16 +64,26 @@ export class MemoryService {
     if (!this.db.raw.prepare('SELECT 1 AS found FROM projects WHERE id = ?').get(projectId)) throw new Error('PROJECT_NOT_FOUND')
     return proposals.slice(0, 3).filter((proposal) => proposal.content.trim()).map((proposal) => this.create({
       projectId, type: proposal.type, content: proposal.content.trim(), status: 'suggested', sourceType: 'chat', sourceId,
-      sourceLocation: '作者明确要求记录', confidence: proposal.confidence
+      sourceLocation: proposal.supersedes ? '作者明确要求替代既有设定' : '作者明确要求记录', confidence: proposal.confidence,
+      supersedes: proposal.supersedes
     }) as MemoryProposal)
   }
 
   confirm(projectId: string, memoryId: string, confirmedBy: 'user'): MemoryItem {
     if (confirmedBy !== 'user') throw new Error('CONFIRMED_REQUIRES_USER')
     const existing = this.get(projectId, memoryId)
+    if (existing.status === 'confirmed') return existing
     if (existing.status === 'rejected' || existing.status === 'superseded') throw new Error('MEMORY_NOT_CONFIRMABLE')
-    this.db.raw.prepare('UPDATE memories SET status = ?, updated_at = ? WHERE id = ? AND project_id = ?')
-      .run('confirmed', Date.now(), memoryId, projectId)
+    this.db.transaction(() => {
+      if (existing.supersedes) {
+        const previous = this.get(projectId, existing.supersedes)
+        if (previous.status !== 'confirmed') throw new Error('MEMORY_REPLACEMENT_TARGET_CHANGED')
+        this.db.raw.prepare('UPDATE memories SET status = ?, updated_at = ? WHERE id = ? AND project_id = ?')
+          .run('superseded', Date.now(), previous.id, projectId)
+      }
+      this.db.raw.prepare('UPDATE memories SET status = ?, updated_at = ? WHERE id = ? AND project_id = ?')
+        .run('confirmed', Date.now(), memoryId, projectId)
+    })
     return this.get(projectId, memoryId)
   }
 
@@ -84,13 +94,29 @@ export class MemoryService {
     return this.get(projectId, memoryId)
   }
 
-  supersede(projectId: string, oldId: string, replacement: Omit<Parameters<MemoryService['create']>[0], 'projectId' | 'supersedes'>): MemoryItem {
-    this.get(projectId, oldId)
-    return this.db.transaction(() => {
-      this.db.raw.prepare('UPDATE memories SET status = ?, updated_at = ? WHERE id = ? AND project_id = ?')
-        .run('superseded', Date.now(), oldId, projectId)
-      return this.create({ ...replacement, projectId, supersedes: oldId })
-    })
+  retire(projectId: string, memoryId: string): MemoryItem {
+    const existing = this.get(projectId, memoryId)
+    if (existing.status !== 'confirmed') throw new Error('ONLY_CONFIRMED_MEMORY_CAN_BE_RETIRED')
+    return this.reject(projectId, memoryId)
+  }
+
+  proposeReplacement(projectId: string, oldId: string, content: string): MemoryItem {
+    const previous = this.get(projectId, oldId)
+    if (previous.status !== 'confirmed') throw new Error('MEMORY_REPLACEMENT_REQUIRES_CONFIRMED_TARGET')
+    if (!content.trim()) throw new Error('MEMORY_CONTENT_REQUIRED')
+    return this.create({ projectId, type: previous.type, content: content.trim(), status: 'suggested', sourceType: 'author',
+      sourceId: oldId, sourceLocation: '作者提出替代，确认后生效', supersedes: oldId })
+  }
+
+  findConfirmedMatch(projectId: string, content: string): MemoryItem | undefined {
+    const normalized = content.trim().replace(/[。！!？?，,；;：:\s]/g, '')
+    if (!normalized) return undefined
+    const confirmed = this.list(projectId, ['confirmed']).map((item) => ({ item,
+      normalized: item.content.replace(/[。！!？?，,；;：:\s]/g, '') }))
+    const exact = confirmed.filter((candidate) => candidate.normalized === normalized)
+    if (exact.length === 1) return exact[0].item
+    const partial = confirmed.filter((candidate) => candidate.normalized.includes(normalized) || normalized.includes(candidate.normalized))
+    return partial.length === 1 ? partial[0].item : undefined
   }
 
   private get(projectId: string, memoryId: string): MemoryItem {

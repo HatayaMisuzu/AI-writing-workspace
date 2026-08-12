@@ -12,10 +12,24 @@ const proposalSchema = z.object({
 const resultSchema = z.object({ shouldPropose: z.boolean(), proposals: z.array(proposalSchema).max(3) })
 
 const positiveHint = /记一下|记住这个|以后按这个|就这么定|设定为|确认采用|保留这个设定/
+const replacementHint = /(.+?)(?:不要了|作废|废弃)[，,。；;\s]*(?:改成|替换为)(.+)/
 const negativeHint = /不要记|别记|别定|先别定|不确定|没定|暂时(?:这么)?想|暂时想想|只是想想|假设|如果|要不要|不用记录|不必记录/
 const quotedCommand = /(?:他说|她说|文中|台词)[^。！？]{0,30}[“"'].*(?:记住|记一下)/
+const quotedReplacement = /(?:他说|她说|文中|台词)[^。！？]{0,30}[“"'].*(?:不要了|作废|废弃).*?(?:改成|替换为)/
 
-export const shouldRunMemoryIntent = (text: string): boolean => positiveHint.test(text) && !negativeHint.test(text) && !quotedCommand.test(text)
+export const shouldRunMemoryIntent = (text: string): boolean =>
+  (positiveHint.test(text) || replacementHint.test(text)) &&
+  !negativeHint.test(text) &&
+  !quotedCommand.test(text) &&
+  !quotedReplacement.test(text)
+
+export const localReplacementIntent = (text: string): { previous: string; replacement: string } | undefined => {
+  if (negativeHint.test(text) || quotedReplacement.test(text)) return undefined
+  const match = text.match(replacementHint)
+  const previous = match?.[1]?.trim().replace(/^(?:记一下|设定里|把)/, '').trim()
+  const replacement = match?.[2]?.trim().replace(/[。！!\s]+$/, '')
+  return previous && replacement ? { previous, replacement } : undefined
+}
 
 const classify = (content: string): MemoryType => {
   if (/姐妹|兄弟|母女|父子|夫妻|恋人|朋友|仇人|认识|关系/.test(content)) return 'relationship'
@@ -57,6 +71,13 @@ export class MemoryIntentRunner {
   }
 
   async extractAndCreate(projectId: string, sourceId: string, content: string): Promise<ReturnType<MemoryService['createProposals']>> {
+    const replacement = localReplacementIntent(content)
+    if (replacement) {
+      const previous = this.memories.findConfirmedMatch(projectId, replacement.previous)
+      if (!previous) return []
+      return this.memories.createProposals(projectId, sourceId, [{ type: previous.type, content: replacement.replacement,
+        confidence: 1, supersedes: previous.id }])
+    }
     const fallback = localMemoryIntent(content)
     if (!shouldRunMemoryIntent(content)) return []
     let result = fallback

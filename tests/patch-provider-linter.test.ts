@@ -62,6 +62,20 @@ describe('patch safety, provider failures and local linter', () => {
     controller.abort()
     await expect(pending).rejects.toMatchObject({ code: 'PROVIDER_CANCELLED' })
 
+    const encoder = new TextEncoder()
+    const readingController = new AbortController()
+    const abortWhileReading = new OpenAICompatibleAdapter('https://local.test/v1', 'unused', (async (_url, init) => {
+      const body = new ReadableStream({ start(streamController) {
+        streamController.enqueue(encoder.encode('data: {"choices":[{"delta":{"content":"开"}}]}\n\n'))
+        init?.signal?.addEventListener('abort', () => streamController.error(new DOMException('aborted', 'AbortError')), { once: true })
+      } })
+      return new Response(body, { status: 200 })
+    }) as typeof fetch)
+    const reading = abortWhileReading.chat({ model: 'local-model', messages: [], signal: readingController.signal })[Symbol.asyncIterator]()
+    expect(await reading.next()).toMatchObject({ value: '开', done: false })
+    readingController.abort()
+    await expect(reading.next()).rejects.toMatchObject({ code: 'PROVIDER_CANCELLED' })
+
     const offline = new OpenAICompatibleAdapter('https://offline.test/v1', 'unused', async () => { throw new TypeError('offline') })
     const result = await offline.testConnection('model')
     expect(result).toEqual({ ok: false, message: '无法连接模型服务，请检查网络与 Base URL。' })

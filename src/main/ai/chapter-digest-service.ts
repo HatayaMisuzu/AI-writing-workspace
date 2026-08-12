@@ -40,6 +40,9 @@ export class ChapterDigestService {
     const id = randomUUID()
     this.db.transaction(() => {
       this.db.raw.prepare('UPDATE chapter_digests SET stale = 1 WHERE project_id = ? AND chapter_id = ?').run(projectId, chapterId)
+      this.db.raw.prepare(`UPDATE memories SET status = 'rejected', updated_at = ?
+        WHERE project_id = ? AND source_type = 'chapter' AND source_id = ? AND status = 'suggested'`)
+        .run(Date.now(), projectId, chapterId)
       this.db.raw.prepare(`INSERT INTO chapter_digests
         (id,project_id,chapter_id,chapter_revision,summary,structured_payload,stale,created_at)
         VALUES (?,?,?,?,?,?,0,?)`).run(id, projectId, chapterId, content.revision, payload.summary, JSON.stringify(payload), Date.now())

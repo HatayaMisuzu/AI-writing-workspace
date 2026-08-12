@@ -223,6 +223,7 @@ export interface MemoryIntentProposal {
   type: MemoryType
   content: string
   confidence?: number
+  supersedes?: string
 }
 
 export interface MemoryIntentResult {
@@ -246,6 +247,10 @@ export interface ProofreadIssue {
   reason: string
   confidence?: number
   documentRevision: number
+  /** 1-based occurrence of originalText in the proofread revision. */
+  occurrence?: number
+  contextBefore?: string
+  contextAfter?: string
   from?: number
   to?: number
 }

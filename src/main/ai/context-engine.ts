@@ -49,6 +49,7 @@ export class ContextEngine {
 
     const signal = [task.userIntent, task.selection?.text ?? '', currentText].filter(Boolean).join('\n')
     for (const memory of this.memories.searchRelevant(task.projectId, ['confirmed', 'observed', 'tentative', 'idea', 'suggested'], signal)) {
+      if (memory.status === 'suggested' && memory.supersedes) continue
       const stateWeight = memory.status === 'confirmed' ? 85 : memory.status === 'observed' ? 78 : memory.status === 'tentative' ? 55 : 40
       candidates.push({ id: memory.id, kind: 'memory', title: `${memory.type} · ${memory.status}`, content: memory.content,
         projectId: task.projectId, reason: `关键词相关的长期记忆，状态为 ${memory.status}`, priority: stateWeight })

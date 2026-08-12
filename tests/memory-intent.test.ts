@@ -3,6 +3,7 @@ import { localMemoryIntent, shouldRunMemoryIntent } from '../src/main/ai/memory-
 import { MemoryIntentRunner } from '../src/main/ai/memory-intent'
 import { ProviderService } from '../src/main/ai/provider'
 import { ProjectService } from '../src/main/services/project-service'
+import { MemoryService } from '../src/main/services/memory-service'
 import { createTestDb, testCodec } from './helpers'
 
 describe('memory intent semantics', () => {
@@ -23,6 +24,16 @@ describe('memory intent semantics', () => {
     const proposals = await runner.extractAndCreate(project.id, 'chat-1', '记一下：林夏害怕密闭空间。')
     expect(proposals).toHaveLength(1); expect(proposals[0]).toMatchObject({ status: 'suggested', type: 'character_state' })
     expect(localMemoryIntent('不要记：林夏怕黑。').proposals).toHaveLength(0)
+  })
+
+  it('does not treat quoted or explicitly unrecorded replacement language as an author decision', async () => {
+    const db = createTestDb(); const project = new ProjectService(db).create({ title: '替代边界', projectType: 'novel' })
+    const memories = new MemoryService(db)
+    const old = memories.create({ projectId: project.id, type: 'fact', content: '门在北侧', status: 'suggested', sourceType: 'author', sourceId: 'author' })
+    memories.confirm(project.id, old.id, 'user')
+    const runner = new MemoryIntentRunner(db, new ProviderService(db, testCodec))
+    expect(await runner.extractAndCreate(project.id, 'chat-quoted', '她说“门在北侧不要了，改成门在南侧”。')).toHaveLength(0)
+    expect(await runner.extractAndCreate(project.id, 'chat-negative', '不要记，门在北侧不要了，改成门在南侧。')).toHaveLength(0)
   })
 
   it.each([
