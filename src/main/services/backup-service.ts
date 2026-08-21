@@ -15,6 +15,15 @@ const sqlValue = (value: unknown): SqlValue => {
   return JSON.stringify(value)
 }
 
+/** 解码导入的文本文件：识别 UTF-8/UTF-16 BOM，utf8 出现替换符时回退 GB18030（中文网文常见编码）。 */
+const decodeTextFile = (buf: Buffer): string => {
+  if (buf.length >= 3 && buf[0] === 0xef && buf[1] === 0xbb && buf[2] === 0xbf) return buf.subarray(3).toString('utf8')
+  if (buf.length >= 2 && buf[0] === 0xff && buf[1] === 0xfe) return new TextDecoder('utf-16le').decode(buf.subarray(2))
+  const utf8 = buf.toString('utf8')
+  if (!utf8.includes('\uFFFD')) return utf8
+  try { return new TextDecoder('gb18030').decode(buf) } catch { return utf8 }
+}
+
 interface BackupPayload {
   format: 'inkstone-project'
   version: 1
@@ -126,7 +135,7 @@ export class BackupService {
   }
 
   async importManuscript(path: string): Promise<Project> {
-    const source = await readFile(path, 'utf8')
+    const source = decodeTextFile(await readFile(path))
     const extension = extname(path).toLowerCase()
     if (!['.txt', '.md', '.markdown'].includes(extension)) throw new Error('UNSUPPORTED_MANUSCRIPT')
 
@@ -204,12 +213,16 @@ export class BackupService {
 
   async exportManuscript(projectId: string, path: string, format: 'txt' | 'md' | 'docx'): Promise<void> {
     const chapters = this.db.raw.prepare(`
-      SELECT v.title AS volume_title, c.title, dc.plain_text
-      FROM document_nodes c JOIN document_nodes v ON v.id = c.parent_id
-      JOIN document_contents dc ON dc.document_id = c.id
+      SELECT COALESCE(v.title, '') AS volume_title, c.title, dc.plain_text
+      FROM document_nodes c
+      LEFT JOIN document_nodes v
+        ON v.id = c.parent_id AND v.project_id = c.project_id AND v.type = 'volume'
+      LEFT JOIN document_contents dc
+        ON dc.document_id = c.id AND dc.project_id = c.project_id
       WHERE c.project_id = ? AND c.type = 'chapter'
-      ORDER BY v.order_index, c.order_index
-    `).all(projectId) as Array<{ volume_title: string; title: string; plain_text: string }>
+      ORDER BY COALESCE(v.order_index, 2147483647), c.order_index, c.created_at
+    `).all(projectId) as Array<{ volume_title: string; title: string; plain_text: string | null }>
+    const MISSING_PLACEHOLDER = '［本章内容缺失：导出时正文数据不完整，请检查应用数据］'
     if (format === 'docx') {
       const children: Paragraph[] = []
       let currentVolume = ''
@@ -219,7 +232,7 @@ export class BackupService {
           children.push(new Paragraph({ text: currentVolume, heading: HeadingLevel.HEADING_1 }))
         }
         children.push(new Paragraph({ text: chapter.title, heading: HeadingLevel.HEADING_2 }))
-        chapter.plain_text.split(/\n+/).forEach((text) => children.push(new Paragraph({ text })))
+        ;(chapter.plain_text ?? MISSING_PLACEHOLDER).split(/\n+/).forEach((text) => children.push(new Paragraph({ text })))
       })
       const doc = new Document({ sections: [{ children }] })
       await writeFile(path, await Packer.toBuffer(doc))
@@ -232,7 +245,8 @@ export class BackupService {
         currentVolume = chapter.volume_title
         parts.push(format === 'md' ? `# ${currentVolume}` : currentVolume)
       }
-      parts.push(format === 'md' ? `## ${chapter.title}\n\n${chapter.plain_text}` : `${chapter.title}\n\n${chapter.plain_text}`)
+      const body = chapter.plain_text !== null && chapter.plain_text !== '' ? chapter.plain_text : MISSING_PLACEHOLDER
+      parts.push(format === 'md' ? `## ${chapter.title}\n\n${body}` : `${chapter.title}\n\n${body}`)
     })
     await writeFile(path, parts.join('\n\n'), 'utf8')
   }

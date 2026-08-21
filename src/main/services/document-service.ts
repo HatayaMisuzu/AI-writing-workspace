@@ -174,9 +174,6 @@ export class DocumentService {
         .run(input.projectId, input.documentId, node.title, input.plainText)
       this.db.raw.prepare('UPDATE chapter_digests SET stale = 1 WHERE chapter_id = ? AND project_id = ? AND chapter_revision < ?')
         .run(input.documentId, input.projectId, revision)
-      this.db.raw.prepare(`UPDATE memories SET status = 'rejected', updated_at = ?
-        WHERE project_id = ? AND source_type = 'chapter' AND source_id = ? AND status = 'suggested'`)
-        .run(now, input.projectId, input.documentId)
       if (input.styleSample) this.styleSamples.record({ projectId: input.projectId, documentId: input.documentId,
         origin: input.styleSample.origin, text: input.styleSample.text, sourceRevision: revision })
       else this.styleSamples.recordHumanIfSafe(input.projectId, input.documentId, input.plainText, revision)

@@ -60,7 +60,11 @@ export class SaveCoordinator {
 
   hasPending(): boolean { return Boolean(this.pending || this.drain) }
   currentRevision(): number { return this.revision }
-  resetRevision(revision: number): void { if (!this.hasPending()) this.revision = revision }
+  resetRevision(revision: number): void {
+    if (this.drain) return
+    this.revision = revision
+    if (this.pending) this.pending.baseRevision = revision
+  }
   dispose(): void { if (this.timer) clearTimeout(this.timer) }
 }
 

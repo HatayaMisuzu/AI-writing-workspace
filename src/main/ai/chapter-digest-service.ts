@@ -68,6 +68,10 @@ export class ChapterDigestService {
     const latest = this.list(projectId, chapterId)[0]
     if (!latest) return { state: 'missing' }
     if (!latest.stale && latest.revision === current.revision) return { state: 'fresh', digestId: latest.id, chapterRevision: latest.revision }
+    // 摘要已过期：其产生的未确认候选随之失效（确认过的候选不受影响）
+    this.db.raw.prepare(`UPDATE memories SET status = 'rejected', updated_at = ?
+      WHERE project_id = ? AND source_type = 'chapter' AND source_id = ? AND status = 'suggested'`)
+      .run(Date.now(), projectId, chapterId)
     return { state: 'stale', digestId: latest.id, digestRevision: latest.revision, currentRevision: current.revision }
   }
 }

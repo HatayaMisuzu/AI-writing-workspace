@@ -120,10 +120,10 @@ export class OpenAICompatibleAdapter {
         const { done, value } = await reader.read()
         if (done) break
         buffer += decoder.decode(value, { stream: true })
-        const events = buffer.split('\n\n')
+        const events = buffer.split(/\r?\n\r?\n/)
         buffer = events.pop() ?? ''
         for (const event of events) {
-          for (const line of event.split('\n')) {
+          for (const line of event.split(/\r?\n/)) {
             if (!line.startsWith('data:')) continue
             const data = line.slice(5).trim()
             if (data === '[DONE]') return
@@ -136,7 +136,10 @@ export class OpenAICompatibleAdapter {
         }
       }
     } catch (error) { throw this.toNetworkError(error, input.signal) }
-    finally { reader.releaseLock() }
+    finally {
+      buffer += decoder.decode()
+      reader.releaseLock()
+    }
   }
 
   async complete(input: { model: string; messages: ProviderMessage[]; signal?: AbortSignal }): Promise<string> {

@@ -55,6 +55,9 @@ describe('product hardening invariants', () => {
     digests.storeFromModel(project.id, chapter.id, JSON.stringify({ summary: '红伞在门边。', memoryCandidates: [{ type: 'fact', content: '红伞在门边' }] }))
     const candidate = new MemoryService(db).list(project.id)[0]
     docs.saveContent({ projectId: project.id, documentId: chapter.id, editorJson: editorJson('红伞已被拿走。'), plainText: '红伞已被拿走。' })
+    // 审计 M-1 修复后：自动保存本身不再拒绝候选；候选在摘要状态被查询（digests.status）判定 stale 时才失效
+    expect(new MemoryService(db).list(project.id).find((item) => item.id === candidate.id)?.status).toBe('suggested')
+    digests.status(project.id, chapter.id)
     expect(new MemoryService(db).list(project.id).find((item) => item.id === candidate.id)?.status).toBe('rejected')
     expect(JSON.stringify(new ContextEngine(db).build({ mode: 'discussion', writePermission: 'none', userIntent: '红伞', projectId: project.id, documentId: chapter.id }))).not.toContain('红伞在门边')
 
