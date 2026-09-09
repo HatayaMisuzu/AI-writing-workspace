@@ -1,8 +1,10 @@
 import { randomUUID } from 'node:crypto'
 import type { LocalLintIssue } from '../../shared/domain'
+import { textIdentity } from '../../shared/text-identity'
 
-export function lintChineseText(text: string): LocalLintIssue[] {
+export function lintChineseText(text: string, documentId = 'unknown', sourceRevision = -1): LocalLintIssue[] {
   const issues: LocalLintIssue[] = []
+  const sourceTextHash = textIdentity(text)
   const rules: Array<{ regex: RegExp; kind: string; message: string; replacement?: (value: string) => string }> = [
     { regex: /(?<!\.)\.{2}(?!\.)/g, kind: 'repeated_punctuation', message: '连续句点可能是误输入；中文句末通常使用句号。', replacement: () => '。' },
     { regex: /。{2,}/g, kind: 'repeated_punctuation', message: '连续句号可能是误输入。', replacement: () => '。' },
@@ -17,7 +19,8 @@ export function lintChineseText(text: string): LocalLintIssue[] {
     for (const match of text.matchAll(rule.regex)) {
       if (match.index === undefined) continue
       issues.push({ id: randomUUID(), from: match.index, to: match.index + match[0].length,
-        severity: 'warning', kind: rule.kind, message: rule.message, replacement: rule.replacement?.(match[0]) })
+        severity: 'warning', kind: rule.kind, message: rule.message, replacement: rule.replacement?.(match[0]),
+        documentId, sourceRevision, sourceTextHash, originalText: match[0] })
     }
   }
   const quoteStack: number[] = []
@@ -25,9 +28,9 @@ export function lintChineseText(text: string): LocalLintIssue[] {
     if (text[index] === '“') quoteStack.push(index)
     if (text[index] === '”') {
       if (quoteStack.length) quoteStack.pop()
-      else issues.push({ id: randomUUID(), from: index, to: index + 1, severity: 'warning', kind: 'quote', message: '发现没有对应左引号的右引号。' })
+      else issues.push({ id: randomUUID(), from: index, to: index + 1, severity: 'warning', kind: 'quote', message: '发现没有对应左引号的右引号。', documentId, sourceRevision, sourceTextHash, originalText: text[index] })
     }
   }
-  quoteStack.forEach((index) => issues.push({ id: randomUUID(), from: index, to: index + 1, severity: 'warning', kind: 'quote', message: '发现没有闭合的左引号。' }))
+  quoteStack.forEach((index) => issues.push({ id: randomUUID(), from: index, to: index + 1, severity: 'warning', kind: 'quote', message: '发现没有闭合的左引号。', documentId, sourceRevision, sourceTextHash, originalText: text[index] }))
   return issues.toSorted((a, b) => a.from - b.from)
 }

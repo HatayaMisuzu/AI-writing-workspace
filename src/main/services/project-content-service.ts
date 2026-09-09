@@ -36,10 +36,12 @@ export class ProjectContentService {
 
   saveCharacter(input: { id?: string; projectId: string; name: string; aliases?: string[]; notes?: string; fields?: Record<string, string> }): Character {
     const id = input.id ?? randomUUID(); const now = Date.now()
+    const existing = input.id ? this.listCharacters(input.projectId).find((item) => item.id === input.id) : undefined
     this.db.raw.prepare(`INSERT INTO characters(id,project_id,name,aliases_json,notes,fields_json,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)
       ON CONFLICT(id) DO UPDATE SET name=excluded.name,aliases_json=excluded.aliases_json,notes=excluded.notes,fields_json=excluded.fields_json,updated_at=excluded.updated_at
       WHERE project_id=excluded.project_id`)
-      .run(id, input.projectId, input.name.trim() || '未命名人物', JSON.stringify(input.aliases ?? []), input.notes ?? '', JSON.stringify(input.fields ?? {}), now, now)
+      .run(id, input.projectId, input.name.trim() || '未命名人物', JSON.stringify(input.aliases ?? existing?.aliases ?? []),
+        input.notes ?? existing?.notes ?? '', JSON.stringify(input.fields ?? existing?.fields ?? {}), now, now)
     const character = this.listCharacters(input.projectId).find((item) => item.id === id)
     if (!character) throw new Error('CHARACTER_NOT_FOUND_IN_PROJECT')
     return character

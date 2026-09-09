@@ -16,6 +16,7 @@ export function LibraryScreen({ projects, onOpen, onCreate, onImport, onImportMa
   const filtered = useMemo(() => projects.filter((project) => {
     if (filter === 'archived' && !project.archived) return false
     if (filter !== 'archived' && project.archived) return false
+    if (filter === 'recent' && Date.now() - project.lastOpenedAt > 30 * 24 * 60 * 60 * 1000) return false
     return project.title.toLowerCase().includes(query.toLowerCase())
   }), [projects, query, filter])
   const recent = projects.filter((project) => !project.archived).slice(0, 3)

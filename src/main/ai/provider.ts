@@ -55,16 +55,26 @@ export class ProviderService {
   }
 
   saveModel(model: ModelConfig): ModelConfig {
-    if (model.isDefault) this.db.raw.prepare('UPDATE model_configs SET is_default = 0').run()
-    this.db.raw.prepare(`INSERT INTO model_configs
-      (id, provider_id, model_id, display_name, capabilities_json, enabled, is_default)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(id) DO UPDATE SET provider_id=excluded.provider_id, model_id=excluded.model_id,
-        display_name=excluded.display_name, capabilities_json=excluded.capabilities_json,
-        enabled=excluded.enabled, is_default=excluded.is_default`)
-      .run(model.id || randomUUID(), model.providerId, model.modelId, model.displayName, JSON.stringify(truthfulCapabilities(model.capabilities)), model.enabled ? 1 : 0, model.isDefault ? 1 : 0)
-    if (!model.enabled) this.db.raw.prepare("UPDATE task_model_routes SET model_id = 'default' WHERE model_id = ?").run(model.id)
-    return this.listModels().find((item) => item.id === model.id) ?? this.listModels()[0]
+    if (!this.db.raw.prepare('SELECT 1 AS found FROM provider_configs WHERE id = ?').get(model.providerId)) throw new Error('PROVIDER_NOT_FOUND')
+    if (!model.modelId.trim() || !model.displayName.trim()) throw new Error('MODEL_FIELDS_REQUIRED')
+    const id = model.id || randomUUID()
+    this.db.transaction(() => {
+      if (model.isDefault && model.enabled) this.db.raw.prepare('UPDATE model_configs SET is_default = 0').run()
+      this.db.raw.prepare(`INSERT INTO model_configs
+        (id, provider_id, model_id, display_name, capabilities_json, enabled, is_default)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET provider_id=excluded.provider_id, model_id=excluded.model_id,
+          display_name=excluded.display_name, capabilities_json=excluded.capabilities_json,
+          enabled=excluded.enabled, is_default=excluded.is_default`)
+        .run(id, model.providerId, model.modelId.trim(), model.displayName.trim(), JSON.stringify(truthfulCapabilities(model.capabilities)),
+          model.enabled ? 1 : 0, model.enabled && model.isDefault ? 1 : 0)
+      if (!model.enabled) {
+        this.db.raw.prepare("UPDATE task_model_routes SET model_id = 'default' WHERE model_id = ?").run(id)
+        const fallback = this.db.raw.prepare('SELECT id FROM model_configs WHERE id != ? AND enabled = 1 ORDER BY is_default DESC, rowid LIMIT 1').get(id) as { id: string } | undefined
+        if (model.isDefault && fallback) this.db.raw.prepare('UPDATE model_configs SET is_default = 1 WHERE id = ?').run(fallback.id)
+      }
+    })
+    return this.listModels().find((item) => item.id === id)!
   }
 
   route(taskType: string): ModelConfig {
@@ -97,24 +107,38 @@ export class ProviderService {
 
 export interface ProviderMessage { role: 'system' | 'user' | 'assistant' | 'tool'; content: string }
 
+const providerError = (code: string, message: string): AppErrorShape & Error =>
+  Object.assign(new Error(message), { code, recoverable: true })
+
+function deadlineSignal(external?: AbortSignal, timeoutMs = 60_000): { signal: AbortSignal; dispose(): void } {
+  const controller = new AbortController()
+  const onAbort = (): void => controller.abort(external?.reason ?? providerError('PROVIDER_CANCELLED', '请求已取消。'))
+  external?.addEventListener('abort', onAbort, { once: true })
+  if (external?.aborted) onAbort()
+  const timer = setTimeout(() => controller.abort(providerError('PROVIDER_TIMEOUT', '模型服务响应超时，请重试。')), timeoutMs)
+  return { signal: controller.signal, dispose: () => { clearTimeout(timer); external?.removeEventListener('abort', onAbort) } }
+}
+
 export class OpenAICompatibleAdapter {
   constructor(private readonly baseUrl: string, private readonly apiKey: string, private readonly fetcher: typeof fetch = fetch) {}
 
-  async *chat(input: { model: string; messages: ProviderMessage[]; signal?: AbortSignal }): AsyncIterable<string> {
+  async *chat(input: { model: string; messages: ProviderMessage[]; signal?: AbortSignal; timeoutMs?: number }): AsyncIterable<string> {
+    const request = deadlineSignal(input.signal, input.timeoutMs)
     let response: Response
     try {
       response = await this.fetcher(`${normalizeBaseUrl(this.baseUrl)}/chat/completions`, {
         method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${this.apiKey}` },
-        body: JSON.stringify({ model: input.model, messages: input.messages, stream: true }), signal: input.signal
+        body: JSON.stringify({ model: input.model, messages: input.messages, stream: true }), signal: request.signal
       })
     } catch (error) {
-      throw this.toNetworkError(error, input.signal)
+      request.dispose()
+      throw this.toNetworkError(error, request.signal)
     }
-    if (!response.ok) throw this.toError(response.status)
-    if (!response.body) throw new Error('EMPTY_RESPONSE_BODY')
+    if (!response.ok) { request.dispose(); throw this.toError(response.status) }
+    if (!response.body) { request.dispose(); throw providerError('PROVIDER_PROTOCOL_ERROR', '模型服务没有返回响应流。') }
     const reader = response.body.getReader()
     const decoder = new TextDecoder()
-    let buffer = ''
+    let buffer = ''; let sawDone = false
     try {
       while (true) {
         const { done, value } = await reader.read()
@@ -126,50 +150,67 @@ export class OpenAICompatibleAdapter {
           for (const line of event.split(/\r?\n/)) {
             if (!line.startsWith('data:')) continue
             const data = line.slice(5).trim()
-            if (data === '[DONE]') return
+            if (!data) continue
+            if (data === '[DONE]') { sawDone = true; break }
             try {
-              const json = JSON.parse(data) as { choices?: Array<{ delta?: { content?: string } }> }
+              const json = JSON.parse(data) as { error?: { message?: string } | string; choices?: Array<{ delta?: { content?: string } }> }
+              if (json.error) throw providerError('PROVIDER_STREAM_ERROR', typeof json.error === 'string' ? json.error : json.error.message ?? '模型服务返回流错误。')
+              if (!Array.isArray(json.choices)) throw providerError('PROVIDER_PROTOCOL_ERROR', '模型服务返回了无法识别的流事件。')
               const text = json.choices?.[0]?.delta?.content
               if (text) yield text
-            } catch { /* Ignore provider heartbeat/non-JSON lines. */ }
+            } catch (error) {
+              if (error instanceof Error && typeof (error as Error & { code?: unknown }).code === 'string') throw error
+              throw providerError('PROVIDER_PROTOCOL_ERROR', '模型服务返回了无效 SSE 数据。')
+            }
           }
+          if (sawDone) break
         }
+        if (sawDone) break
       }
-    } catch (error) { throw this.toNetworkError(error, input.signal) }
+      if (!sawDone) throw providerError('PROVIDER_UNEXPECTED_EOF', '模型流在完成标记前中断。')
+    } catch (error) {
+      if (error instanceof Error && typeof (error as Error & { code?: unknown }).code === 'string') throw error
+      throw this.toNetworkError(error, request.signal)
+    }
     finally {
       buffer += decoder.decode()
       reader.releaseLock()
+      request.dispose()
     }
   }
 
-  async complete(input: { model: string; messages: ProviderMessage[]; signal?: AbortSignal }): Promise<string> {
+  async complete(input: { model: string; messages: ProviderMessage[]; signal?: AbortSignal; timeoutMs?: number }): Promise<string> {
+    const request = deadlineSignal(input.signal, input.timeoutMs)
     let response: Response
     try {
       response = await this.fetcher(`${normalizeBaseUrl(this.baseUrl)}/chat/completions`, {
         method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${this.apiKey}` },
-        body: JSON.stringify({ model: input.model, messages: input.messages, stream: false }), signal: input.signal
+        body: JSON.stringify({ model: input.model, messages: input.messages, stream: false }), signal: request.signal
       })
-    } catch (error) { throw this.toNetworkError(error, input.signal) }
-    if (!response.ok) throw this.toError(response.status)
-    const payload = await response.json() as { choices?: Array<{ message?: { content?: string } }> }
-    const content = payload.choices?.[0]?.message?.content
-    if (typeof content !== 'string' || !content.trim()) throw new Error('EMPTY_PROVIDER_MESSAGE')
-    return content
+      if (!response.ok) throw this.toError(response.status)
+      const payload = await response.json() as { choices?: Array<{ message?: { content?: string } }> }
+      const content = payload.choices?.[0]?.message?.content
+      if (typeof content !== 'string' || !content.trim()) throw providerError('PROVIDER_PROTOCOL_ERROR', '模型服务没有返回有效消息。')
+      return content
+    } catch (error) {
+      if (error instanceof Error && typeof (error as Error & { code?: unknown }).code === 'string') throw error
+      throw this.toNetworkError(error, request.signal)
+    } finally { request.dispose() }
   }
 
   async testConnection(model: string, signal?: AbortSignal): Promise<{ ok: boolean; message?: string }> {
     try {
-      const response = await this.fetcher(`${normalizeBaseUrl(this.baseUrl)}/chat/completions`, {
-        method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${this.apiKey}` },
-        body: JSON.stringify({ model, messages: [{ role: 'user', content: 'Reply with OK.' }], max_tokens: 4, stream: false }), signal
-      })
-      return response.ok ? { ok: true } : { ok: false, message: this.toError(response.status).message }
+      await this.complete({ model, messages: [{ role: 'user', content: 'Reply with OK.' }], signal })
+      return { ok: true }
     } catch (error) {
-      return { ok: false, message: this.toNetworkError(error, signal).message }
+      const shaped = error instanceof Error && typeof (error as Error & { code?: unknown }).code === 'string'
+        ? error : this.toNetworkError(error, signal)
+      return { ok: false, message: shaped.message }
     }
   }
 
   private toNetworkError(error: unknown, signal?: AbortSignal): AppErrorShape & Error {
+    if (signal?.aborted && signal.reason instanceof Error && typeof (signal.reason as Error & { code?: unknown }).code === 'string') return signal.reason as AppErrorShape & Error
     if (signal?.aborted || (error instanceof DOMException && error.name === 'AbortError')) {
       return Object.assign(new Error('请求已取消。'), { code: 'PROVIDER_CANCELLED', recoverable: true })
     }

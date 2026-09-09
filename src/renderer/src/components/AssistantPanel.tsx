@@ -1,6 +1,6 @@
 import { Bot, Check, ChevronRight, Copy, FileSearch, MessageSquarePlus, PenLine, RefreshCw, Send, Sparkles, Square, Trash2 } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { AIMode, ChatThread, ContextBundle, DigestStatus, MemoryProposal, ModelConfig, Project, RoutedTask } from '../../../shared/domain'
+import type { AIMode, ChatThread, ContextBundle, DigestStatus, DocumentTaskTarget, MemoryProposal, ModelConfig, Project, RoutedTask } from '../../../shared/domain'
 import type { EditorSelection } from './EditorSurface'
 import { canInsertCandidate, mapChatHistory, resolveDisplayedModelMode, resolveModelDisplayName, retryInputForMessage, type AssistantHistoryMessage } from '../services/assistant-history'
 
@@ -15,10 +15,11 @@ const inferMode = (text: string, explicit: AIMode): AIMode => {
 }
 const digestLabel = (status?: DigestStatus): string => !status || status.state === 'missing' ? 'AI理解：未更新'
   : status.state === 'fresh' ? 'AI理解：已更新' : 'AI理解：正文已变化'
-export function AssistantPanel({ project, documentId, documentRevision, selection, collapsed, onCollapse, onInsertCandidate, onCreatePatch, onBeforeAI, onOpenSettings }: {
+export function AssistantPanel({ project, documentId, documentRevision, selection, collapsed, onCollapse, onInsertCandidate, onCreatePatch, onBeforeAI, onOpenDocument, onOpenSettings }: {
   project: Project; documentId?: string; documentRevision?: number; selection?: EditorSelection; collapsed: boolean; onCollapse(): void
-  onInsertCandidate(text: string): Promise<void>; onCreatePatch(selection: EditorSelection, replacement: string): Promise<void>
-  onBeforeAI(): Promise<void>; onOpenSettings(): void
+  onInsertCandidate(target: DocumentTaskTarget, text: string): Promise<void>; onCreatePatch(target: DocumentTaskTarget, replacement: string): Promise<void>
+  onBeforeAI(requestId: string, documentId?: string, selection?: EditorSelection): Promise<DocumentTaskTarget | undefined>
+  onOpenDocument(documentId: string): Promise<void>; onOpenSettings(): void
 }): React.JSX.Element {
   const [input, setInput] = useState('')
   const [mode, setMode] = useState<AIMode>('discussion')
@@ -36,9 +37,12 @@ export function AssistantPanel({ project, documentId, documentRevision, selectio
   const streamed = useRef(new Map<string, string>())
   const chatScroll = useRef<HTMLDivElement>(null)
   const followLatest = useRef(true)
+  const currentDocument = useRef(documentId)
+  const digestRequest = useRef<string | undefined>(undefined)
   const inputMode = inferMode(input, mode) as RoutedTask
   const displayedModelMode = resolveDisplayedModelMode(inputMode, activeRequestMode)
   const modelName = modelRouting ? resolveModelDisplayName(displayedModelMode, modelRouting.models, modelRouting.routes) : '未配置模型'
+  useEffect(() => { currentDocument.current = documentId }, [documentId])
 
   const loadThread = useCallback(async (targetThreadId?: string): Promise<void> => {
     setLoadingHistory(true)
@@ -71,7 +75,7 @@ export function AssistantPanel({ project, documentId, documentRevision, selectio
 
   const loadEarlier = async (): Promise<void> => {
     if (!threadId || !messages[0]) return
-    const earlier = await window.workspace.chat.listMessages(project.id, threadId, messages[0].createdAt, 50)
+    const earlier = await window.workspace.chat.listMessages(project.id, threadId, { createdAt: messages[0].createdAt, id: messages[0].id }, 50)
     setMessages((current) => [...mapChatHistory(earlier), ...current]); setHasEarlier(earlier.length === 50)
   }
   const newThread = async (): Promise<void> => {
@@ -93,7 +97,11 @@ export function AssistantPanel({ project, documentId, documentRevision, selectio
     setThreads((current) => current.map((thread) => thread.id === threadId && thread.title === '新对话'
       ? { ...thread, title: [...text].slice(0, 22).join(''), updatedAt: now + 1 } : thread))
     setInput('')
-    try { await onBeforeAI() }
+    let target: DocumentTaskTarget | undefined
+    try {
+      target = await onBeforeAI(requestId, documentId, selection)
+      if (target) setMessages((current) => current.map((item) => item.id === messageId || item.id === assistantId ? { ...item, target } : item))
+    }
     catch (error) {
       setRunningId(undefined)
       setActiveRequestMode(undefined)
@@ -105,7 +113,8 @@ export function AssistantPanel({ project, documentId, documentRevision, selectio
     streamed.current.set(requestId, '')
     const cleanup = window.workspace.ai.start({ requestId, threadId, userMessageId: messageId, assistantMessageId: assistantId, task: {
       mode: requestedMode, writePermission: requestedMode === 'editing' || requestedMode === 'generation' ? 'proposal' : 'none', userIntent: text,
-      projectId: project.id, documentId, selection: selection ? { from: selection.fromPm, to: selection.toPm, text: selection.text } : undefined
+      projectId: project.id, documentId: target?.documentId, target,
+      selection: target?.selection ? { from: target.selection.fromPm, to: target.selection.toPm, text: target.selection.text } : undefined
     } }, (event) => {
       if (event.requestId !== requestId) return
       if (event.type === 'chunk') {
@@ -121,7 +130,7 @@ export function AssistantPanel({ project, documentId, documentRevision, selectio
         setRunningId(undefined)
         setActiveRequestMode(undefined)
         setMessages((current) => current.map((item) => item.id === assistantId ? { ...item, content: finalText, status: undefined } : item))
-        if (requestedMode === 'editing' && selection && finalText) void onCreatePatch(selection, finalText).catch((error) => {
+        if (requestedMode === 'editing' && target?.selection && finalText) void onCreatePatch(target, finalText).catch((error) => {
           setMessages((current) => current.map((item) => item.id === assistantId ? { ...item, content: `${finalText}\n\n提案创建失败：${error instanceof Error ? error.message : String(error)}`, status: 'error' } : item))
         })
         cleanups.current.get(requestId)?.(); cleanups.current.delete(requestId); streamed.current.delete(requestId)
@@ -142,15 +151,19 @@ export function AssistantPanel({ project, documentId, documentRevision, selectio
 
   const runDigest = async (): Promise<void> => {
     if (!documentId || digestBusy) return
+    const sourceDocumentId = documentId
+    const requestId = crypto.randomUUID()
+    digestRequest.current = requestId
     setDigestBusy(true)
     try {
-      await onBeforeAI(); const result = await window.workspace.digests.run(project.id, documentId)
-      setDigestStatus(await window.workspace.digests.status(project.id, documentId))
+      await onBeforeAI(requestId, sourceDocumentId); const result = await window.workspace.digests.run(project.id, sourceDocumentId)
+      const status = await window.workspace.digests.status(project.id, sourceDocumentId)
+      if (digestRequest.current === requestId && currentDocument.current === sourceDocumentId) setDigestStatus(status)
       setMessages((current) => [...current, { id: crypto.randomUUID(), role: 'assistant', createdAt: Date.now(),
-        content: result.repaired ? '本章理解已修复并更新；记忆候选仍需你确认。' : '本章理解已更新；记忆候选仍需你确认。' }])
+        content: result.repaired ? '来源章节的理解已修复并更新；记忆候选仍需你确认。' : '来源章节的理解已更新；记忆候选仍需你确认。' }])
     } catch (error) { setMessages((current) => [...current, { id: crypto.randomUUID(), role: 'assistant', createdAt: Date.now(),
       content: `章节理解失败：${error instanceof Error ? error.message : String(error)} 正文没有被修改，可以重试。`, status: 'error' }]) }
-    finally { setDigestBusy(false) }
+    finally { if (digestRequest.current === requestId) setDigestBusy(false) }
   }
 
   const setQuickMode = (next: AIMode): void => {
@@ -189,7 +202,8 @@ export function AssistantPanel({ project, documentId, documentRevision, selectio
         {message.recorded && !message.proposals?.length && <div className="recorded-note"><Check size={13} />已记录到 Story Memory</div>}
         {message.proposalError && <div className="inline-error" role="alert">{message.proposalError}</div>}
         {message.role === 'assistant' && message.content && <div className="message-actions"><button title="复制" onClick={() => void navigator.clipboard.writeText(message.content)}><Copy size={14} /></button>
-          {canInsertCandidate(message) && <button onClick={() => void onInsertCandidate(message.content).then(() => setMessages((current) => current.map((item) => item.id === message.id ? { ...item, inserted: true } : item))).catch((error) => setMessages((current) => current.map((item) => item.id === message.id ? { ...item, content: `${item.content}\n\n插入失败：${error instanceof Error ? error.message : String(error)}`, status: 'error' } : item)))}><PenLine size={14} />插入候选</button>}
+          {canInsertCandidate(message) && message.target && <button onClick={() => void onInsertCandidate(message.target!, message.content).then(() => setMessages((current) => current.map((item) => item.id === message.id ? { ...item, inserted: true } : item))).catch((error) => setMessages((current) => current.map((item) => item.id === message.id ? { ...item, proposalError: `插入失败：${error instanceof Error ? error.message : String(error)}` } : item)))}><PenLine size={14} />插入候选</button>}
+          {message.target && message.target.documentId !== documentId && <button onClick={() => void onOpenDocument(message.target!.documentId)}><FileSearch size={14} />打开来源章节</button>}
           {message.inserted && <span>已插入正文</span>}
           {message.status === 'error' && <button onClick={() => setInput(retryInputForMessage(messages, message.id))}><RefreshCw size={14} />重试</button>}</div>}
       </div>)}

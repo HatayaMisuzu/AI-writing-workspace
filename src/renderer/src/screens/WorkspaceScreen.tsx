@@ -1,6 +1,6 @@
 import { FilePlus2, Lightbulb, Search, SidebarClose, SlidersHorizontal } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { DocumentContent, DocumentNode, Project, SearchResult, TextPatch } from '../../../shared/domain'
+import type { DocumentContent, DocumentNode, DocumentTaskTarget, Project, SearchResult, TextPatch } from '../../../shared/domain'
 import { ProjectSidebar, type ProjectSection } from '../components/ProjectSidebar'
 import { EditorSurface, type EditorController, type EditorSelection } from '../components/EditorSurface'
 import { AssistantPanel } from '../components/AssistantPanel'
@@ -31,15 +31,26 @@ export function WorkspaceScreen({ project, onProjectChanged, onSettings, onRegis
   const [nodeCreator, setNodeCreator] = useState<{ type: 'volume' | 'chapter'; parentId?: string; title: string }>()
   const [nodeEditor, setNodeEditor] = useState<{ node: DocumentNode; action: 'rename' | 'delete'; title: string }>()
   const [navigationError, setNavigationError] = useState<string>()
-  const [insertCandidate, setInsertCandidate] = useState<(text: string) => Promise<void>>(() => async () => undefined)
   const editorController = useRef<EditorController | undefined>(undefined)
+  const auxiliaryFlush = useRef<(() => Promise<void>) | undefined>(undefined)
+  const quickIdeaText = useRef('')
   const navigationSequence = useRef(0)
 
   const refreshTree = useCallback(async (): Promise<DocumentNode[]> => {
     const next = await window.workspace.documents.tree(project.id); setTree(next); return next
   }, [project.id])
-  const flushEditor = useCallback(async (): Promise<void> => { await editorController.current?.flush() }, [])
-  useEffect(() => { onRegisterBeforeLeave(flushEditor); return () => onRegisterBeforeLeave(undefined) }, [flushEditor, onRegisterBeforeLeave])
+  useEffect(() => { quickIdeaText.current = ideaText }, [ideaText])
+  const flushAll = useCallback(async (): Promise<void> => {
+    await editorController.current?.flush()
+    await auxiliaryFlush.current?.()
+    const idea = quickIdeaText.current.trim()
+    if (idea) {
+      await window.workspace.ideas.create(project.id, idea)
+      quickIdeaText.current = ''; setIdeaText('')
+    }
+  }, [project.id])
+  const registerAuxiliaryFlush = useCallback((handler?: () => Promise<void>): void => { auxiliaryFlush.current = handler }, [])
+  useEffect(() => { onRegisterBeforeLeave(flushAll); return () => onRegisterBeforeLeave(undefined) }, [flushAll, onRegisterBeforeLeave])
 
   const openDocument = useCallback(async (node: DocumentNode): Promise<void> => {
     if (node.type === 'volume' || node.id === selected?.id) return
@@ -47,11 +58,11 @@ export function WorkspaceScreen({ project, onProjectChanged, onSettings, onRegis
     try {
       const nextContent = await window.workspace.documents.get(project.id, node.id)
       if (request !== navigationSequence.current) return
-      await flushEditor()
+      await flushAll()
       if (request !== navigationSequence.current) return
       setSelected(node); setContent(nextContent); setSection('manuscript'); setSelection(undefined); setNavigationError(undefined)
     } catch (error) { setNavigationError(`保存失败，仍停留在当前章节：${error instanceof Error ? error.message : String(error)}`) }
-  }, [flushEditor, project.id, selected?.id])
+  }, [flushAll, project.id, selected?.id])
 
   useEffect(() => {
     let active = true
@@ -77,11 +88,11 @@ export function WorkspaceScreen({ project, onProjectChanged, onSettings, onRegis
 
   const changeSection = async (next: ProjectSection): Promise<void> => {
     if (next === section) return
-    try { if (section === 'manuscript') await flushEditor(); setSection(next); setNavigationError(undefined) }
-    catch (error) { setNavigationError(`保存失败，无法离开正文：${error instanceof Error ? error.message : String(error)}`) }
+    try { await flushAll(); setSection(next); setNavigationError(undefined) }
+    catch (error) { setNavigationError(`保存失败，无法离开当前内容：${error instanceof Error ? error.message : String(error)}`) }
   }
   const requestCreateNode = async (type: 'volume' | 'chapter', parentId?: string): Promise<void> => {
-    try { await flushEditor() } catch (error) { setNavigationError(`保存失败，未创建新节点：${error instanceof Error ? error.message : String(error)}`); return }
+    try { await flushAll() } catch (error) { setNavigationError(`保存失败，未创建新节点：${error instanceof Error ? error.message : String(error)}`); return }
     if (type === 'chapter' && !parentId) {
       setNavigationError('请先新建一卷，再在卷中添加章节。')
       return
@@ -91,7 +102,7 @@ export function WorkspaceScreen({ project, onProjectChanged, onSettings, onRegis
   const updateNode = async (): Promise<void> => {
     if (!nodeEditor) return
     try {
-      await flushEditor()
+      await flushAll()
       if (nodeEditor.action === 'rename') {
         if (!nodeEditor.title.trim()) throw new Error('名称不能为空。')
         await window.workspace.documents.rename(project.id, nodeEditor.node.id, nodeEditor.title.trim())
@@ -117,10 +128,30 @@ export function WorkspaceScreen({ project, onProjectChanged, onSettings, onRegis
   const runSearch = async (): Promise<void> => setSearchResults(await window.workspace.documents.search(project.id, searchQuery))
   const totalWords = useMemo(() => tree.reduce((sum, node) => sum + (node.type === 'chapter' ? node.wordCount : 0), 0), [tree])
   const registerController = useCallback((controller?: EditorController): void => { editorController.current = controller }, [])
-  const createPatch = useCallback(async (target: EditorSelection, replacement: string): Promise<void> => {
-    if (!editorController.current) throw new Error('编辑器尚未就绪。')
-    await editorController.current.createPatch(target, replacement); setPatchOpen(true)
+  const freezeAITarget = useCallback(async (requestId: string, expectedDocumentId?: string, targetSelection?: EditorSelection): Promise<DocumentTaskTarget | undefined> => {
+    if (!expectedDocumentId) { await flushAll(); return undefined }
+    await flushAll()
+    const controller = editorController.current
+    if (!controller || controller.projectId !== project.id || controller.documentId !== expectedDocumentId) throw new Error('请求来源章节已经关闭，请重新发送。')
+    return controller.freezeTarget(requestId, targetSelection)
+  }, [flushAll, project.id])
+  const createPatch = useCallback(async (target: DocumentTaskTarget, replacement: string): Promise<void> => {
+    if (!target.selection) throw new Error('修改请求缺少原始选区。')
+    await window.workspace.patches.propose({ projectId: target.projectId, documentId: target.documentId,
+      documentRevision: target.sourceRevision, fromPm: target.selection.fromPm, toPm: target.selection.toPm,
+      originalText: target.selection.text, replacement })
+    setPatchOpen(true)
   }, [])
+  const insertGeneratedCandidate = useCallback(async (target: DocumentTaskTarget, text: string): Promise<void> => {
+    const controller = editorController.current
+    if (!controller || selected?.id !== target.documentId || controller.documentId !== target.documentId) throw new Error('请先打开候选所属章节后再插入。')
+    await controller.insertCandidate(target, text)
+  }, [selected?.id])
+  const openTargetDocument = useCallback(async (documentId: string): Promise<void> => {
+    const target = tree.find((item) => item.id === documentId)
+    if (!target) throw new Error('来源章节已被删除。')
+    await openDocument(target)
+  }, [openDocument, tree])
   const acceptPatch = useCallback(async (patch: TextPatch): Promise<TextPatch> => {
     if (!editorController.current || patch.documentId !== selected?.id) throw new Error('请先打开提案所属章节。')
     const result = await editorController.current.applyPatch(patch)
@@ -129,22 +160,22 @@ export function WorkspaceScreen({ project, onProjectChanged, onSettings, onRegis
   }, [onProjectChanged, refreshTree, selected?.id])
 
   return <div className={focusMode ? 'workspace-screen is-focus' : 'workspace-screen'}>
-    {!focusMode && <ProjectSidebar project={project} tree={tree} selectedId={selected?.id} section={section} onSection={(next) => void changeSection(next)} onSelect={(node) => void openDocument(node)} onNewVolume={() => void requestCreateNode('volume')} onNewChapter={(parent) => void requestCreateNode('chapter', parent)} onRename={(node) => setNodeEditor({ node, action: 'rename', title: node.title })} onDelete={(node) => setNodeEditor({ node, action: 'delete', title: node.title })} onReorder={async (documentId, parentId, orderIndex) => { try { await flushEditor(); await window.workspace.documents.reorder(project.id, documentId, parentId, orderIndex); await refreshTree() } catch (error) { setNavigationError(String(error)) } }} />}
+    {!focusMode && <ProjectSidebar project={project} tree={tree} selectedId={selected?.id} section={section} onSection={(next) => void changeSection(next)} onSelect={(node) => void openDocument(node)} onNewVolume={() => void requestCreateNode('volume')} onNewChapter={(parent) => void requestCreateNode('chapter', parent)} onRename={(node) => setNodeEditor({ node, action: 'rename', title: node.title })} onDelete={(node) => setNodeEditor({ node, action: 'delete', title: node.title })} onReorder={async (documentId, parentId, orderIndex) => { try { await flushAll(); await window.workspace.documents.reorder(project.id, documentId, parentId, orderIndex); await refreshTree() } catch (error) { setNavigationError(String(error)) } }} />}
     <div className="workspace-main">
       <div className="workspace-actions"><button onClick={() => setSearchOpen(true)}><Search size={16} />全文检索</button><button onClick={() => setIdeaOpen(true)}><Lightbulb size={16} />快速灵感 <kbd>Ctrl J</kbd></button>{selected && <button onClick={() => setPatchOpen(true)}><SlidersHorizontal size={16} />修改提案</button>}<span />{focusMode && <button onClick={() => setFocusMode(false)}><SidebarClose size={16} />退出专注</button>}</div>
       {navigationError && <div className="navigation-error" role="alert">{navigationError}</div>}
-      {section === 'manuscript' && selected && content ? <EditorSurface node={selected} content={content} focusMode={focusMode} onFocusMode={setFocusMode} onSaved={(saved) => { setContent(saved); void refreshTree(); onProjectChanged() }} onSelection={setSelection} onRegisterInsert={(handler) => setInsertCandidate(() => handler)} onRegisterController={registerController} onOpenPatches={() => setPatchOpen(true)} />
-        : section === 'ideas' ? <IdeasView projectId={project.id} />
+      {section === 'manuscript' && selected && content ? <EditorSurface node={selected} content={content} focusMode={focusMode} onFocusMode={setFocusMode} onSaved={(saved) => { setContent(saved); void refreshTree(); onProjectChanged() }} onSelection={setSelection} onRegisterController={registerController} onOpenPatches={() => setPatchOpen(true)} />
+        : section === 'ideas' ? <IdeasView projectId={project.id} onRegisterFlush={registerAuxiliaryFlush} />
         : section === 'history' ? <HistoryView projectId={project.id} document={selected} currentContent={content} onRestored={(restored) => { setContent(restored); void refreshTree() }} />
         : section === 'ai-data' ? <MemoryView projectId={project.id} />
-        : section === 'story' ? <NotesView projectId={project.id} section="story" />
-        : section === 'references' ? <NotesView projectId={project.id} section="reference" />
-        : section === 'characters' ? <CharactersView projectId={project.id} />
+        : section === 'story' ? <NotesView projectId={project.id} section="story" onRegisterFlush={registerAuxiliaryFlush} />
+        : section === 'references' ? <NotesView projectId={project.id} section="reference" onRegisterFlush={registerAuxiliaryFlush} />
+        : section === 'characters' ? <CharactersView projectId={project.id} onRegisterFlush={registerAuxiliaryFlush} />
         : <section className="project-view placeholder-view"><FilePlus2 size={34} /><h1>内容</h1><p>这是辅助层，不要求作者维护复杂结构。</p></section>}
       <footer className="workspace-status"><span className="saved-dot" />本地项目<span>本章 {content?.wordCount.toLocaleString() ?? 0} 字</span><span>全书 {totalWords.toLocaleString()} 字</span><span>项目内容严格隔离</span></footer>
     </div>
-    {!focusMode && <AssistantPanel project={project} documentId={selected?.id} documentRevision={content?.revision} selection={selection} collapsed={assistantCollapsed} onCollapse={() => setAssistantCollapsed(!assistantCollapsed)} onInsertCandidate={insertCandidate} onCreatePatch={createPatch} onBeforeAI={flushEditor} onOpenSettings={onSettings} />}
-    {ideaOpen && <div className="quick-idea-popover"><header><strong>快速记录灵感</strong><kbd>Ctrl J</kbd></header><textarea autoFocus value={ideaText} onChange={(event) => setIdeaText(event.target.value)} placeholder="记下一闪而过的想法…" /><div><button onClick={() => setIdeaOpen(false)}>取消</button><button className="primary" onClick={async () => { if (ideaText.trim()) await window.workspace.ideas.create(project.id, ideaText); setIdeaText(''); setIdeaOpen(false) }}>保存并返回正文</button></div></div>}
+    {!focusMode && <AssistantPanel project={project} documentId={selected?.id} documentRevision={content?.revision} selection={selection} collapsed={assistantCollapsed} onCollapse={() => setAssistantCollapsed(!assistantCollapsed)} onInsertCandidate={insertGeneratedCandidate} onCreatePatch={createPatch} onBeforeAI={freezeAITarget} onOpenDocument={openTargetDocument} onOpenSettings={onSettings} />}
+    {ideaOpen && <div className="quick-idea-popover"><header><strong>快速记录灵感</strong><kbd>Ctrl J</kbd></header><textarea autoFocus value={ideaText} onChange={(event) => setIdeaText(event.target.value)} placeholder="记下一闪而过的想法…" /><div><button onClick={() => { setIdeaText(''); setIdeaOpen(false) }}>取消</button><button className="primary" onClick={async () => { if (ideaText.trim()) await window.workspace.ideas.create(project.id, ideaText); setIdeaText(''); setIdeaOpen(false) }}>保存并返回正文</button></div></div>}
     {searchOpen && <Modal title={`在《${project.title}》中检索`} onClose={() => setSearchOpen(false)} width={680}><div className="search-dialog"><div className="dialog-search"><input autoFocus value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') void runSearch() }} placeholder="输入关键词；只检索当前作品" /><button className="primary" onClick={() => void runSearch()}>搜索</button></div><div className="search-results">{searchResults.map((result) => <button key={result.documentId} onClick={async () => { const node = tree.find((item) => item.id === result.documentId); if (node) await openDocument(node); setSearchOpen(false) }}><strong>{result.title}</strong><p>{renderSnippet(result.snippet)}</p></button>)}</div></div></Modal>}
     {patchOpen && selected && <PatchDrawer projectId={project.id} documentId={selected.id} onClose={() => setPatchOpen(false)} onAccept={acceptPatch} />}
     {nodeCreator && <Modal title={nodeCreator.type === 'volume' ? '新建卷' : '新建章节'} onClose={() => setNodeCreator(undefined)}><form className="node-create-form" onSubmit={(event) => { event.preventDefault(); void createNode() }}><label><span>{nodeCreator.type === 'volume' ? '卷名' : '章节名'}</span><input autoFocus value={nodeCreator.title} onChange={(event) => setNodeCreator({ ...nodeCreator, title: event.target.value })} /></label><div className="modal-actions"><button type="button" onClick={() => setNodeCreator(undefined)}>取消</button><button className="primary" type="submit">创建</button></div></form></Modal>}

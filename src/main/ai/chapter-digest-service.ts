@@ -34,21 +34,25 @@ export class ChapterDigestService {
   private readonly memories: MemoryService
   constructor(private readonly db: AppDatabase) { this.documents = new DocumentService(db); this.memories = new MemoryService(db) }
 
-  storeFromModel(projectId: string, chapterId: string, raw: string): { id: string; payload: ChapterDigestPayload } {
+  storeFromModel(projectId: string, chapterId: string, raw: string, sourceRevision?: number): { id: string; payload: ChapterDigestPayload } {
     const content = this.documents.getContent(projectId, chapterId)
+    const frozenRevision = sourceRevision ?? content.revision
     const payload = chapterDigestSchema.parse(parseJson(raw))
     const id = randomUUID()
     this.db.transaction(() => {
+      const current = this.documents.getContent(projectId, chapterId)
+      if (current.revision !== frozenRevision) throw new Error('DIGEST_SOURCE_STALE')
       this.db.raw.prepare('UPDATE chapter_digests SET stale = 1 WHERE project_id = ? AND chapter_id = ?').run(projectId, chapterId)
       this.db.raw.prepare(`UPDATE memories SET status = 'rejected', updated_at = ?
         WHERE project_id = ? AND source_type = 'chapter' AND source_id = ? AND status = 'suggested'`)
         .run(Date.now(), projectId, chapterId)
       this.db.raw.prepare(`INSERT INTO chapter_digests
         (id,project_id,chapter_id,chapter_revision,summary,structured_payload,stale,created_at)
-        VALUES (?,?,?,?,?,?,0,?)`).run(id, projectId, chapterId, content.revision, payload.summary, JSON.stringify(payload), Date.now())
+        VALUES (?,?,?,?,?,?,0,?)`).run(id, projectId, chapterId, frozenRevision, payload.summary, JSON.stringify(payload), Date.now())
       payload.memoryCandidates.forEach((candidate) => this.memories.create({
         projectId, type: candidate.type, content: candidate.content, status: 'suggested', sourceType: 'chapter', sourceId: chapterId,
-        confidence: candidate.confidence, readerVisibleFrom: candidate.readerVisibleFrom
+        confidence: candidate.confidence, readerVisibleFrom: candidate.readerVisibleFrom,
+        sourceRevision: frozenRevision, sourceDigestId: id
       }))
     })
     return { id, payload }
@@ -68,10 +72,6 @@ export class ChapterDigestService {
     const latest = this.list(projectId, chapterId)[0]
     if (!latest) return { state: 'missing' }
     if (!latest.stale && latest.revision === current.revision) return { state: 'fresh', digestId: latest.id, chapterRevision: latest.revision }
-    // 摘要已过期：其产生的未确认候选随之失效（确认过的候选不受影响）
-    this.db.raw.prepare(`UPDATE memories SET status = 'rejected', updated_at = ?
-      WHERE project_id = ? AND source_type = 'chapter' AND source_id = ? AND status = 'suggested'`)
-      .run(Date.now(), projectId, chapterId)
     return { state: 'stale', digestId: latest.id, digestRevision: latest.revision, currentRevision: current.revision }
   }
 }

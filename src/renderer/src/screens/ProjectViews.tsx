@@ -1,5 +1,5 @@
 import { Check, Clock3, GitCompareArrows, Lightbulb, Plus, RotateCcw, Save, Shield, Trash2, UserRound } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Character, DocumentContent, DocumentNode, Idea, MemoryItem, ProjectNote, Snapshot, TextPatch } from '../../../shared/domain'
 import { Modal } from '../components/Modal'
 import { buildHistoryDiff } from '../services/history-diff'
@@ -22,11 +22,22 @@ function ConfirmAction({ title, message, onConfirm, children }: { title: string;
   return <><button onClick={() => setOpen(true)}>{children}</button>{open && <Modal title={title} onClose={() => { if (!busy) setOpen(false) }}><p>{message}</p>{error && <div className="inline-error" role="alert">{error}</div>}<div className="modal-actions"><button disabled={busy} onClick={() => setOpen(false)}>取消</button><button className="primary" disabled={busy} onClick={() => void confirmAction()}>{busy ? '处理中…' : '确认'}</button></div></Modal>}</>
 }
 
-export function IdeasView({ projectId }: { projectId: string }): React.JSX.Element {
+type FlushRegistration = { onRegisterFlush(handler?: () => Promise<void>): void }
+
+export function IdeasView({ projectId, onRegisterFlush }: { projectId: string } & FlushRegistration): React.JSX.Element {
   const [ideas, setIdeas] = useState<Idea[]>([]); const [input, setInput] = useState('')
+  const inputRef = useRef('')
   const load = useCallback(() => void window.workspace.ideas.list(projectId).then(setIdeas), [projectId])
   useEffect(load, [load])
-  return <section className="project-view"><header><div><h1>灵感</h1><p>先记下来，暂时不需要分类。</p></div></header><div className="idea-capture"><Lightbulb size={19} /><textarea value={input} onChange={(e) => setInput(e.target.value)} placeholder="记下一闪而过的想法…" /><button className="primary" onClick={async () => { if (input.trim()) { await window.workspace.ideas.create(projectId, input); setInput(''); load() } }}>保存</button></div><div className="idea-list">{ideas.map((idea) => <article key={idea.id}><p>{idea.content}</p><small>{new Date(idea.updatedAt).toLocaleString()}</small></article>)}</div></section>
+  useEffect(() => { inputRef.current = input }, [input])
+  const flush = useCallback(async (): Promise<void> => {
+    const value = inputRef.current.trim()
+    if (!value) return
+    await window.workspace.ideas.create(projectId, value)
+    inputRef.current = ''; setInput(''); load()
+  }, [load, projectId])
+  useEffect(() => { onRegisterFlush(flush); return () => onRegisterFlush(undefined) }, [flush, onRegisterFlush])
+  return <section className="project-view"><header><div><h1>灵感</h1><p>先记下来，暂时不需要分类。</p></div></header><div className="idea-capture"><Lightbulb size={19} /><textarea value={input} onChange={(e) => setInput(e.target.value)} placeholder="记下一闪而过的想法…" /><button className="primary" onClick={() => void flush()}>保存</button></div><div className="idea-list">{ideas.map((idea) => <article key={idea.id}><p>{idea.content}</p><small>{new Date(idea.updatedAt).toLocaleString()}</small></article>)}</div></section>
 }
 
 export function MemoryView({ projectId }: { projectId: string }): React.JSX.Element {
@@ -42,21 +53,42 @@ export function MemoryView({ projectId }: { projectId: string }): React.JSX.Elem
   })}</div>{replacement && <Modal title="提出替代设定" onClose={() => setReplacement(undefined)}><div className="memory-replacement"><p>先创建待确认提案；只有确认后，旧设定才会标记为“已被替代”。</p><textarea value={replacement.content} autoFocus onChange={(event) => setReplacement({ ...replacement, content: event.target.value })} />{replacementError && <div className="inline-error" role="alert">{replacementError}</div>}<div className="modal-actions"><button onClick={() => setReplacement(undefined)}>取消</button><button className="primary" disabled={!replacement.content.trim()} onClick={() => void window.workspace.memories.replace(projectId, replacement.id, replacement.content).then(() => { setReplacement(undefined); load() }).catch((error) => setReplacementError(error instanceof Error ? error.message : String(error)))}>创建替代提案</button></div></div></Modal>}</section>
 }
 
-export function NotesView({ projectId, section }: { projectId: string; section: ProjectNote['section'] }): React.JSX.Element {
+export function NotesView({ projectId, section, onRegisterFlush }: { projectId: string; section: ProjectNote['section'] } & FlushRegistration): React.JSX.Element {
   const [items, setItems] = useState<ProjectNote[]>([])
   const [draft, setDraft] = useState<{ id?: string; title: string; content: string }>({ title: '', content: '' })
+  const draftRef = useRef(draft); const savedRef = useRef(JSON.stringify(draft))
   const load = useCallback(() => void window.workspace.notes.list(projectId, section).then(setItems), [projectId, section])
-  useEffect(() => { load(); setDraft({ title: '', content: '' }) }, [load])
+  useEffect(() => { load(); const empty = { title: '', content: '' }; setDraft(empty); savedRef.current = JSON.stringify(empty) }, [load])
+  useEffect(() => { draftRef.current = draft }, [draft])
+  const selectDraft = useCallback((next: { id?: string; title: string; content: string }): void => { setDraft(next); draftRef.current = next; savedRef.current = JSON.stringify(next) }, [])
+  const flush = useCallback(async (): Promise<void> => {
+    const current = draftRef.current
+    if (JSON.stringify(current) === savedRef.current || (!current.id && !current.title.trim() && !current.content.trim())) return
+    const saved = await window.workspace.notes.save({ ...current, projectId, section })
+    selectDraft({ id: saved.id, title: saved.title, content: saved.content }); load()
+  }, [load, projectId, section, selectDraft])
+  useEffect(() => { onRegisterFlush(flush); return () => onRegisterFlush(undefined) }, [flush, onRegisterFlush])
   const label = section === 'story' ? '故事笔记' : '参考资料'
-  return <section className="project-view content-manager"><header><div><h1>{label}</h1><p>自由记录，不要求填写复杂结构。</p></div><button onClick={() => setDraft({ title: '', content: '' })}><Plus size={16} />新建</button></header><div className="content-manager-grid"><aside>{items.map((item) => <button key={item.id} className={draft.id === item.id ? 'active' : ''} onClick={() => setDraft({ id: item.id, title: item.title, content: item.content })}><strong>{item.title}</strong><small>{new Date(item.updatedAt).toLocaleDateString()}</small></button>)}</aside><div className="note-editor"><input value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} placeholder="标题" /><textarea value={draft.content} onChange={(event) => setDraft({ ...draft, content: event.target.value })} placeholder="从一段自由笔记开始……" /><div><button className="primary" onClick={async () => { const saved = await window.workspace.notes.save({ ...draft, projectId, section }); setDraft({ id: saved.id, title: saved.title, content: saved.content }); load() }}><Save size={15} />保存</button>{draft.id && <ConfirmAction title="删除笔记" message="删除后无法恢复。确定删除这条笔记吗？" onConfirm={async () => { await window.workspace.notes.delete(projectId, draft.id!); setDraft({ title: '', content: '' }); load() }}><Trash2 size={15} />删除</ConfirmAction>}</div></div></div></section>
+  return <section className="project-view content-manager"><header><div><h1>{label}</h1><p>自由记录，不要求填写复杂结构。</p></div><button onClick={() => void flush().then(() => selectDraft({ title: '', content: '' }))}><Plus size={16} />新建</button></header><div className="content-manager-grid"><aside>{items.map((item) => <button key={item.id} className={draft.id === item.id ? 'active' : ''} onClick={() => void flush().then(() => selectDraft({ id: item.id, title: item.title, content: item.content }))}><strong>{item.title}</strong><small>{new Date(item.updatedAt).toLocaleDateString()}</small></button>)}</aside><div className="note-editor"><input value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} placeholder="标题" /><textarea value={draft.content} onChange={(event) => setDraft({ ...draft, content: event.target.value })} placeholder="从一段自由笔记开始……" /><div><button className="primary" onClick={() => void flush()}><Save size={15} />保存</button>{draft.id && <ConfirmAction title="删除笔记" message="删除后无法恢复。确定删除这条笔记吗？" onConfirm={async () => { await window.workspace.notes.delete(projectId, draft.id!); selectDraft({ title: '', content: '' }); load() }}><Trash2 size={15} />删除</ConfirmAction>}</div></div></div></section>
 }
 
-export function CharactersView({ projectId }: { projectId: string }): React.JSX.Element {
+export function CharactersView({ projectId, onRegisterFlush }: { projectId: string } & FlushRegistration): React.JSX.Element {
   const [items, setItems] = useState<Character[]>([])
   const [draft, setDraft] = useState<{ id?: string; name: string; aliases: string; notes: string }>({ name: '', aliases: '', notes: '' })
+  const draftRef = useRef(draft); const savedRef = useRef(JSON.stringify(draft))
   const load = useCallback(() => void window.workspace.characters.list(projectId).then(setItems), [projectId])
-  useEffect(() => { load(); setDraft({ name: '', aliases: '', notes: '' }) }, [load])
-  return <section className="project-view content-manager"><header><div><h1>人物</h1><p>只记录你真正需要的信息，所有字段都可留空。</p></div><button onClick={() => setDraft({ name: '', aliases: '', notes: '' })}><Plus size={16} />新建人物</button></header><div className="content-manager-grid"><aside>{items.map((item) => <button key={item.id} className={draft.id === item.id ? 'active' : ''} onClick={() => setDraft({ id: item.id, name: item.name, aliases: item.aliases.join('、'), notes: item.notes })}><UserRound size={16} /><strong>{item.name}</strong><small>{item.aliases.join('、') || '暂无别名'}</small></button>)}</aside><div className="note-editor character-editor"><label><span>姓名</span><input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></label><label><span>别名（用顿号分隔）</span><input value={draft.aliases} onChange={(event) => setDraft({ ...draft, aliases: event.target.value })} /></label><label><span>自由笔记</span><textarea value={draft.notes} onChange={(event) => setDraft({ ...draft, notes: event.target.value })} /></label><div><button className="primary" onClick={async () => { const saved = await window.workspace.characters.save({ id: draft.id, projectId, name: draft.name, aliases: draft.aliases.split(/[、,，]/).map((item) => item.trim()).filter(Boolean), notes: draft.notes }); setDraft({ id: saved.id, name: saved.name, aliases: saved.aliases.join('、'), notes: saved.notes }); load() }}><Save size={15} />保存</button>{draft.id && <ConfirmAction title="删除人物" message="确定删除这个人物吗？" onConfirm={async () => { await window.workspace.characters.delete(projectId, draft.id!); setDraft({ name: '', aliases: '', notes: '' }); load() }}><Trash2 size={15} />删除</ConfirmAction>}</div></div></div></section>
+  useEffect(() => { load(); const empty = { name: '', aliases: '', notes: '' }; setDraft(empty); savedRef.current = JSON.stringify(empty) }, [load])
+  useEffect(() => { draftRef.current = draft }, [draft])
+  const selectDraft = useCallback((next: { id?: string; name: string; aliases: string; notes: string }): void => { setDraft(next); draftRef.current = next; savedRef.current = JSON.stringify(next) }, [])
+  const flush = useCallback(async (): Promise<void> => {
+    const current = draftRef.current
+    if (JSON.stringify(current) === savedRef.current || (!current.id && !current.name.trim() && !current.aliases.trim() && !current.notes.trim())) return
+    const saved = await window.workspace.characters.save({ id: current.id, projectId, name: current.name,
+      aliases: current.aliases.split(/[、,，]/).map((item) => item.trim()).filter(Boolean), notes: current.notes })
+    selectDraft({ id: saved.id, name: saved.name, aliases: saved.aliases.join('、'), notes: saved.notes }); load()
+  }, [load, projectId, selectDraft])
+  useEffect(() => { onRegisterFlush(flush); return () => onRegisterFlush(undefined) }, [flush, onRegisterFlush])
+  return <section className="project-view content-manager"><header><div><h1>人物</h1><p>只记录你真正需要的信息，所有字段都可留空。</p></div><button onClick={() => void flush().then(() => selectDraft({ name: '', aliases: '', notes: '' }))}><Plus size={16} />新建人物</button></header><div className="content-manager-grid"><aside>{items.map((item) => <button key={item.id} className={draft.id === item.id ? 'active' : ''} onClick={() => void flush().then(() => selectDraft({ id: item.id, name: item.name, aliases: item.aliases.join('、'), notes: item.notes }))}><UserRound size={16} /><strong>{item.name}</strong><small>{item.aliases.join('、') || '暂无别名'}</small></button>)}</aside><div className="note-editor character-editor"><label><span>姓名</span><input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></label><label><span>别名（用顿号分隔）</span><input value={draft.aliases} onChange={(event) => setDraft({ ...draft, aliases: event.target.value })} /></label><label><span>自由笔记</span><textarea value={draft.notes} onChange={(event) => setDraft({ ...draft, notes: event.target.value })} /></label><div><button className="primary" onClick={() => void flush()}><Save size={15} />保存</button>{draft.id && <ConfirmAction title="删除人物" message="确定删除这个人物吗？" onConfirm={async () => { await window.workspace.characters.delete(projectId, draft.id!); selectDraft({ name: '', aliases: '', notes: '' }); load() }}><Trash2 size={15} />删除</ConfirmAction>}</div></div></div></section>
 }
 
 export function HistoryView({ projectId, document, currentContent, onRestored }: { projectId: string; document?: DocumentNode; currentContent?: DocumentContent; onRestored?(content: Awaited<ReturnType<typeof window.workspace.snapshots.restore>>): void }): React.JSX.Element {

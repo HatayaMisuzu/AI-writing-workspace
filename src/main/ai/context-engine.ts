@@ -48,8 +48,7 @@ export class ContextEngine {
     }
 
     const signal = [task.userIntent, task.selection?.text ?? '', currentText].filter(Boolean).join('\n')
-    for (const memory of this.memories.searchRelevant(task.projectId, ['confirmed', 'observed', 'tentative', 'idea', 'suggested'], signal)) {
-      if (memory.status === 'suggested' && memory.supersedes) continue
+    for (const memory of this.memories.searchRelevant(task.projectId, ['confirmed', 'observed', 'tentative', 'idea'], signal)) {
       const stateWeight = memory.status === 'confirmed' ? 85 : memory.status === 'observed' ? 78 : memory.status === 'tentative' ? 55 : 40
       candidates.push({ id: memory.id, kind: 'memory', title: `${memory.type} · ${memory.status}`, content: memory.content,
         projectId: task.projectId, reason: `关键词相关的长期记忆，状态为 ${memory.status}`, priority: stateWeight })
@@ -148,9 +147,13 @@ export class ContextEngine {
       void priority
       const key = `${item.kind}:${item.id}`
       if (seen.has(key) || item.projectId !== projectId) continue
+      const remaining = maxTokens - estimatedTokens
+      if (remaining <= 0) break
       const itemTokens = estimateTokens(item.content)
-      if (items.length > 0 && estimatedTokens + itemTokens > maxTokens) continue
-      items.push(item); seen.add(key); estimatedTokens += itemTokens
+      const fitted = itemTokens <= remaining ? item : { ...item, content: item.content.slice(0, Math.max(1, Math.floor(remaining * 2.2))) }
+      const fittedTokens = estimateTokens(fitted.content)
+      if (!fitted.content.trim()) continue
+      items.push(fitted); seen.add(key); estimatedTokens += fittedTokens
     }
     return { projectId, policy, items, metadata: { estimatedTokens, sourceIds: items.map((item) => item.id), excludedKinds } }
   }

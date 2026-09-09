@@ -1,0 +1,42 @@
+name: Verify
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  verify-windows:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run verify
+      - run: npm run test:e2e
+      - run: npm audit --omit=dev
+
+  package-windows:
+    runs-on: windows-latest
+    needs: verify-windows
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run dist
+      - shell: pwsh
+        run: |
+          $env:INKSTONE_PACKAGED_EXE = (Get-ChildItem release/win-unpacked/*.exe | Select-Object -First 1).FullName
+          npm run test:package-smoke
+      - uses: actions/upload-artifact@v4
+        with:
+          name: inkstone-windows
+          path: release/*
+          if-no-files-found: error

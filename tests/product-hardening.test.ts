@@ -55,10 +55,11 @@ describe('product hardening invariants', () => {
     digests.storeFromModel(project.id, chapter.id, JSON.stringify({ summary: '红伞在门边。', memoryCandidates: [{ type: 'fact', content: '红伞在门边' }] }))
     const candidate = new MemoryService(db).list(project.id)[0]
     docs.saveContent({ projectId: project.id, documentId: chapter.id, editorJson: editorJson('红伞已被拿走。'), plainText: '红伞已被拿走。' })
-    // 审计 M-1 修复后：自动保存本身不再拒绝候选；候选在摘要状态被查询（digests.status）判定 stale 时才失效
+    // 状态查询保持纯读；确认事务根据来源摘要与 revision 拒绝过期候选。
     expect(new MemoryService(db).list(project.id).find((item) => item.id === candidate.id)?.status).toBe('suggested')
     digests.status(project.id, chapter.id)
-    expect(new MemoryService(db).list(project.id).find((item) => item.id === candidate.id)?.status).toBe('rejected')
+    expect(new MemoryService(db).list(project.id).find((item) => item.id === candidate.id)?.status).toBe('suggested')
+    expect(() => new MemoryService(db).confirm(project.id, candidate.id, 'user')).toThrow('MEMORY_SOURCE_STALE')
     expect(JSON.stringify(new ContextEngine(db).build({ mode: 'discussion', writePermission: 'none', userIntent: '红伞', projectId: project.id, documentId: chapter.id }))).not.toContain('红伞在门边')
 
     digests.storeFromModel(project.id, chapter.id, JSON.stringify({ summary: '红伞已被拿走。', memoryCandidates: [{ type: 'fact', content: '红伞被周青拿走' }] }))
@@ -79,8 +80,9 @@ describe('product hardening invariants', () => {
     const cancelled = mapChatHistory([{ id: 'a3', threadId: 't', projectId: 'p', role: 'assistant', content: '部分响应', taskMode: 'discussion', status: 'cancelled', createdAt: 5 }])[0]
     expect(cancelled.content).toBe('部分响应\n\n请求已取消。')
     expect(canInsertCandidate(history[3])).toBe(false)
-    expect(canInsertCandidate({ ...history[3], historical: false })).toBe(true)
-    expect(canInsertCandidate({ ...history[3], historical: false, inserted: true })).toBe(false)
+    const target = { requestId: 'r', projectId: 'p', documentId: 'd', sourceRevision: 1 }
+    expect(canInsertCandidate({ ...history[3], historical: false, target })).toBe(true)
+    expect(canInsertCandidate({ ...history[3], historical: false, target, inserted: true })).toBe(false)
   })
 
   it('shows the routed model and truthfully falls back when that model is disabled', () => {

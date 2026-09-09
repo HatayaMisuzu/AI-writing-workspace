@@ -1,13 +1,14 @@
 import { randomUUID } from 'node:crypto'
-import type { AIMode, ChatMessage, ChatThread } from '../../shared/domain'
+import type { AIMode, ChatCursor, ChatMessage, ChatThread, DocumentTaskTarget } from '../../shared/domain'
 import type { AppDatabase } from '../database/database'
 
 type ThreadRow = { id: string; project_id: string; title: string; created_at: number; updated_at: number }
-type MessageRow = { id: string; thread_id: string; project_id: string; role: ChatMessage['role']; content: string; task_mode: AIMode; status: ChatMessage['status']; created_at: number }
+type MessageRow = { id: string; thread_id: string; project_id: string; role: ChatMessage['role']; content: string; task_mode: AIMode; status: ChatMessage['status']; context_snapshot_json: string | null; created_at: number }
 
 const mapThread = (row: ThreadRow): ChatThread => ({ id: row.id, projectId: row.project_id, title: row.title, createdAt: row.created_at, updatedAt: row.updated_at })
 const mapMessage = (row: MessageRow): ChatMessage => ({ id: row.id, threadId: row.thread_id, projectId: row.project_id,
-  role: row.role, content: row.content, taskMode: row.task_mode, status: row.status, createdAt: row.created_at })
+  role: row.role, content: row.content, taskMode: row.task_mode, status: row.status, createdAt: row.created_at,
+  target: row.context_snapshot_json ? (JSON.parse(row.context_snapshot_json) as { target?: DocumentTaskTarget }).target : undefined })
 
 export class ChatService {
   constructor(private readonly db: AppDatabase) {}
@@ -30,27 +31,29 @@ export class ChatService {
     return this.getThread(projectId, id)
   }
 
-  listMessages(projectId: string, threadId: string, before?: number, limit = 50): ChatMessage[] {
+  listMessages(projectId: string, threadId: string, before?: ChatCursor, limit = 50): ChatMessage[] {
     this.getThread(projectId, threadId)
     const safeLimit = Math.max(1, Math.min(100, limit))
     const rows = (before
-      ? this.db.raw.prepare(`SELECT * FROM (SELECT id, thread_id, project_id, role, content, task_mode, status, created_at
-          FROM chat_messages WHERE project_id = ? AND thread_id = ? AND created_at < ? ORDER BY created_at DESC LIMIT ?)
-          ORDER BY created_at ASC`).all(projectId, threadId, before, safeLimit)
-      : this.db.raw.prepare(`SELECT * FROM (SELECT id, thread_id, project_id, role, content, task_mode, status, created_at
-          FROM chat_messages WHERE project_id = ? AND thread_id = ? ORDER BY created_at DESC LIMIT ?)
-          ORDER BY created_at ASC`).all(projectId, threadId, safeLimit)) as MessageRow[]
+      ? this.db.raw.prepare(`SELECT * FROM (SELECT id, thread_id, project_id, role, content, task_mode, status, context_snapshot_json, created_at
+          FROM chat_messages WHERE project_id = ? AND thread_id = ? AND (created_at < ? OR (created_at = ? AND id < ?))
+          ORDER BY created_at DESC, id DESC LIMIT ?) ORDER BY created_at ASC, id ASC`)
+        .all(projectId, threadId, before.createdAt, before.createdAt, before.id, safeLimit)
+      : this.db.raw.prepare(`SELECT * FROM (SELECT id, thread_id, project_id, role, content, task_mode, status, context_snapshot_json, created_at
+          FROM chat_messages WHERE project_id = ? AND thread_id = ? ORDER BY created_at DESC, id DESC LIMIT ?)
+          ORDER BY created_at ASC, id ASC`).all(projectId, threadId, safeLimit)) as MessageRow[]
     return rows.map(mapMessage)
   }
 
-  startTurn(input: { projectId: string; threadId: string; userMessageId: string; assistantMessageId: string; content: string; mode: AIMode }): void {
+  startTurn(input: { projectId: string; threadId: string; userMessageId: string; assistantMessageId: string; content: string; mode: AIMode; target?: DocumentTaskTarget }): void {
     this.getThread(input.projectId, input.threadId)
     const now = Date.now()
     this.db.transaction(() => {
-      this.db.raw.prepare(`INSERT INTO chat_messages(id, thread_id, project_id, role, content, task_mode, status, created_at)
-        VALUES (?, ?, ?, 'user', ?, ?, 'complete', ?)`).run(input.userMessageId, input.threadId, input.projectId, input.content, input.mode, now)
-      this.db.raw.prepare(`INSERT INTO chat_messages(id, thread_id, project_id, role, content, task_mode, status, created_at)
-        VALUES (?, ?, ?, 'assistant', '', ?, 'streaming', ?)`).run(input.assistantMessageId, input.threadId, input.projectId, input.mode, now + 1)
+      const context = input.target ? JSON.stringify({ target: input.target }) : null
+      this.db.raw.prepare(`INSERT INTO chat_messages(id, thread_id, project_id, role, content, task_mode, context_snapshot_json, status, created_at)
+        VALUES (?, ?, ?, 'user', ?, ?, ?, 'complete', ?)`).run(input.userMessageId, input.threadId, input.projectId, input.content, input.mode, context, now)
+      this.db.raw.prepare(`INSERT INTO chat_messages(id, thread_id, project_id, role, content, task_mode, context_snapshot_json, status, created_at)
+        VALUES (?, ?, ?, 'assistant', '', ?, ?, 'streaming', ?)`).run(input.assistantMessageId, input.threadId, input.projectId, input.mode, context, now + 1)
       const title = [...input.content.trim()].slice(0, 22).join('') || '新对话'
       this.db.raw.prepare(`UPDATE chat_threads SET title = CASE WHEN title = '新对话' THEN ? ELSE title END,
         updated_at = ? WHERE id = ? AND project_id = ?`).run(title, now + 1, input.threadId, input.projectId)

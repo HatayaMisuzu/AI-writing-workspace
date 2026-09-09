@@ -16,17 +16,19 @@ export function ProjectSidebar({ project, tree, selectedId, section, onSection, 
     <nav className="project-sections" aria-label="作品内容区">{sections.map(([value, label]) => <button key={value} className={section === value ? 'active' : ''} onClick={() => onSection(value)}>{label}</button>)}</nav>
     {section === 'manuscript' ? <div className="manuscript-tree">
       {volumes.length === 0 && <div className="tree-empty"><FileText size={24} /><p>先建立一卷，再开始写第一章。</p></div>}
-      {volumes.map((volume) => <div className="volume" key={volume.id}>
-        <div className="volume-row"><ChevronDown size={16} /><strong>{volume.title}</strong><span /><button className="icon-button tree-node-action" onClick={() => onRename(volume)} title="重命名卷" aria-label={`重命名${volume.title}`}><Pencil size={14} /></button><button className="icon-button tree-node-action danger" onClick={() => onDelete(volume)} title="删除卷" aria-label={`删除${volume.title}`}><Trash2 size={14} /></button><button className="icon-button" onClick={() => onNewChapter(volume.id)} title="在本卷新建章节"><Plus size={15} /></button></div>
-        {tree.filter((node) => node.parentId === volume.id).map((node, index) => <div key={node.id} draggable className={node.id === selectedId ? 'chapter-row active' : 'chapter-row'}
+      {volumes.map((volume) => {
+        const chapters = tree.filter((node) => node.parentId === volume.id)
+        return <div className="volume" key={volume.id}>
+        <div className="volume-row" onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); const draggedId = event.dataTransfer.getData('text/inkstone-document'); if (draggedId) onReorder(draggedId, volume.id, chapters.length) }}><ChevronDown size={16} /><strong>{volume.title}</strong><span /><button className="icon-button tree-node-action" onClick={() => onRename(volume)} title="重命名卷" aria-label={`重命名${volume.title}`}><Pencil size={14} /></button><button className="icon-button tree-node-action danger" onClick={() => onDelete(volume)} title="删除卷" aria-label={`删除${volume.title}`}><Trash2 size={14} /></button><button className="icon-button" onClick={() => onNewChapter(volume.id)} title="在本卷新建章节"><Plus size={15} /></button></div>
+        {chapters.map((node, index) => <div key={node.id} draggable className={node.id === selectedId ? 'chapter-row active' : 'chapter-row'}
           onDragStart={(event) => event.dataTransfer.setData('text/inkstone-document', node.id)}
           onDragOver={(event) => event.preventDefault()}
-          onDrop={(event) => { event.preventDefault(); const draggedId = event.dataTransfer.getData('text/inkstone-document'); if (draggedId && draggedId !== node.id) onReorder(draggedId, volume.id, index) }}>
+          onDrop={(event) => { event.preventDefault(); event.stopPropagation(); const draggedId = event.dataTransfer.getData('text/inkstone-document'); if (draggedId && draggedId !== node.id) onReorder(draggedId, volume.id, index) }}>
           <button className="chapter-open" onClick={() => onSelect(node)} title={node.title}><FileText size={14} /><span className="chapter-title">{node.title}</span><small>{node.wordCount.toLocaleString()}</small></button>
           <button className="icon-button tree-node-action" onClick={() => onRename(node)} title="重命名章节" aria-label={`重命名${node.title}`}><Pencil size={13} /></button>
           <button className="icon-button tree-node-action danger" onClick={() => onDelete(node)} title="删除章节" aria-label={`删除${node.title}`}><Trash2 size={13} /></button>
         </div>)}
-      </div>)}
+      </div>})}
       <div className="tree-actions"><button onClick={onNewVolume}><Plus size={15} />新建卷</button><button onClick={() => onNewChapter(volumes[0]?.id)}><Plus size={15} />新建章</button></div>
     </div> : <div className="section-hint"><Lightbulb size={22} /><strong>{sections.find(([value]) => value === section)?.[1]}</strong><p>此区域的内容只属于《{project.title}》。</p></div>}
   </aside>

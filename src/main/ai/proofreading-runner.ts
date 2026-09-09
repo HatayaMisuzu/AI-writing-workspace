@@ -4,6 +4,7 @@ import type { ProofreadIssue } from '../../shared/domain'
 import type { AppDatabase } from '../database/database'
 import { DocumentService } from '../services/document-service'
 import { OpenAICompatibleAdapter, ProviderService, type ProviderMessage } from './provider'
+import { splitText, type TextChunk } from './text-chunks'
 
 const issueSchema = z.object({
   category: z.enum(['punctuation', 'spacing', 'typo', 'grammar', 'reference', 'repetition', 'format', 'other']),
@@ -45,25 +46,36 @@ export class ProofreadingRunner {
     const model = this.providers.route('proofreading')
     const { config, apiKey } = this.providers.getWithSecret(model.providerId)
     const adapter = this.adapterFactory(config.baseUrl, apiKey)
-    const messages: ProviderMessage[] = [{ role: 'system', content: CONTRACT }, { role: 'user', content: content.plainText }]
-    const raw = await adapter.complete({ model: model.modelId, messages })
-    let parsed: z.infer<typeof responseSchema>
-    try { parsed = responseSchema.parse(parseJson(raw)) }
-    catch (firstError) {
-      const repaired = await adapter.complete({ model: model.modelId, messages: [...messages, { role: 'assistant', content: raw },
-        { role: 'user', content: `输出无效：${firstError instanceof Error ? firstError.message : String(firstError)}。只返回符合 Schema 的 JSON。` }] })
-      try { parsed = responseSchema.parse(parseJson(repaired)) }
-      catch (error) { throw Object.assign(new Error('AI 校对结果无法解析，正文没有被修改，请重试。'), { code: 'PROOFREAD_INVALID_RESPONSE', cause: error }) }
+    const maxChars = Math.max(128, Math.floor((model.capabilities.maxContextTokens ?? 16_000) * 0.6 * 2.2))
+    const chunks = splitText(content.plainText, maxChars)
+    const collected: Array<{ issue: z.infer<typeof issueSchema>; chunk: TextChunk }> = []
+    for (const [index, chunk] of chunks.entries()) {
+      const user = chunks.length === 1 ? chunk.text : `这是正文第 ${index + 1}/${chunks.length} 段，只校对本段：\n${chunk.text}`
+      const parsed = await this.completeIssues(adapter, model.modelId, [{ role: 'system', content: CONTRACT }, { role: 'user', content: user }])
+      parsed.issues.forEach((issue) => collected.push({ issue, chunk }))
     }
-    return parsed.issues.flatMap((issue) => {
+    return collected.flatMap(({ issue, chunk }) => {
       const positions = occurrences(content.plainText, issue.originalText)
       if (!positions.length) return []
-      const occurrence = positions.length === 1 ? 1 : issue.occurrence
-      if (!occurrence || occurrence > positions.length) return []
-      const position = positions[occurrence - 1]
+      const inChunk = positions.filter((position) => position >= chunk.from && position + issue.originalText.length <= chunk.to)
+      const localOccurrence = inChunk.length === 1 ? 1 : issue.occurrence
+      if (!localOccurrence || localOccurrence > inChunk.length) return []
+      const position = inChunk[localOccurrence - 1]
+      const occurrence = positions.indexOf(position) + 1
       if (issue.contextBefore && !content.plainText.slice(0, position).endsWith(issue.contextBefore)) return []
       if (issue.contextAfter && !content.plainText.slice(position + issue.originalText.length).startsWith(issue.contextAfter)) return []
       return [{ id: randomUUID(), source: 'ai' as const, ...issue, occurrence, documentRevision: content.revision }]
     })
+  }
+
+  private async completeIssues(adapter: Pick<OpenAICompatibleAdapter, 'complete'>, model: string, messages: ProviderMessage[]): Promise<z.infer<typeof responseSchema>> {
+    const raw = await adapter.complete({ model, messages })
+    try { return responseSchema.parse(parseJson(raw)) }
+    catch (firstError) {
+      const repaired = await adapter.complete({ model, messages: [...messages, { role: 'assistant', content: raw },
+        { role: 'user', content: `输出无效：${firstError instanceof Error ? firstError.message : String(firstError)}。只返回符合 Schema 的 JSON。` }] })
+      try { return responseSchema.parse(parseJson(repaired)) }
+      catch (error) { throw Object.assign(new Error('AI 校对结果无法解析，正文没有被修改，请重试。'), { code: 'PROOFREAD_INVALID_RESPONSE', cause: error }) }
+    }
   }
 }

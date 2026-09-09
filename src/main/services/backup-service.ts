@@ -1,7 +1,8 @@
-import { readFile, writeFile } from 'node:fs/promises'
+import { readFile, rename, unlink, writeFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
-import { basename, extname } from 'node:path'
+import { basename, dirname, extname, join } from 'node:path'
 import { Document, Packer, Paragraph, HeadingLevel } from 'docx'
+import { z } from 'zod'
 import type { Project } from '../../shared/domain'
 import type { AppDatabase } from '../database/database'
 import { ProjectService } from './project-service'
@@ -45,6 +46,137 @@ interface BackupPayload {
   patches: Array<Record<string, unknown>>
 }
 
+const MAX_BACKUP_BYTES = 100 * 1024 * 1024
+const rowSchema = z.record(z.string(), z.unknown()).refine((row) => typeof row.id === 'string' && row.id.length > 0, 'row id required')
+const backupPayloadSchema = z.object({
+  format: z.literal('inkstone-project'), version: z.literal(1), exportedAt: z.number().finite().nonnegative(),
+  project: z.record(z.string(), z.unknown()).refine((row) => typeof row.id === 'string' && typeof row.title === 'string' &&
+    ['novel','webnovel','screenplay','other'].includes(String(row.project_type)), 'invalid project'),
+  nodes: z.array(rowSchema), contents: z.array(z.record(z.string(), z.unknown())), snapshots: z.array(rowSchema),
+  ideas: z.array(rowSchema), notes: z.array(rowSchema), characters: z.array(rowSchema), memories: z.array(rowSchema),
+  threads: z.array(rowSchema), messages: z.array(rowSchema), digests: z.array(rowSchema), origins: z.array(rowSchema),
+  feedback: z.array(rowSchema), styles: z.array(rowSchema).optional(), patches: z.array(rowSchema)
+})
+
+async function atomicWriteFile(path: string, data: string | Uint8Array): Promise<void> {
+  const suffix = randomUUID()
+  const temporary = join(dirname(path), `.${basename(path)}.${suffix}.tmp`)
+  const previous = join(dirname(path), `.${basename(path)}.${suffix}.previous`)
+  await writeFile(temporary, data, { flag: 'wx' })
+  try {
+    await rename(temporary, path)
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code
+    if (code !== 'EEXIST' && code !== 'EPERM') { await unlink(temporary).catch(() => undefined); throw error }
+    await rename(path, previous)
+    try {
+      await rename(temporary, path)
+    } catch (replaceError) {
+      await rename(previous, path).catch(() => undefined)
+      await unlink(temporary).catch(() => undefined)
+      throw replaceError
+    }
+    await unlink(previous).catch(() => undefined)
+  }
+}
+
+function validateBackup(payload: BackupPayload): void {
+  const assertEnum = (value: unknown, allowed: readonly string[], code: string): void => {
+    if (typeof value !== 'string' || !allowed.includes(value)) throw new Error(code)
+  }
+  const assertInteger = (value: unknown, minimum: number, code: string): void => {
+    if (!Number.isInteger(value) || (value as number) < minimum) throw new Error(code)
+  }
+  const groups = [payload.nodes, payload.snapshots, payload.ideas, payload.notes, payload.characters, payload.memories,
+    payload.threads, payload.messages, payload.digests, payload.origins, payload.feedback, payload.styles ?? [], payload.patches]
+  const allIds = new Set<string>()
+  for (const group of groups) for (const row of group) {
+    const id = row.id as string
+    if (allIds.has(id)) throw new Error('BACKUP_INVALID_DUPLICATE_ID')
+    allIds.add(id)
+  }
+  const projectId = payload.project.id as string
+  for (const group of groups) for (const row of group) {
+    if (row.project_id !== projectId) throw new Error('BACKUP_INVALID_CROSS_PROJECT_REFERENCE')
+  }
+  const nodeIds = new Set(payload.nodes.map((row) => row.id as string))
+  const noteIds = new Set(payload.notes.map((row) => row.id as string))
+  const messageIds = new Set(payload.messages.map((row) => row.id as string))
+  const threadIds = new Set(payload.threads.map((row) => row.id as string))
+  const digestIds = new Set(payload.digests.map((row) => row.id as string))
+  const memoryIds = new Set(payload.memories.map((row) => row.id as string))
+  payload.nodes.forEach((row) => {
+    assertEnum(row.type, ['volume', 'chapter', 'scene', 'note'], 'BACKUP_INVALID_NODE_TYPE')
+    assertInteger(row.order_index, 0, 'BACKUP_INVALID_NODE_ORDER')
+    if (row.parent_id && !nodeIds.has(row.parent_id as string)) throw new Error('BACKUP_INVALID_NODE_PARENT')
+  })
+  const contentIds = new Set<string>()
+  payload.contents.forEach((row) => {
+    if (row.project_id !== projectId || !nodeIds.has(row.document_id as string)) throw new Error('BACKUP_INVALID_CONTENT_REFERENCE')
+    if (contentIds.has(row.document_id as string)) throw new Error('BACKUP_INVALID_DUPLICATE_CONTENT')
+    contentIds.add(row.document_id as string)
+    if (typeof row.editor_json !== 'string' || typeof row.plain_text !== 'string') throw new Error('BACKUP_INVALID_CONTENT')
+    assertInteger(row.revision, 0, 'BACKUP_INVALID_CONTENT')
+    assertInteger(row.word_count, 0, 'BACKUP_INVALID_CONTENT')
+    const editor = JSON.parse(row.editor_json) as { type?: unknown; content?: unknown }
+    if (editor.type !== 'doc' || (editor.content !== undefined && !Array.isArray(editor.content))) throw new Error('BACKUP_INVALID_EDITOR_JSON')
+  })
+  payload.snapshots.forEach((row) => {
+    if (!nodeIds.has(row.document_id as string)) throw new Error('BACKUP_INVALID_SNAPSHOT_REFERENCE')
+    assertEnum(row.reason, ['interval', 'large_delete', 'ai_edit', 'manual', 'pre_restore'], 'BACKUP_INVALID_SNAPSHOT_REASON')
+    assertInteger(row.revision, 0, 'BACKUP_INVALID_SNAPSHOT_REVISION')
+  })
+  payload.ideas.forEach((row) => assertEnum(row.status, ['active', 'used', 'archived'], 'BACKUP_INVALID_IDEA_STATUS'))
+  payload.notes.forEach((row) => assertEnum(row.section, ['story', 'reference'], 'BACKUP_INVALID_NOTE_SECTION'))
+  payload.characters.forEach((row) => {
+    if (!Array.isArray(JSON.parse(String(row.aliases_json))) || typeof JSON.parse(String(row.fields_json)) !== 'object') throw new Error('BACKUP_INVALID_CHARACTER_JSON')
+  })
+  payload.messages.forEach((row) => {
+    if (!threadIds.has(row.thread_id as string)) throw new Error('BACKUP_INVALID_MESSAGE_THREAD')
+    assertEnum(row.role, ['user', 'assistant'], 'BACKUP_INVALID_MESSAGE_ROLE')
+    assertEnum(row.task_mode, ['discussion', 'brainstorm', 'generation', 'editing', 'organization', 'chapter_digest', 'proofreading', 'reader_review'], 'BACKUP_INVALID_MESSAGE_MODE')
+    assertEnum(row.status, ['streaming', 'complete', 'error', 'cancelled'], 'BACKUP_INVALID_MESSAGE_STATUS')
+  })
+  payload.digests.forEach((row) => {
+    if (!nodeIds.has(row.chapter_id as string)) throw new Error('BACKUP_INVALID_DIGEST_CHAPTER')
+    assertInteger(row.chapter_revision, 0, 'BACKUP_INVALID_DIGEST_REVISION')
+  })
+  payload.memories.forEach((row) => {
+    assertEnum(row.type, ['fact', 'event', 'character_state', 'relationship', 'decision', 'idea', 'question', 'foreshadowing', 'style_signal'], 'BACKUP_INVALID_MEMORY_TYPE')
+    assertEnum(row.status, ['observed', 'confirmed', 'tentative', 'idea', 'suggested', 'rejected', 'superseded'], 'BACKUP_INVALID_MEMORY_STATUS')
+    assertEnum(row.source_type, ['chapter', 'note', 'chat', 'author'], 'BACKUP_INVALID_MEMORY_SOURCE')
+    if (row.supersedes && (!memoryIds.has(row.supersedes as string) || row.supersedes === row.id)) throw new Error('BACKUP_INVALID_MEMORY_REFERENCE')
+    if (row.source_digest_id && !digestIds.has(row.source_digest_id as string)) throw new Error('BACKUP_INVALID_MEMORY_DIGEST')
+    if (row.source_type === 'chapter' && !nodeIds.has(row.source_id as string)) throw new Error('BACKUP_INVALID_MEMORY_SOURCE')
+    if (row.source_type === 'note' && !noteIds.has(row.source_id as string)) throw new Error('BACKUP_INVALID_MEMORY_SOURCE')
+    if (row.source_type === 'chat' && !messageIds.has(row.source_id as string)) throw new Error('BACKUP_INVALID_MEMORY_SOURCE')
+    if (row.confidence !== null && row.confidence !== undefined && (!Number.isFinite(row.confidence) || (row.confidence as number) < 0 || (row.confidence as number) > 1)) throw new Error('BACKUP_INVALID_MEMORY_CONFIDENCE')
+  })
+  payload.origins.forEach((row) => {
+    if (!nodeIds.has(row.document_id as string)) throw new Error('BACKUP_INVALID_ORIGIN_DOCUMENT')
+    assertEnum(row.origin, ['human', 'ai', 'ai_edited_by_human', 'mixed'], 'BACKUP_INVALID_TEXT_ORIGIN')
+    assertInteger(row.from_pos, 0, 'BACKUP_INVALID_TEXT_RANGE'); assertInteger(row.to_pos, row.from_pos as number, 'BACKUP_INVALID_TEXT_RANGE')
+  })
+  ;(payload.styles ?? []).forEach((row) => {
+    if (row.document_id && !nodeIds.has(row.document_id as string)) throw new Error('BACKUP_INVALID_STYLE_DOCUMENT')
+    assertEnum(row.origin, ['human', 'ai', 'ai_edited_by_human', 'mixed'], 'BACKUP_INVALID_TEXT_ORIGIN')
+  })
+  payload.patches.forEach((row) => {
+    if (!nodeIds.has(row.document_id as string)) throw new Error('BACKUP_INVALID_PATCH_DOCUMENT')
+    assertEnum(row.status, ['proposed', 'accepted', 'rejected', 'stale'], 'BACKUP_INVALID_PATCH_STATUS')
+    assertInteger(row.from_pos, 0, 'BACKUP_INVALID_PATCH_RANGE'); assertInteger(row.to_pos, row.from_pos as number, 'BACKUP_INVALID_PATCH_RANGE')
+  })
+  for (const memory of payload.memories) {
+    const visited = new Set<string>([memory.id as string])
+    let cursor = memory.supersedes as string | undefined
+    while (cursor) {
+      if (visited.has(cursor)) throw new Error('BACKUP_INVALID_MEMORY_CYCLE')
+      visited.add(cursor)
+      cursor = payload.memories.find((row) => row.id === cursor)?.supersedes as string | undefined
+    }
+  }
+}
+
 const rows = (db: AppDatabase, table: string, projectId: string): Array<Record<string, unknown>> =>
   db.raw.prepare(`SELECT * FROM ${table} WHERE project_id = ?`).all(projectId) as Array<Record<string, unknown>>
 
@@ -64,12 +196,20 @@ export class BackupService {
       feedback: rows(this.db, 'style_feedback', projectId), styles: rows(this.db, 'style_samples', projectId),
       patches: rows(this.db, 'text_patches', projectId)
     }
-    await writeFile(path, JSON.stringify(payload, (_key, value) => Buffer.isBuffer(value) ? value.toString('base64') : value, 2), 'utf8')
+    await atomicWriteFile(path, JSON.stringify(payload, (_key, value) => Buffer.isBuffer(value) ? value.toString('base64') : value, 2))
   }
 
   async importProject(path: string): Promise<Project> {
-    const payload = JSON.parse(await readFile(path, 'utf8')) as BackupPayload
-    if (payload.format !== 'inkstone-project' || payload.version !== 1) throw new Error('UNSUPPORTED_BACKUP')
+    const bytes = await readFile(path)
+    if (bytes.byteLength > MAX_BACKUP_BYTES) throw new Error('BACKUP_INVALID_TOO_LARGE')
+    let payload: BackupPayload
+    try {
+      payload = backupPayloadSchema.parse(JSON.parse(bytes.toString('utf8'))) as BackupPayload
+      validateBackup(payload)
+    } catch (error) {
+      if (error instanceof Error && error.message.startsWith('BACKUP_INVALID_')) throw error
+      throw Object.assign(new Error('BACKUP_INVALID_SCHEMA'), { cause: error })
+    }
     const projectId = randomUUID()
     const idMap = new Map<string, string>()
     payload.nodes.forEach((node) => idMap.set(node.id as string, randomUUID()))
@@ -108,10 +248,10 @@ export class BackupService {
       payload.notes?.forEach((item) => noteInsert.run(...[idMap.get(item.id as string), projectId, item.section, item.title, item.content, item.created_at, item.updated_at].map(sqlValue)))
       const characterInsert = this.db.raw.prepare(`INSERT INTO characters(id,project_id,name,aliases_json,notes,fields_json,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)`)
       payload.characters.forEach((item) => characterInsert.run(...[idMap.get(item.id as string), projectId, item.name, item.aliases_json, item.notes, item.fields_json, now, now].map(sqlValue)))
-      const memoryInsert = this.db.raw.prepare(`INSERT INTO memories(id,project_id,type,content,status,source_type,source_id,source_location,confidence,reader_visible_from,supersedes,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+      const memoryInsert = this.db.raw.prepare(`INSERT INTO memories(id,project_id,type,content,status,source_type,source_id,source_location,confidence,reader_visible_from,supersedes,source_revision,source_digest_id,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,NULL,?,NULL,?,?)`)
       payload.memories.forEach((item) => memoryInsert.run(...[idMap.get(item.id as string), projectId, item.type, item.content, item.status,
         item.source_type, idMap.get(item.source_id as string) ?? item.source_id, item.source_location, item.confidence,
-        item.reader_visible_from, item.supersedes ? idMap.get(item.supersedes as string) : null, now, now].map(sqlValue)))
+        item.reader_visible_from, item.source_revision, now, now].map(sqlValue)))
       const snapshotInsert = this.db.raw.prepare(`INSERT INTO snapshots(id,project_id,document_id,reason,revision,content,plain_text,metadata_json,created_at) VALUES (?,?,?,?,?,?,?,?,?)`)
       payload.snapshots.forEach((item) => snapshotInsert.run(...[idMap.get(item.id as string), projectId, idMap.get(item.document_id as string), item.reason, item.revision, item.content, item.plain_text, item.metadata_json, item.created_at].map(sqlValue)))
       const threadInsert = this.db.raw.prepare(`INSERT INTO chat_threads(id,project_id,title,summary,created_at,updated_at) VALUES (?,?,?,?,?,?)`)
@@ -120,6 +260,11 @@ export class BackupService {
       payload.messages.forEach((item) => messageInsert.run(...[idMap.get(item.id as string), idMap.get(item.thread_id as string), projectId, item.role, item.content, item.task_mode, item.context_snapshot_json, item.status, item.created_at].map(sqlValue)))
       const digestInsert = this.db.raw.prepare(`INSERT INTO chapter_digests(id,project_id,chapter_id,chapter_revision,summary,structured_payload,stale,created_at) VALUES (?,?,?,?,?,?,?,?)`)
       payload.digests.forEach((item) => digestInsert.run(...[idMap.get(item.id as string), projectId, idMap.get(item.chapter_id as string), item.chapter_revision, item.summary, item.structured_payload, item.stale, item.created_at].map(sqlValue)))
+      const memoryLinks = this.db.raw.prepare('UPDATE memories SET supersedes = ?, source_digest_id = ? WHERE id = ? AND project_id = ?')
+      payload.memories.forEach((item) => memoryLinks.run(
+        item.supersedes ? idMap.get(item.supersedes as string)! : null,
+        item.source_digest_id ? idMap.get(item.source_digest_id as string)! : null,
+        idMap.get(item.id as string)!, projectId))
       const originInsert = this.db.raw.prepare(`INSERT INTO text_origins(id,project_id,document_id,from_pos,to_pos,origin,created_at) VALUES (?,?,?,?,?,?,?)`)
       payload.origins.forEach((item) => originInsert.run(...[idMap.get(item.id as string), projectId, idMap.get(item.document_id as string), item.from_pos, item.to_pos, item.origin, item.created_at].map(sqlValue)))
       const feedbackInsert = this.db.raw.prepare(`INSERT INTO style_feedback(id,project_id,text_sample,feedback_type,comment,created_at) VALUES (?,?,?,?,?,?)`)
@@ -235,7 +380,7 @@ export class BackupService {
         ;(chapter.plain_text ?? MISSING_PLACEHOLDER).split(/\n+/).forEach((text) => children.push(new Paragraph({ text })))
       })
       const doc = new Document({ sections: [{ children }] })
-      await writeFile(path, await Packer.toBuffer(doc))
+      await atomicWriteFile(path, await Packer.toBuffer(doc))
       return
     }
     let currentVolume = ''
@@ -245,9 +390,9 @@ export class BackupService {
         currentVolume = chapter.volume_title
         parts.push(format === 'md' ? `# ${currentVolume}` : currentVolume)
       }
-      const body = chapter.plain_text !== null && chapter.plain_text !== '' ? chapter.plain_text : MISSING_PLACEHOLDER
+      const body = chapter.plain_text !== null ? chapter.plain_text : MISSING_PLACEHOLDER
       parts.push(format === 'md' ? `## ${chapter.title}\n\n${body}` : `${chapter.title}\n\n${body}`)
     })
-    await writeFile(path, parts.join('\n\n'), 'utf8')
+    await atomicWriteFile(path, parts.join('\n\n'))
   }
 }

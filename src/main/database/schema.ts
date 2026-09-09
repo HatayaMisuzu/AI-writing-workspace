@@ -106,6 +106,8 @@ CREATE TABLE IF NOT EXISTS memories (
   confidence REAL,
   reader_visible_from INTEGER,
   supersedes TEXT REFERENCES memories(id),
+  source_revision INTEGER,
+  source_digest_id TEXT REFERENCES chapter_digests(id),
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
@@ -130,7 +132,7 @@ CREATE TABLE IF NOT EXISTS chat_messages (
   status TEXT NOT NULL DEFAULT 'complete',
   created_at INTEGER NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_chat_project_thread ON chat_messages(project_id, thread_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_chat_project_thread ON chat_messages(project_id, thread_id, created_at, id);
 
 CREATE TABLE IF NOT EXISTS chapter_digests (
   id TEXT PRIMARY KEY,

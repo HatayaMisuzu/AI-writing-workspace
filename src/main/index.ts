@@ -22,7 +22,7 @@ if (!app.requestSingleInstanceLock()) {
     const win = new BrowserWindow({
       width: 1560, height: 980, minWidth: 1100, minHeight: 700, show: false,
       frame: false, backgroundColor: '#fffdf9', title: '墨记',
-      webPreferences: { preload: join(__dirname, '../preload/index.mjs'), sandbox: false, contextIsolation: true, nodeIntegration: false }
+      webPreferences: { preload: join(__dirname, '../preload/index.cjs'), sandbox: true, contextIsolation: true, nodeIntegration: false }
     })
     win.on('ready-to-show', () => win.show())
     win.webContents.on('will-navigate', (event) => { event.preventDefault() })

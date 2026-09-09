@@ -7,6 +7,7 @@ type MemoryRow = {
   id: string; project_id: string; type: MemoryType; content: string; status: MemoryStatus
   source_type: MemoryItem['sourceType']; source_id: string; source_location: string | null
   confidence: number | null; reader_visible_from: number | null; supersedes: string | null
+  source_revision: number | null; source_digest_id: string | null
   created_at: number; updated_at: number
 }
 
@@ -14,7 +15,8 @@ const mapMemory = (row: MemoryRow): MemoryItem => ({
   id: row.id, projectId: row.project_id, type: row.type, content: row.content, status: row.status,
   sourceType: row.source_type, sourceId: row.source_id, sourceLocation: row.source_location ?? undefined,
   confidence: row.confidence ?? undefined, readerVisibleFrom: row.reader_visible_from ?? undefined,
-  supersedes: row.supersedes ?? undefined, createdAt: row.created_at, updatedAt: row.updated_at
+  supersedes: row.supersedes ?? undefined, sourceRevision: row.source_revision ?? undefined,
+  sourceDigestId: row.source_digest_id ?? undefined, createdAt: row.created_at, updatedAt: row.updated_at
 })
 
 export class MemoryService {
@@ -42,15 +44,16 @@ export class MemoryService {
   create(input: {
     projectId: string; type: MemoryType; content: string; status: Exclude<MemoryStatus, 'confirmed'>
     sourceType: MemoryItem['sourceType']; sourceId: string; sourceLocation?: string
-    confidence?: number; readerVisibleFrom?: number; supersedes?: string
+    confidence?: number; readerVisibleFrom?: number; supersedes?: string; sourceRevision?: number; sourceDigestId?: string
   }): MemoryItem {
     const now = Date.now()
     const id = randomUUID()
     this.db.raw.prepare(`INSERT INTO memories
-      (id, project_id, type, content, status, source_type, source_id, source_location, confidence, reader_visible_from, supersedes, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      (id, project_id, type, content, status, source_type, source_id, source_location, confidence, reader_visible_from, supersedes, source_revision, source_digest_id, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
       .run(id, input.projectId, input.type, input.content, input.status, input.sourceType, input.sourceId,
-        input.sourceLocation ?? null, input.confidence ?? null, input.readerVisibleFrom ?? null, input.supersedes ?? null, now, now)
+        input.sourceLocation ?? null, input.confidence ?? null, input.readerVisibleFrom ?? null, input.supersedes ?? null,
+        input.sourceRevision ?? null, input.sourceDigestId ?? null, now, now)
     return this.get(input.projectId, id)
   }
 
@@ -76,6 +79,16 @@ export class MemoryService {
     if (existing.status === 'rejected' || existing.status === 'superseded') throw new Error('MEMORY_NOT_CONFIRMABLE')
     this.db.transaction(() => {
       const now = Date.now()
+      if (existing.sourceType === 'chapter') {
+        if (existing.sourceRevision === undefined || !existing.sourceDigestId) throw new Error('MEMORY_SOURCE_UNVERIFIABLE')
+        const source = this.db.raw.prepare(`SELECT d.chapter_revision, d.stale, d.chapter_id, c.revision
+          FROM chapter_digests d JOIN document_contents c ON c.document_id = d.chapter_id AND c.project_id = d.project_id
+          WHERE d.id = ? AND d.project_id = ? AND d.chapter_id = ?`).get(existing.sourceDigestId, projectId, existing.sourceId) as
+          { chapter_revision: number; stale: number; chapter_id: string; revision: number } | undefined
+        if (!source || source.stale || source.chapter_revision !== existing.sourceRevision || source.revision !== existing.sourceRevision) {
+          throw new Error('MEMORY_SOURCE_STALE')
+        }
+      }
       if (existing.supersedes) {
         const previous = this.get(projectId, existing.supersedes)
         if (previous.status !== 'confirmed') throw new Error('MEMORY_REPLACEMENT_TARGET_CHANGED')

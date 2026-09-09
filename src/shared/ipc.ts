@@ -1,5 +1,5 @@
 import type {
-  AITaskEnvelope, Character, ChatMessage, ChatThread, DigestStatus, DocumentContent, DocumentNode, Idea, LocalLintIssue,
+  AITaskEnvelope, Character, ChatCursor, ChatMessage, ChatThread, DigestStatus, DocumentContent, DocumentNode, Idea, LocalLintIssue,
   MemoryItem, MemoryProposal, ModelConfig, Project, ProjectNote, ProjectType, ProofreadIssue, ProviderConfig,
   ProviderInput, RoutedTask, SearchResult, Snapshot, TaskModelRoute, TextOrigin, TextPatch
 } from './domain'
@@ -49,12 +49,11 @@ export interface WorkspaceApi {
     reject(projectId: string, memoryId: string): Promise<MemoryItem>
     retire(projectId: string, memoryId: string): Promise<MemoryItem>
     replace(projectId: string, memoryId: string, content: string): Promise<MemoryItem>
-    proposeFromChat(projectId: string, sourceId: string, content: string): Promise<MemoryProposal | null>
     extractIntent(projectId: string, sourceId: string, content: string): Promise<MemoryProposal[]>
   }
   chat: {
     listThreads(projectId: string): Promise<ChatThread[]>
-    listMessages(projectId: string, threadId: string, before?: number, limit?: number): Promise<ChatMessage[]>
+    listMessages(projectId: string, threadId: string, before?: ChatCursor, limit?: number): Promise<ChatMessage[]>
     newThread(projectId: string, title?: string): Promise<ChatThread>
   }
   patches: {
@@ -66,7 +65,6 @@ export interface WorkspaceApi {
   }
   linter: { run(text: string): Promise<LocalLintIssue[]> }
   digests: {
-    store(projectId: string, chapterId: string, raw: string): Promise<{ id: string; payload: unknown }>
     run(projectId: string, chapterId: string): Promise<{ id: string; payload: unknown; repaired: boolean }>
     list(projectId: string, chapterId?: string): Promise<Array<{ id: string; chapterId: string; revision: number; summary: string; stale: boolean; createdAt: number }>>
     status(projectId: string, chapterId: string): Promise<DigestStatus>

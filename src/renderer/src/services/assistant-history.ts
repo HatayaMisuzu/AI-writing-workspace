@@ -1,4 +1,4 @@
-import type { AIMode, ChatMessage, ModelConfig, RoutedTask } from '../../../shared/domain'
+import type { AIMode, ChatMessage, DocumentTaskTarget, ModelConfig, RoutedTask } from '../../../shared/domain'
 
 export interface AssistantHistoryMessage {
   id: string
@@ -10,6 +10,7 @@ export interface AssistantHistoryMessage {
   replyToUserId?: string
   historical?: boolean
   inserted?: boolean
+  target?: DocumentTaskTarget
 }
 
 export function mapChatHistory(messages: ChatMessage[]): AssistantHistoryMessage[] {
@@ -26,7 +27,8 @@ export function mapChatHistory(messages: ChatMessage[]): AssistantHistoryMessage
       mode: message.taskMode,
       createdAt: message.createdAt,
       replyToUserId: message.role === 'assistant' ? latestUserId : undefined,
-      historical: true
+      historical: true,
+      target: message.target
     }
   })
 }
@@ -38,7 +40,7 @@ export function retryInputForMessage(messages: AssistantHistoryMessage[], failed
 }
 
 export function canInsertCandidate(message: AssistantHistoryMessage): boolean {
-  return message.role === 'assistant' && message.mode === 'generation' && !message.status && !message.historical && !message.inserted && Boolean(message.content)
+  return message.role === 'assistant' && message.mode === 'generation' && !message.status && !message.inserted && Boolean(message.content) && Boolean(message.target)
 }
 
 export function resolveModelDisplayName(mode: RoutedTask, models: ModelConfig[], routes: Record<RoutedTask, string | 'default'>): string {

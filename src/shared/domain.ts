@@ -94,6 +94,8 @@ export interface MemoryItem {
   confidence?: number
   readerVisibleFrom?: number
   supersedes?: string
+  sourceRevision?: number
+  sourceDigestId?: string
   createdAt: number
   updatedAt: number
 }
@@ -169,6 +171,14 @@ export interface TextPatch {
   createdAt: number
 }
 
+export interface DocumentTaskTarget {
+  requestId: string
+  projectId: string
+  documentId: string
+  sourceRevision: number
+  selection?: { fromPm: number; toPm: number; text: string; originalHash: string }
+}
+
 export interface MemoryProposal extends MemoryItem {
   sourceType: 'chat'
   status: 'suggested'
@@ -180,6 +190,7 @@ export interface AITaskEnvelope {
   userIntent: string
   projectId: string
   documentId?: string
+  target?: DocumentTaskTarget
   selection?: { from: number; to: number; text: string }
   throughChapterId?: string
 }
@@ -217,7 +228,10 @@ export interface ChatMessage {
   taskMode: AIMode
   createdAt: number
   status: 'streaming' | 'complete' | 'error' | 'cancelled'
+  target?: DocumentTaskTarget
 }
+
+export interface ChatCursor { createdAt: number; id: string }
 
 export interface MemoryIntentProposal {
   type: MemoryType
@@ -273,12 +287,16 @@ export interface DiffSegment {
 
 export interface LocalLintIssue {
   id: string
+  documentId: string
+  sourceRevision: number
   from: number
   to: number
   severity: 'info' | 'warning'
   kind: string
   message: string
   replacement?: string
+  sourceTextHash: string
+  originalText: string
 }
 
 export interface AppErrorShape {

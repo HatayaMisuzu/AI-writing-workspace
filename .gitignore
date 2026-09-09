@@ -3,6 +3,7 @@ out/
 release/
 /release.zip
 coverage/
+output/playwright/
 *.log
 .env
 .env.*

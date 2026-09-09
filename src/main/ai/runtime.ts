@@ -5,6 +5,9 @@ import { historyPolicy } from './history-policy'
 import { composeProviderMessages } from './prompt-composer'
 import { OpenAICompatibleAdapter, ProviderService, type ProviderMessage } from './provider'
 import { ChatService } from '../services/chat-service'
+import { DocumentService } from '../services/document-service'
+
+const estimateTokens = (text: string): number => Math.ceil(text.length / 2.2)
 
 type RuntimeAdapter = Pick<OpenAICompatibleAdapter, 'chat'>
 type RuntimeAdapterFactory = (baseUrl: string, apiKey: string) => RuntimeAdapter
@@ -26,11 +29,29 @@ export class AICreativeRuntime {
     let started = false
     let assistant = ''
     try {
+      if (task.target) {
+        const source = new DocumentService(this.db).getContent(task.target.projectId, task.target.documentId)
+        if (source.revision !== task.target.sourceRevision) throw Object.assign(new Error('来源章节已变化，请重新发送请求。'), { code: 'AI_SOURCE_STALE' })
+      }
       const model = this.providers.route(task.mode)
       const { config, apiKey } = this.providers.getWithSecret(model.providerId)
-      const context = this.context.build(task, this.contextBudget(task.mode))
-      const messages = this.buildMessages(task, context, threadId)
-      this.chat.startTurn({ projectId: task.projectId, threadId, userMessageId, assistantMessageId, content: task.userIntent, mode: task.mode })
+      const maxContextTokens = Math.max(512, model.capabilities.maxContextTokens ?? 16_000)
+      const responseReserve = Math.min(4_096, Math.max(256, Math.floor(maxContextTokens * 0.2)), maxContextTokens - 256)
+      const inputLimit = maxContextTokens - responseReserve
+      const systemOnly = this.messageTokens(composeProviderMessages({ task: { ...task, userIntent: '' }, context: {
+        projectId: task.projectId, policy: task.mode === 'reader_review' ? 'reader' : 'creative', items: [],
+        metadata: { estimatedTokens: 0, sourceIds: [], excludedKinds: [] }
+      }, history: [] }))
+      if (systemOnly >= inputLimit) throw Object.assign(new Error('模型上下文窗口过小，无法容纳基础任务指令。'), { code: 'MODEL_CONTEXT_WINDOW_TOO_SMALL' })
+      const userBudget = Math.min(Math.floor(inputLimit * 0.5), inputLimit - systemOnly)
+      const providerTask = { ...task, userIntent: task.userIntent.slice(0, Math.max(1, Math.floor(userBudget * 2.2))) }
+      const history = this.fitHistory(this.loadHistory(providerTask, threadId), Math.floor(inputLimit * 0.25))
+      const emptyContext: ContextBundle = { projectId: task.projectId, policy: task.mode === 'reader_review' ? 'reader' : 'creative',
+        items: [], metadata: { estimatedTokens: 0, sourceIds: [], excludedKinds: [] } }
+      const fixedTokens = this.messageTokens(composeProviderMessages({ task: providerTask, context: emptyContext, history }))
+      const builtContext = this.context.build(providerTask, Math.max(0, inputLimit - fixedTokens))
+      const { messages, context } = this.fitFinalMessages(providerTask, builtContext, history, inputLimit)
+      this.chat.startTurn({ projectId: task.projectId, threadId, userMessageId, assistantMessageId, content: task.userIntent, mode: task.mode, target: task.target })
       started = true
       const adapter = this.adapterFactory(config.baseUrl, apiKey)
       let first = true
@@ -44,7 +65,7 @@ export class AICreativeRuntime {
       this.chat.updateAssistant(task.projectId, threadId, assistantMessageId, assistant, 'complete')
     } catch (error) {
       if (!started) {
-        this.chat.startTurn({ projectId: task.projectId, threadId, userMessageId, assistantMessageId, content: task.userIntent, mode: task.mode })
+        this.chat.startTurn({ projectId: task.projectId, threadId, userMessageId, assistantMessageId, content: task.userIntent, mode: task.mode, target: task.target })
         started = true
       }
       const shaped = error as Error & { code?: string }
@@ -57,17 +78,52 @@ export class AICreativeRuntime {
   cancel(requestId: string): void { this.controllers.get(requestId)?.abort() }
 
   buildMessages(task: AITaskEnvelope, context: ContextBundle, threadId: string): ProviderMessage[] {
-    const history = historyPolicy(task.mode) === 'creative-thread'
-      ? (this.db.raw.prepare(`SELECT role, content FROM chat_messages WHERE project_id = ? AND thread_id = ? AND status = 'complete' ORDER BY created_at DESC LIMIT 12`)
-        .all(task.projectId, threadId) as Array<{ role: ProviderMessage['role']; content: string }>).reverse().filter((message) => message.content.trim())
-      : []
+    const history = this.loadHistory(task, threadId)
     return composeProviderMessages({ task, context, history })
   }
 
-  private contextBudget(mode: AITaskEnvelope['mode']): number {
-    if (mode === 'generation') return 16_000
-    if (mode === 'chapter_digest') return 20_000
-    if (mode === 'proofreading') return 16_000
-    return 12_000
+  private loadHistory(task: AITaskEnvelope, threadId: string): ProviderMessage[] {
+    return historyPolicy(task.mode) === 'creative-thread'
+      ? (this.db.raw.prepare(`SELECT role, content FROM chat_messages WHERE project_id = ? AND thread_id = ? AND status = 'complete' ORDER BY created_at DESC, id DESC LIMIT 12`)
+        .all(task.projectId, threadId) as Array<{ role: ProviderMessage['role']; content: string }>).reverse().filter((message) => message.content.trim())
+      : []
+  }
+
+  private fitHistory(history: ProviderMessage[], budget: number): ProviderMessage[] {
+    const result: ProviderMessage[] = []
+    let used = 0
+    for (const message of history.toReversed()) {
+      const tokens = estimateTokens(message.content)
+      if (used + tokens > budget) continue
+      result.unshift(message); used += tokens
+    }
+    return result
+  }
+
+  private messageTokens(messages: ProviderMessage[]): number {
+    return messages.reduce((sum, message) => sum + estimateTokens(message.content) + 4, 0)
+  }
+
+  private fitFinalMessages(task: AITaskEnvelope, source: ContextBundle, history: ProviderMessage[], limit: number): { messages: ProviderMessage[]; context: ContextBundle } {
+    const context: ContextBundle = { ...source, items: source.items.map((item) => ({ ...item })), metadata: { ...source.metadata } }
+    const fittedHistory = [...history]
+    while (context.items.length) {
+      const messages = composeProviderMessages({ task, context, history: fittedHistory })
+      const overflow = this.messageTokens(messages) - limit
+      if (overflow <= 0) return { messages, context }
+      const last = context.items.at(-1)!
+      const keepTokens = estimateTokens(last.content) - overflow - 8
+      if (keepTokens <= 0) context.items.pop()
+      else last.content = last.content.slice(0, Math.floor(keepTokens * 2.2))
+      context.metadata.estimatedTokens = context.items.reduce((sum, item) => sum + estimateTokens(item.content), 0)
+      context.metadata.sourceIds = context.items.map((item) => item.id)
+    }
+    let messages = composeProviderMessages({ task, context, history: fittedHistory })
+    while (this.messageTokens(messages) > limit && fittedHistory.length) {
+      fittedHistory.shift()
+      messages = composeProviderMessages({ task, context, history: fittedHistory })
+    }
+    if (this.messageTokens(messages) > limit) throw Object.assign(new Error('模型输入超出上下文预算。'), { code: 'MODEL_CONTEXT_BUDGET_EXCEEDED' })
+    return { messages, context }
   }
 }

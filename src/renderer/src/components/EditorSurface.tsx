@@ -4,16 +4,21 @@ import { EditorContent, useEditor } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
 import { Check, Focus, LocateFixed, Redo2, Save, ShieldCheck, Sparkles, Undo2, X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { DocumentContent, DocumentNode, LocalLintIssue, ProofreadIssue, TextPatch } from '../../../shared/domain'
+import type { DocumentContent, DocumentNode, DocumentTaskTarget, LocalLintIssue, ProofreadIssue, TextPatch } from '../../../shared/domain'
+import { textIdentity } from '../../../shared/text-identity'
 import { findTextRange, findTextRanges, plainTextRangeToPm } from '../services/prosemirror-range'
 import { SaveCoordinator, type SaveState } from '../services/save-coordinator'
 
 export interface EditorSelection { fromPm: number; toPm: number; text: string }
 export interface EditorController {
+  readonly projectId: string
+  readonly documentId: string
   flush(): Promise<void>
   hasPending(): boolean
   currentRevision(): number
-  createPatch(selection: EditorSelection, replacement: string): Promise<TextPatch>
+  freezeTarget(requestId: string, selection?: EditorSelection): Promise<DocumentTaskTarget>
+  insertCandidate(target: DocumentTaskTarget, text: string): Promise<void>
+  createPatch(target: DocumentTaskTarget, replacement: string): Promise<TextPatch>
   applyPatch(patch: TextPatch): Promise<TextPatch>
 }
 
@@ -22,10 +27,9 @@ const issueLabel = (kind: string): string => ({
   quote: '引号', punctuation: '标点', typo: '错别字', grammar: '语法', reference: '指代', repetition: '重复', format: '格式'
 }[kind] ?? '文字提示')
 
-export function EditorSurface({ node, content, focusMode, onFocusMode, onSaved, onSelection, onRegisterInsert, onRegisterController, onOpenPatches }: {
+export function EditorSurface({ node, content, focusMode, onFocusMode, onSaved, onSelection, onRegisterController, onOpenPatches }: {
   node: DocumentNode; content: DocumentContent; focusMode: boolean; onFocusMode(value: boolean): void
   onSaved(content: DocumentContent): void; onSelection(selection?: EditorSelection): void
-  onRegisterInsert(handler: (text: string) => Promise<void>): void
   onRegisterController(controller?: EditorController): void
   onOpenPatches(): void
 }): React.JSX.Element {
@@ -42,19 +46,25 @@ export function EditorSurface({ node, content, focusMode, onFocusMode, onSaved, 
   const onSavedRef = useRef(onSaved)
   const pendingStyleSample = useRef<{ origin: 'ai'; text: string } | undefined>(undefined)
   const renderedDocumentId = useRef(node.id)
+  const latestPlainText = useRef(content.plainText)
+  const latestRevision = useRef(content.revision)
   const initialRevision = useRef({ documentId: node.id, revision: content.revision })
   if (initialRevision.current.documentId !== node.id) initialRevision.current = { documentId: node.id, revision: content.revision }
   useEffect(() => { onSavedRef.current = onSaved }, [onSaved])
 
   const runLocalLint = useCallback(async (text: string): Promise<void> => {
-    setLocalIssues(await window.workspace.linter.run(text))
+    const sourceHash = textIdentity(text)
+    const next = await window.workspace.linter.run(text)
+    if (textIdentity(latestPlainText.current) !== sourceHash) return
+    setLocalIssues(next.map((issue) => ({ ...issue, documentId: node.id, sourceRevision: latestRevision.current })))
     setIgnoredIssues(new Set())
-  }, [])
+  }, [node.id])
 
   const coordinator = useMemo(() => new SaveCoordinator(initialRevision.current.revision, async (snapshot) =>
     window.workspace.documents.save({ projectId: node.projectId, documentId: node.id, editorJson: snapshot.editorJson,
       plainText: snapshot.plainText, expectedRevision: snapshot.baseRevision, styleSample: snapshot.styleSample }), (saved) => {
     onSavedRef.current(saved)
+    latestRevision.current = saved.revision
     setLiveWordCount(saved.wordCount)
     void runLocalLint(saved.plainText)
   }, (state, error) => {
@@ -68,6 +78,9 @@ export function EditorSurface({ node, content, focusMode, onFocusMode, onSaved, 
     editorProps: { attributes: { class: 'manuscript-editor', spellcheck: 'false' } },
     onUpdate: ({ editor: activeEditor }) => {
       const plainText = activeEditor.getText({ blockSeparator: '\n\n' })
+      latestPlainText.current = plainText
+      setLocalIssues([])
+      setIgnoredIssues(new Set())
       const styleSample = pendingStyleSample.current
       pendingStyleSample.current = undefined
       setLiveWordCount((plainText.match(/[\p{Script=Han}]/gu)?.length ?? 0) + (plainText.match(/[A-Za-z0-9]+/g)?.length ?? 0))
@@ -82,6 +95,8 @@ export function EditorSurface({ node, content, focusMode, onFocusMode, onSaved, 
 
   useEffect(() => {
     coordinator.resetRevision(content.revision)
+    latestRevision.current = content.revision
+    latestPlainText.current = content.plainText
     setLiveWordCount(content.wordCount)
     const sameDocument = renderedDocumentId.current === content.documentId
     renderedDocumentId.current = content.documentId
@@ -93,27 +108,43 @@ export function EditorSurface({ node, content, focusMode, onFocusMode, onSaved, 
     void runLocalLint(content.plainText)
   }, [content.documentId, content.editorJson, content.revision, content.plainText, content.wordCount, coordinator, editor, onSelection, runLocalLint])
 
-  useEffect(() => onRegisterInsert(async (text) => {
-    if (!editor || !text) return
-    await coordinator.flush()
-    await window.workspace.snapshots.create(node.projectId, node.id, 'ai_edit')
-    pendingStyleSample.current = { origin: 'ai', text }
-    if (!editor.chain().focus().insertContent(text).run()) throw new Error('无法把候选文本插入当前章节。')
-    await coordinator.flush()
-  }), [coordinator, editor, node.id, node.projectId, onRegisterInsert])
-
   useEffect(() => {
     if (!editor) return
     const controller: EditorController = {
+      projectId: node.projectId,
+      documentId: node.id,
       flush: () => coordinator.flush(),
       hasPending: () => coordinator.hasPending(),
       currentRevision: () => coordinator.currentRevision(),
-      createPatch: async (selection, replacement) => {
+      freezeTarget: async (requestId, selection) => {
         await coordinator.flush()
+        let frozenSelection: DocumentTaskTarget['selection']
+        if (selection) {
+          const currentText = editor.state.doc.textBetween(selection.fromPm, selection.toPm, '\n')
+          if (currentText !== selection.text) throw new Error('选区已经变化，请重新选择后发送。')
+          frozenSelection = { ...selection, originalHash: textIdentity(currentText) }
+        }
+        return { requestId, projectId: node.projectId, documentId: node.id,
+          sourceRevision: coordinator.currentRevision(), selection: frozenSelection }
+      },
+      insertCandidate: async (target, text) => {
+        if (!text || target.projectId !== node.projectId || target.documentId !== node.id) throw new Error('请先打开候选所属章节。')
+        await coordinator.flush()
+        if (coordinator.currentRevision() !== target.sourceRevision) throw new Error('候选生成后正文已变化，请重新生成。')
+        await window.workspace.snapshots.create(node.projectId, node.id, 'ai_edit')
+        pendingStyleSample.current = { origin: 'ai', text }
+        if (!editor.chain().focus().insertContent(text).run()) throw new Error('无法把候选文本插入来源章节。')
+        await coordinator.flush()
+      },
+      createPatch: async (target, replacement) => {
+        if (target.projectId !== node.projectId || target.documentId !== node.id || !target.selection) throw new Error('修改目标不属于当前章节。')
+        await coordinator.flush()
+        if (coordinator.currentRevision() !== target.sourceRevision) throw new Error('正文已在请求后变化，提案已过期。')
+        const selection = target.selection
         const currentText = editor.state.doc.textBetween(selection.fromPm, selection.toPm, '\n')
-        if (currentText !== selection.text) throw new Error('选区已经变化，请重新选择后生成提案。')
+        if (currentText !== selection.text || textIdentity(currentText) !== selection.originalHash) throw new Error('选区已经变化，请重新选择后生成提案。')
         return window.workspace.patches.propose({ projectId: node.projectId, documentId: node.id,
-          documentRevision: coordinator.currentRevision(), fromPm: selection.fromPm, toPm: selection.toPm,
+          documentRevision: target.sourceRevision, fromPm: selection.fromPm, toPm: selection.toPm,
           originalText: currentText, replacement })
       },
       applyPatch: async (patch) => {
@@ -138,12 +169,16 @@ export function EditorSurface({ node, content, focusMode, onFocusMode, onSaved, 
 
   const applyLocalIssue = async (issue: LocalLintIssue): Promise<void> => {
     if (!editor || !issue.replacement) return
+    if (issue.documentId !== node.id) throw new Error('校对结果不属于当前章节。')
     const range = plainTextRangeToPm(editor.state.doc, issue.from, issue.to)
     if (!range) throw new Error('原文位置已经变化，请重新校对。')
     const plainText = editor.getText({ blockSeparator: '\n\n' })
     const current = plainText.slice(issue.from, issue.to)
-    if (!current) throw new Error('原文位置已经变化，请重新校对。')
-    editor.chain().focus().insertContentAt(range, issue.replacement).run()
+    if (textIdentity(plainText) !== issue.sourceTextHash || current !== issue.originalText ||
+      editor.state.doc.textBetween(range.from, range.to, '\n\n') !== issue.originalText) {
+      throw new Error('正文已变化，这条校对结果已失效，请重新检查。')
+    }
+    if (!editor.chain().focus().insertContentAt(range, issue.replacement).run()) throw new Error('无法应用校对建议。')
     await coordinator.flush()
   }
 
