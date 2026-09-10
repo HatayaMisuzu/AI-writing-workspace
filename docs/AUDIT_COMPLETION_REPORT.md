@@ -1,6 +1,6 @@
 # 审查收敛与发布验收报告
 
-执行日期：2026-09-09
+执行日期：2026-09-09 至 2026-09-10
 
 ## 基线
 
@@ -32,15 +32,15 @@
 - `npm ci`：通过，577 packages。
 - `npm run verify`：通过；lint、typecheck、27 个 Vitest 文件 / 95 项测试、production build 全部成功。
 - `tests/electron-e2e.mjs`：10/10 通过，使用临时 `userData` 和本地 OpenAI-compatible HTTP fixture。
-- `npm run dist`：通过，生成 `release/墨记 Setup 0.3.0.exe`。
-- packaged app smoke：通过，`release/win-unpacked/墨记.exe` 可用隔离 `userData` 启动并显示作品库。
+- `npm run dist`：标准 Windows CI 使用 Electron 43.3.0 通过，生成 NSIS 安装包。
+- packaged app smoke：标准 Windows CI 确认安装包内的 `墨记.exe` 以 Electron 43.3.0 和隔离 `userData` 启动并显示作品库。
 - `npm audit --omit=dev`：0 vulnerabilities。
 - `npm audit`：2 moderate，均来自开发期 Vitest / `@vitest/mocker`；官方自动修复要求升级到 Vitest 5，未在本轮强制做破坏性 major upgrade。
 
-安装包 SHA-256：`F9E951E3F3425C9CD6CE25E0C9360FB4AFE7A8EDC58011A02920520DECEACC31`。
+首轮正式发布全链路证据：[GitHub Actions run 34435092259](https://github.com/HatayaMisuzu/AI-writing-workspace/actions/runs/34435092259)，制品名 `inkstone-windows`。
 
 ## 本地环境说明与仍需决策项
 
-- 本机无法连接 Electron 二进制下载源，且 npm 的 install-script 策略未落下项目声明的 Electron 43.3.0 runtime。本地 E2E/打包曾明确复用机器上已存在且通过 E2E 的 Electron 40.10.2 runtime；这只能证明功能链路，不能作为正式发布制品。正式 `dist` 现会拒绝运行时覆盖和版本错配，标准 Windows CI 将按 lockfile 使用 Electron 43.3.0，并以安装包内实际运行时版本完成冒烟校验。
+- 本机无法连接 Electron 二进制下载源。本地 E2E/打包曾明确复用机器上已存在且通过 E2E 的 Electron 40.10.2 runtime；这只能证明功能链路，不作为正式发布制品。正式 `dist` 现会拒绝运行时覆盖和版本错配；标准 Windows CI 已按 lockfile 使用 Electron 43.3.0，并通过安装包内实际运行时版本冒烟校验。
 - 本轮未使用真实付费 Provider 凭据；协议与状态机由本地 fixture 验收。具体第三方兼容性需在设置页测试。
 - 仓库没有明确 LICENSE。许可证必须由权利人决定，本轮没有擅自添加。
