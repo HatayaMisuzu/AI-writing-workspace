@@ -51,3 +51,5 @@ npm run dist    # 生成 Windows NSIS 安装包
 Provider 接口、任务路由、Streaming、取消、超时与错误处理使用本地确定性 OpenAI-compatible fixture 验收，不需要真实付费凭据。本轮没有重新执行真实联网 Provider 测试；具体服务的兼容性仍应使用设置页“测试连接”确认。详见 [核心正确性修复报告](docs/CORE_CORRECTNESS_REPORT.md)；此前执行证据保留在 [初版执行报告](docs/EXECUTION_REPORT.md)。
 
 仓库目前没有明确 LICENSE；发布或对外分发前需由权利人选择许可证。
+
+正式打包会先校验 `node_modules` 中的 Electron 运行时与已安装包版本完全一致，并拒绝通过 `ELECTRON_OVERRIDE_DIST_PATH` 借用其他版本，避免生成版本错配的安装包。

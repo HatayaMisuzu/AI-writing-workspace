@@ -41,6 +41,6 @@
 
 ## 本地环境说明与仍需决策项
 
-- 本机无法连接 Electron 二进制下载源，且 npm 的 install-script 策略未落下项目声明的 Electron 43.3.0 runtime。本地 E2E/打包明确复用了机器上已存在且通过 E2E 的 Electron 40.10.2 runtime。CI 会在标准 Windows runner 上按 lockfile 使用 Electron 43.3.0；该 CI 尚未在远端实际触发，因此 43.3.0 安装包仍需由 CI 再确认一次。
+- 本机无法连接 Electron 二进制下载源，且 npm 的 install-script 策略未落下项目声明的 Electron 43.3.0 runtime。本地 E2E/打包曾明确复用机器上已存在且通过 E2E 的 Electron 40.10.2 runtime；这只能证明功能链路，不能作为正式发布制品。正式 `dist` 现会拒绝运行时覆盖和版本错配，标准 Windows CI 将按 lockfile 使用 Electron 43.3.0，并以安装包内实际运行时版本完成冒烟校验。
 - 本轮未使用真实付费 Provider 凭据；协议与状态机由本地 fixture 验收。具体第三方兼容性需在设置页测试。
 - 仓库没有明确 LICENSE。许可证必须由权利人决定，本轮没有擅自添加。
