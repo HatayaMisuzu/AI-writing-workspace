@@ -19,7 +19,7 @@
     "verify": "npm run lint && npm run typecheck && npm run test && npm run build",
     "release:preflight": "node scripts/release-preflight.mjs",
     "dist": "npm run release:preflight && npm run build && electron-builder",
-    "postinstall": "node -e \"console.log('No native dependency rebuild required')\""
+    "postinstall": "node node_modules/electron/install.js"
   },
   "dependencies": {
     "@tiptap/extension-character-count": "3.31.3",
