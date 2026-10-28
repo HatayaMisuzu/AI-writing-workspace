@@ -27,6 +27,8 @@ export interface WorkspaceApi {
     delete(projectId: string, documentId: string): Promise<void>
     save(input: { projectId: string; documentId: string; editorJson: Record<string, unknown>; plainText: string; expectedRevision?: number; styleSample?: { origin: TextOrigin; text: string } }): Promise<DocumentContent>
     search(projectId: string, query: string): Promise<SearchResult[]>
+    /** S4：按细纲行批量建空章（构思） */
+    batchCreateChapters(input: { projectId: string; volumeId: string; lines: string[] }): Promise<DocumentNode[]>
   }
   snapshots: {
     create(projectId: string, documentId: string, reason: Snapshot['reason']): Promise<Snapshot>

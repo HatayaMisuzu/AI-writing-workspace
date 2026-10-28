@@ -22,7 +22,8 @@ const api: WorkspaceApi = {
     create: (input) => invoke('documents:create', input), rename: (projectId, documentId, title) => invoke('documents:rename', projectId, documentId, title),
     reorder: (projectId, documentId, parentId, orderIndex) => invoke('documents:reorder', projectId, documentId, parentId, orderIndex),
     delete: (projectId, documentId) => invoke('documents:delete', projectId, documentId), save: (input) => invoke('documents:save', input),
-    search: (projectId, query) => invoke('documents:search', projectId, query)
+    search: (projectId, query) => invoke('documents:search', projectId, query),
+    batchCreateChapters: (input) => invoke('documents:batch-create-chapters', input)
   },
   snapshots: {
     create: (projectId, documentId, reason) => invoke('snapshots:create', projectId, documentId, reason),

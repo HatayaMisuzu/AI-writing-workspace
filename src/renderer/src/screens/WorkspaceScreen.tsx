@@ -4,7 +4,7 @@ import type { DocumentContent, DocumentNode, DocumentTaskTarget, Project, Search
 import { ProjectSidebar, type ProjectSection } from '../components/ProjectSidebar'
 import { EditorSurface, type EditorController, type EditorSelection } from '../components/EditorSurface'
 import { AssistantPanel } from '../components/AssistantPanel'
-import { CharactersView, HistoryView, IdeasView, MemoryView, NotesView, PatchDrawer } from './ProjectViews'
+import { ChapterOutlineAside, CharactersView, HistoryView, IdeasView, MemoryView, NotesView, OutlineView, PatchDrawer } from './ProjectViews'
 import { Modal } from '../components/Modal'
 import { parseSearchSnippet } from '../services/search-snippet'
 
@@ -164,7 +164,11 @@ export function WorkspaceScreen({ project, onProjectChanged, onSettings, onRegis
     <div className="workspace-main">
       <div className="workspace-actions"><button onClick={() => setSearchOpen(true)}><Search size={16} />全文检索</button><button onClick={() => setIdeaOpen(true)}><Lightbulb size={16} />快速灵感 <kbd>Ctrl J</kbd></button>{selected && <button onClick={() => setPatchOpen(true)}><SlidersHorizontal size={16} />修改提案</button>}<span />{focusMode && <button onClick={() => setFocusMode(false)}><SidebarClose size={16} />退出专注</button>}</div>
       {navigationError && <div className="navigation-error" role="alert">{navigationError}</div>}
-      {section === 'manuscript' && selected && content ? <EditorSurface node={selected} content={content} focusMode={focusMode} onFocusMode={setFocusMode} onSaved={(saved) => { setContent(saved); void refreshTree(); onProjectChanged() }} onSelection={setSelection} onRegisterController={registerController} onOpenPatches={() => setPatchOpen(true)} />
+      {section === 'manuscript' && selected && content ? <div className="manuscript-with-outline">
+          <EditorSurface node={selected} content={content} focusMode={focusMode} onFocusMode={setFocusMode} onSaved={(saved) => { setContent(saved); void refreshTree(); onProjectChanged() }} onSelection={setSelection} onRegisterController={registerController} onOpenPatches={() => setPatchOpen(true)} />
+          {!focusMode && <ChapterOutlineAside projectId={project.id} chapter={selected} />}
+        </div>
+        : section === 'outline' ? <OutlineView projectId={project.id} tree={tree} onTreeChanged={async () => { await refreshTree(); onProjectChanged() }} onOpenChapter={(node) => void openDocument(node)} />
         : section === 'ideas' ? <IdeasView projectId={project.id} onRegisterFlush={registerAuxiliaryFlush} />
         : section === 'history' ? <HistoryView projectId={project.id} document={selected} currentContent={content} onRestored={(restored) => { setContent(restored); void refreshTree() }} />
         : section === 'ai-data' ? <MemoryView projectId={project.id} />

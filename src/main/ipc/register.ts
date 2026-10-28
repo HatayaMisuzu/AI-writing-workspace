@@ -37,7 +37,7 @@ const handle = <T extends unknown[], R>(channel: string, fn: (...args: T) => R |
 }
 
 import {
-  idSchema, shortTextSchema, contentSchema, nonNegativeIntSchema, projectCreateSchema, documentCreateSchema, documentSaveSchema, noteSaveSchema, characterSaveSchema, providerInputSchema, modelSchema, routeSchema, patchProposalSchema, snapshotReasonSchema, aiStartSchema, aiPreviewContextSchema, noteSectionSchema, outlineSaveSchema
+  idSchema, shortTextSchema, contentSchema, nonNegativeIntSchema, projectCreateSchema, documentCreateSchema, documentSaveSchema, noteSaveSchema, characterSaveSchema, providerInputSchema, modelSchema, routeSchema, patchProposalSchema, snapshotReasonSchema, aiStartSchema, aiPreviewContextSchema, noteSectionSchema, outlineSaveSchema, batchCreateChaptersSchema
 } from './schemas'
 const parse = <T>(schema: z.ZodType<T>, value: unknown): T => schema.parse(value)
 
@@ -99,6 +99,7 @@ export function registerIpc(db: AppDatabase, codec: SecretCodec, network?: Netwo
   handle('outlines:get', (projectId: string, nodeId: string) => documents.getOutline(parse(idSchema, projectId), parse(idSchema, nodeId)))
   handle('outlines:list', (projectId: string) => documents.listOutlines(parse(idSchema, projectId)))
   handle('outlines:save', (input: unknown) => documents.saveOutline(parse(outlineSaveSchema, input)))
+  handle('documents:batch-create-chapters', (input: unknown) => documents.batchCreateChaptersFromOutlines(parse(batchCreateChaptersSchema, input)))
   handle('notes:save', (input: unknown) => projectContent.saveNote(parse(noteSaveSchema, input)))
   handle('notes:delete', (projectId: string, noteId: string) => projectContent.deleteNote(parse(idSchema, projectId), parse(idSchema, noteId)))
   handle('characters:list', (projectId: string) => projectContent.listCharacters(projectId))

@@ -156,6 +156,24 @@ try {
     assert.equal(fixtureHits, 0, '未配置 Provider 时网络 fixture 应收到 0 个请求')
   })
 
+
+  // S4：建细纲后侧栏（大纲视图 + 编辑器侧栏）可见
+  await record('S4 建细纲后侧栏可见', async () => {
+    await running.page.evaluate(async () => {
+      const [project] = await window.workspace.projects.list()
+      const tree = await window.workspace.documents.tree(project.id)
+      const chapter = tree.find((item) => item.type === 'chapter')
+      if (!chapter) throw new Error('无章节')
+      await window.workspace.outlines.save({ projectId: project.id, nodeId: chapter.id, summary: 'S4侧栏细纲验收', beats: ['要点甲'], hook: '钩子乙' })
+    })
+    await running.page.getByRole('button', { name: '大纲', exact: true }).click()
+    await running.page.getByText('S4侧栏细纲验收', { exact: false }).waitFor({ timeout: 10_000 })
+    await running.page.getByRole('button', { name: '正文', exact: true }).click()
+    await running.page.locator('.manuscript-editor').waitFor()
+    await running.page.locator('.chapter-outline-aside').getByText('S4侧栏细纲验收').waitFor({ timeout: 10_000 })
+    await running.page.locator('.chapter-outline-aside').getByText('要点甲').waitFor()
+  })
+
   const fixtureHitsBeforeProvider = fixtureHits
   const ids = await running.page.evaluate(async ({ baseUrl }) => {
     const [project] = await window.workspace.projects.list()
