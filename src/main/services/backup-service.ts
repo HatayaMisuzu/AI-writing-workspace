@@ -44,6 +44,7 @@ interface BackupPayload {
   feedback: Array<Record<string, unknown>>
   styles?: Array<Record<string, unknown>>
   outlines?: Array<Record<string, unknown>>
+  writingDaily?: Array<Record<string, unknown>>
   patches: Array<Record<string, unknown>>
 }
 
@@ -57,7 +58,8 @@ const backupPayloadSchema = z.object({
   ideas: z.array(rowSchema), notes: z.array(rowSchema), characters: z.array(rowSchema), memories: z.array(rowSchema),
   threads: z.array(rowSchema), messages: z.array(rowSchema), digests: z.array(rowSchema), origins: z.array(rowSchema),
   feedback: z.array(rowSchema), styles: z.array(rowSchema).optional(), patches: z.array(rowSchema),
-  outlines: z.array(z.record(z.string(), z.unknown())).optional()
+  outlines: z.array(z.record(z.string(), z.unknown())).optional(),
+  writingDaily: z.array(z.record(z.string(), z.unknown())).optional()
 })
 
 async function atomicWriteFile(path: string, data: string | Uint8Array): Promise<void> {
@@ -198,6 +200,14 @@ function validateBackup(payload: BackupPayload): void {
     const beats = JSON.parse(String(row.beats_json)) as unknown
     if (!Array.isArray(beats) || !beats.every((beat) => typeof beat === 'string')) throw new Error('BACKUP_INVALID_OUTLINE')
   })
+  ;(payload.writingDaily ?? []).forEach((row) => {
+    if (row.project_id !== projectId) throw new Error('BACKUP_INVALID_WRITING_DAILY')
+    if (typeof row.date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(row.date)) throw new Error('BACKUP_INVALID_WRITING_DAILY_DATE')
+    for (const key of ['human_words_added', 'human_words_deleted', 'ai_words_accepted', 'active_seconds'] as const) {
+      const n = row[key]
+      if (typeof n !== 'number' || !Number.isInteger(n) || n < 0) throw new Error('BACKUP_INVALID_WRITING_DAILY')
+    }
+  })
   payload.patches.forEach((row) => {
     if (!nodeIds.has(row.document_id as string)) throw new Error('BACKUP_INVALID_PATCH_DOCUMENT')
     assertEnum(row.status, ['proposed', 'accepted', 'rejected', 'stale'], 'BACKUP_INVALID_PATCH_STATUS')
@@ -232,7 +242,8 @@ export class BackupService {
       threads: rows(this.db, 'chat_threads', projectId), messages: rows(this.db, 'chat_messages', projectId),
       digests: rows(this.db, 'chapter_digests', projectId), origins: rows(this.db, 'text_origins', projectId),
       feedback: rows(this.db, 'style_feedback', projectId), styles: rows(this.db, 'style_samples', projectId),
-      patches: rows(this.db, 'text_patches', projectId), outlines: rows(this.db, 'node_outlines', projectId)
+      patches: rows(this.db, 'text_patches', projectId), outlines: rows(this.db, 'node_outlines', projectId),
+      writingDaily: rows(this.db, 'writing_daily', projectId)
     }
     await atomicWriteFile(path, JSON.stringify(payload, (_key, value) => Buffer.isBuffer(value) ? value.toString('base64') : value, 2))
   }
@@ -282,6 +293,8 @@ export class BackupService {
       })
       const outlineInsert = this.db.raw.prepare(`INSERT INTO node_outlines(node_id,project_id,summary,beats_json,hook,updated_at) VALUES (?,?,?,?,?,?)`)
       payload.outlines?.forEach((item) => outlineInsert.run(...[idMap.get(item.node_id as string), projectId, item.summary, item.beats_json, item.hook, item.updated_at ?? now].map(sqlValue)))
+      const writingInsert = this.db.raw.prepare(`INSERT INTO writing_daily(project_id,date,human_words_added,human_words_deleted,ai_words_accepted,active_seconds) VALUES (?,?,?,?,?,?)`)
+      payload.writingDaily?.forEach((item) => writingInsert.run(...[projectId, item.date, item.human_words_added ?? 0, item.human_words_deleted ?? 0, item.ai_words_accepted ?? 0, item.active_seconds ?? 0].map(sqlValue)))
       const ideaInsert = this.db.raw.prepare(`INSERT INTO ideas(id,project_id,content,status,tags_json,created_at,updated_at) VALUES (?,?,?,?,?,?,?)`)
       payload.ideas.forEach((idea) => ideaInsert.run(...[idMap.get(idea.id as string), projectId, idea.content, idea.status, idea.tags_json, now, now].map(sqlValue)))
       const noteInsert = this.db.raw.prepare(`INSERT INTO project_notes(id,project_id,section,title,content,created_at,updated_at) VALUES (?,?,?,?,?,?,?)`)

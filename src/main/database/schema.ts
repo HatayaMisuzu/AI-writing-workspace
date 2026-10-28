@@ -233,6 +233,17 @@ CREATE TABLE IF NOT EXISTS text_patches (
   created_at INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS writing_daily (
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  date TEXT NOT NULL,
+  human_words_added INTEGER NOT NULL DEFAULT 0,
+  human_words_deleted INTEGER NOT NULL DEFAULT 0,
+  ai_words_accepted INTEGER NOT NULL DEFAULT 0,
+  active_seconds INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (project_id, date)
+);
+CREATE INDEX IF NOT EXISTS idx_writing_daily_project_date ON writing_daily(project_id, date);
+
 CREATE TABLE IF NOT EXISTS app_settings (
   key TEXT PRIMARY KEY,
   value_json TEXT NOT NULL,

@@ -94,3 +94,11 @@ export const aiPreviewContextSchema = z.object({
   threadId: idSchema,
   task: aiTaskSchema.extend({ userIntent: z.string().max(200_000) })
 })
+
+// S9：日更目标写入。0/负数拒绝；缺省字段不预置默认目标值。
+export const writingGoalsInputSchema = z.object({
+  dailyWordGoalEnabled: z.boolean().optional(),
+  dailyWordGoal: z.number().int().nullable().optional(),
+  dailyChapterGoalEnabled: z.boolean().optional(),
+  dailyChapterGoal: z.number().int().nullable().optional()
+}).strict()

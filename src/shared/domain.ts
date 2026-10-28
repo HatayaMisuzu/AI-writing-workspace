@@ -28,6 +28,30 @@ export interface Project {
   totalWordCount: number
 }
 
+
+
+/** S9：日更统计行（显示用净值已夹到 ≥0；删除数单独保留）。 */
+export interface WritingDailyRow {
+  date: string
+  humanWordsAdded: number
+  humanWordsDeleted: number
+  humanWordsNetDisplay: number
+  aiWordsAccepted: number
+  activeSeconds: number
+}
+
+/**
+ * S9：可选日更目标视图。
+ * 数据层不预置任何默认目标值；settings_json 缺席字段 = 空且未启用。
+ * false/null 仅为读出派生，不得写回成默认目标数字。
+ */
+export interface WritingGoals {
+  dailyWordGoalEnabled: boolean
+  dailyWordGoal: number | null
+  dailyChapterGoalEnabled: boolean
+  dailyChapterGoal: number | null
+}
+
 export interface DocumentNode {
   id: string
   projectId: string

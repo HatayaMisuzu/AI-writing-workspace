@@ -20,6 +20,7 @@ import { cancelClose, confirmClose } from '../window-close'
 import { ChatService } from '../services/chat-service'
 import { MemoryIntentRunner } from '../ai/memory-intent'
 import { ProofreadingRunner } from '../ai/proofreading-runner'
+import { WritingDailyService } from '../services/writing-daily-service'
 
 const trustedSender = (event: IpcMainInvokeEvent | IpcMainEvent): void => {
   if (event.senderFrame !== event.sender.mainFrame) throw new Error('IPC_UNTRUSTED_FRAME')
@@ -37,7 +38,7 @@ const handle = <T extends unknown[], R>(channel: string, fn: (...args: T) => R |
 }
 
 import {
-  idSchema, shortTextSchema, contentSchema, nonNegativeIntSchema, projectCreateSchema, documentCreateSchema, documentSaveSchema, noteSaveSchema, characterSaveSchema, providerInputSchema, modelSchema, routeSchema, patchProposalSchema, snapshotReasonSchema, aiStartSchema, aiPreviewContextSchema, noteSectionSchema, outlineSaveSchema, batchCreateChaptersSchema
+  idSchema, shortTextSchema, contentSchema, nonNegativeIntSchema, projectCreateSchema, documentCreateSchema, documentSaveSchema, noteSaveSchema, characterSaveSchema, providerInputSchema, modelSchema, routeSchema, patchProposalSchema, snapshotReasonSchema, aiStartSchema, aiPreviewContextSchema, noteSectionSchema, outlineSaveSchema, batchCreateChaptersSchema, writingGoalsInputSchema
 } from './schemas'
 const parse = <T>(schema: z.ZodType<T>, value: unknown): T => schema.parse(value)
 
@@ -62,6 +63,7 @@ export function registerIpc(db: AppDatabase, codec: SecretCodec, network?: Netwo
   const chat = new ChatService(db)
   const memoryIntent = new MemoryIntentRunner(db, providers)
   const proofreading = new ProofreadingRunner(db, providers)
+  const writingDaily = new WritingDailyService(db)
 
   handle('window:minimize', () => BrowserWindow.getFocusedWindow()?.minimize())
   handle('window:toggle-maximize', () => {
@@ -119,6 +121,11 @@ export function registerIpc(db: AppDatabase, codec: SecretCodec, network?: Netwo
   handle('patches:prepare', (projectId: string, patchId: string, revision: number, currentText: string) => patches.prepare(parse(idSchema, projectId), parse(idSchema, patchId), parse(nonNegativeIntSchema, revision), parse(contentSchema, currentText)))
   handle('patches:complete', (projectId: string, patchId: string, savedRevision: number) => patches.complete(parse(idSchema, projectId), parse(idSchema, patchId), parse(nonNegativeIntSchema, savedRevision)))
   handle('patches:reject', (projectId: string, patchId: string) => patches.reject(parse(idSchema, projectId), parse(idSchema, patchId)))
+
+  handle('writing:get-day', (projectId: string, date?: string) => writingDaily.getDay(parse(idSchema, projectId), date === undefined ? undefined : parse(z.string().regex(/^\d{4}-\d{2}-\d{2}$/), date)))
+  handle('writing:list-range', (projectId: string, fromDate: string, toDate: string) => writingDaily.listRange(parse(idSchema, projectId), parse(z.string().regex(/^\d{4}-\d{2}-\d{2}$/), fromDate), parse(z.string().regex(/^\d{4}-\d{2}-\d{2}$/), toDate)))
+  handle('writing:get-goals', (projectId: string) => writingDaily.getGoals(parse(idSchema, projectId)))
+  handle('writing:set-goals', (projectId: string, input: unknown) => writingDaily.setGoals(parse(idSchema, projectId), parse(writingGoalsInputSchema, input)))
   handle('linter:run', (text: string) => lintChineseText(text))
   handle('digests:run', (projectId: string, chapterId: string) => digestRunner.run(parse(idSchema, projectId), parse(idSchema, chapterId)))
   handle('digests:list', (projectId: string, chapterId?: string) => digests.list(projectId, chapterId))

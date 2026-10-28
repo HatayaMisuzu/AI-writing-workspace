@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import type { TextPatch } from '../../shared/domain'
 import type { AppDatabase } from '../database/database'
-import { DocumentService } from './document-service'
+import { DocumentService, countChineseWords } from './document-service'
+import { WritingDailyService } from './writing-daily-service'
 
 type PatchRow = {
   id: string; project_id: string; document_id: string; document_revision: number; from_pos: number; to_pos: number
@@ -16,7 +17,11 @@ const mapPatch = (row: PatchRow): TextPatch => ({
 
 export class PatchService {
   private readonly documents: DocumentService
-  constructor(private readonly db: AppDatabase) { this.documents = new DocumentService(db) }
+  private readonly writingDaily: WritingDailyService
+  constructor(private readonly db: AppDatabase, writingDaily?: WritingDailyService) {
+    this.writingDaily = writingDaily ?? new WritingDailyService(db)
+    this.documents = new DocumentService(db, this.writingDaily)
+  }
 
   propose(input: {
     projectId: string; documentId: string; documentRevision: number; fromPm: number; toPm: number
@@ -60,6 +65,9 @@ export class PatchService {
     const persisted = this.documents.getContent(projectId, patch.documentId)
     if (persisted.revision !== savedRevision || savedRevision <= patch.documentRevision) throw new Error('PATCH_SAVE_NOT_CONFIRMED')
     this.setStatus(projectId, patchId, 'accepted')
+    // 采纳 AI 字数单独累计，不计入人工码字
+    const aiWords = countChineseWords(patch.replacement)
+    if (aiWords > 0) this.writingDaily.addAiAcceptedWords(projectId, aiWords)
     return this.get(projectId, patchId)
   }
 

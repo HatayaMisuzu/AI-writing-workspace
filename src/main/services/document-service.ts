@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import type { DocumentContent, DocumentNode, DocumentType, SearchResult, Snapshot, TextOrigin, NodeOutline } from '../../shared/domain'
 import type { AppDatabase } from '../database/database'
+import { WritingDailyService } from './writing-daily-service'
 import { StyleSampleService } from './style-sample-service'
 
 type NodeRow = {
@@ -32,7 +33,11 @@ export const countChineseWords = (text: string): number => {
 
 export class DocumentService {
   private readonly styleSamples: StyleSampleService
-  constructor(private readonly db: AppDatabase) { this.styleSamples = new StyleSampleService(db) }
+  private readonly writingDaily: WritingDailyService
+  constructor(private readonly db: AppDatabase, writingDaily?: WritingDailyService) {
+    this.styleSamples = new StyleSampleService(db)
+    this.writingDaily = writingDaily ?? new WritingDailyService(db)
+  }
 
   private assertNode(projectId: string, documentId: string): NodeRow {
     const row = this.db.raw.prepare(`
@@ -148,7 +153,12 @@ export class DocumentService {
     })
   }
 
-  saveContent(input: { projectId: string; documentId: string; editorJson: Record<string, unknown>; plainText: string; expectedRevision?: number; styleSample?: { origin: TextOrigin; text: string } }): DocumentContent {
+  saveContent(input: {
+    projectId: string; documentId: string; editorJson: Record<string, unknown>; plainText: string
+    expectedRevision?: number; styleSample?: { origin: TextOrigin; text: string }
+    /** skip：快照恢复 / AI 采纳保存等，不计入人工码字（AI 字数由 PatchService.complete 记账）。 */
+    writingStats?: 'human' | 'skip'
+  }): DocumentContent {
     const current = this.getContent(input.projectId, input.documentId)
     if (input.expectedRevision !== undefined && current.revision !== input.expectedRevision) throw new Error('REVISION_CONFLICT')
     const deletion = current.plainText.length - input.plainText.length
@@ -158,9 +168,11 @@ export class DocumentService {
     if (current.revision > 0 && (!latestSnapshot || Date.now() - latestSnapshot.created_at >= 10 * 60 * 1000)) {
       this.createSnapshot(input.projectId, input.documentId, 'interval')
     }
+    const prevWords = countChineseWords(current.plainText)
     const now = Date.now()
     const revision = current.revision + 1
     const wordCount = countChineseWords(input.plainText)
+    const skipHuman = input.writingStats === 'skip' || input.styleSample?.origin === 'ai'
     this.db.transaction(() => {
       this.db.raw.prepare(`UPDATE document_contents SET editor_json = ?, plain_text = ?, word_count = ?, revision = ?, updated_at = ?
         WHERE document_id = ? AND project_id = ?`)
@@ -177,6 +189,11 @@ export class DocumentService {
       if (input.styleSample) this.styleSamples.record({ projectId: input.projectId, documentId: input.documentId,
         origin: input.styleSample.origin, text: input.styleSample.text, sourceRevision: revision })
       else this.styleSamples.recordHumanIfSafe(input.projectId, input.documentId, input.plainText, revision)
+      if (!skipHuman) {
+        const delta = wordCount - prevWords
+        if (delta > 0) this.writingDaily.addHumanWords(input.projectId, { added: delta })
+        else if (delta < 0) this.writingDaily.addHumanWords(input.projectId, { deleted: -delta })
+      }
     })
     return this.getContent(input.projectId, input.documentId)
   }
@@ -210,10 +227,26 @@ export class DocumentService {
     const row = this.db.raw.prepare('SELECT * FROM snapshots WHERE id = ? AND project_id = ?').get(snapshotId, projectId) as Record<string, unknown> | undefined
     if (!row) throw new Error('SNAPSHOT_NOT_FOUND_IN_PROJECT')
     const documentId = row.document_id as string
+    const reason = row.reason as string
+    let metadata: Record<string, unknown> = {}
+    try { metadata = JSON.parse(String(row.metadata_json || '{}')) as Record<string, unknown> } catch { metadata = {} }
     this.createSnapshot(projectId, documentId, 'pre_restore', { restoredFrom: snapshotId })
-    return this.saveContent({
-      projectId, documentId, editorJson: JSON.parse(row.content as string) as Record<string, unknown>, plainText: row.plain_text as string
+    const content = this.saveContent({
+      projectId, documentId,
+      editorJson: JSON.parse(row.content as string) as Record<string, unknown>,
+      plainText: row.plain_text as string,
+      writingStats: 'skip'
     })
+    // 撤销已采纳的 AI 补丁：回退 ai_words_accepted（不计入码字）
+    if (reason === 'ai_edit' && typeof metadata.patchId === 'string') {
+      const patch = this.db.raw.prepare('SELECT replacement, status FROM text_patches WHERE id = ? AND project_id = ?')
+        .get(metadata.patchId, projectId) as { replacement: string; status: string } | undefined
+      if (patch?.status === 'accepted') {
+        const words = countChineseWords(patch.replacement)
+        if (words > 0) this.writingDaily.addAiAcceptedWords(projectId, -words)
+      }
+    }
+    return content
   }
 
   search(projectId: string, query: string, limit = 30): SearchResult[] {
