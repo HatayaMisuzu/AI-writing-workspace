@@ -70,7 +70,10 @@ export const redactSecretsInText = (text: string): string =>
   text.replace(/(^|[?&;\s"'(])((?:key|api_key|apikey|api-key|token|access_token|refresh_token|secret|client_secret|password|signature|sig|auth))=([^&#\s"')]+)/gi, `$1$2=${REDACTED}`)
 
 const endpointParts = (raw: string): { protocol: string; host: string; port: string; path: string } | undefined => {
-  const checked = checkBaseUrl(raw.replaceAll(REDACTED, 'x'))
+  // *** 只允许出现在 query：host/path 里一旦有 * 就拒绝比较（勿用 x 占位，否则已存 host 标签为 x 时会被当成同一端点）
+  const { head } = splitUrl(raw)
+  if (head.includes('*')) return undefined
+  const checked = checkBaseUrl(head)
   if (!checked.ok) return undefined
   try {
     const url = new URL(checked.url)

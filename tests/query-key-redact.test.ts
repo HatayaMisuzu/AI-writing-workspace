@@ -104,6 +104,23 @@ describe('S1d query 中的密钥脱敏', () => {
       expect(JSON.stringify(rows(db))).toContain(`key=${S}`)
     })
 
+    it('A：host 写成 ***（已存标签为 x）时拒绝，原密钥不会写进新 host，库不变且不发请求', async () => {
+      const db = createTestDb(); const providers = new ProviderService(db, testCodec)
+      save(providers, `https://x.example.com/v1?key=${S}`, 'k')
+      const before = rows(db)
+      const fetcher = okFetch()
+      expect(() => save(providers, 'https://***.example.com/v1?key=***')).toThrow(ADDRESS_CHANGED_QUERY_SECRET)
+      expect(() => save(providers, 'https://***.example.com/v1?key=***', 'new-bearer')).toThrow(ADDRESS_CHANGED_QUERY_SECRET)
+      expect(rows(db)).toEqual(before)
+      expect(JSON.stringify(rows(db))).not.toContain('***')
+      expect(JSON.stringify(rows(db))).toContain(`key=${S}`)
+      expect(fetcher).not.toHaveBeenCalled()
+      const { config } = providers.getWithSecret('p')
+      await new OpenAICompatibleAdapter(config.baseUrl, 'k', fetcher as unknown as typeof fetch).testConnection('m')
+      expect(String(fetcher.mock.calls[0][0])).toMatch(/^https:\/\/x\.example\.com\/v1\/chat\/completions/)
+      expect(fetcher.mock.calls.some(([url]) => String(url).includes('***'))).toBe(false)
+    })
+
     it('A2：host 改成 evil.example 且未填新 Key 时拒绝沿用旧 Bearer Key，不发请求；填了新 Key 可保存', async () => {
       const db = createTestDb(); const providers = new ProviderService(db, testCodec)
       save(providers, 'https://h.example/v1', 'old-bearer')

@@ -86,7 +86,7 @@ export function SettingsScreen(): React.JSX.Element {
           <label><span>API Base URL</span><input value={form.baseUrl} onChange={(event) => setForm({ ...form, baseUrl: event.target.value })} placeholder="https://api.example.com/v1" /></label>
           {form.baseUrl.trim() && !checkBaseUrl(form.baseUrl).ok ? <div className="inline-error" role="alert">{(checkBaseUrl(form.baseUrl) as { message: string }).message}</div>
             : hasSecretQuery(form.baseUrl) ? <div className="context-note" role="note">{BASE_URL_QUERY_SECRET_HINT}</div>
-            : selected?.baseUrlError && form.baseUrl === selected.baseUrl ? <div className="inline-error" role="alert">需修正地址：{selected.baseUrlError} 原地址已隐藏，请重新填写后保存；在此之前不会发送任何请求。</div> : null}
+            : selected?.baseUrlError && form.baseUrl === selected.baseUrl ? <div className="inline-error" role="alert">需修正地址：{selected.baseUrlError} 原地址已隐藏，请重新填写地址，并在 Key 栏重新填写 Key 后再保存；在此之前不会发送任何请求。</div> : null}
           <label><span>API Key</span><input type="password" value={form.apiKey} onChange={(event) => setForm({ ...form, apiKey: event.target.value })} placeholder={selected?.hasApiKey ? '已安全保存；留空保持不变' : '仅在本机加密保存'} /></label>
           <div className="secure-note"><Check size={15} />密钥由操作系统安全存储，界面与日志无法读取明文。</div>
           <div className="form-actions"><button disabled={busy} onClick={() => void test()}><TestTube2 size={16} />测试连接</button><button className="primary" disabled={busy} onClick={() => void saveProvider()}><Save size={16} />保存服务</button></div>
