@@ -50,9 +50,12 @@ describe('S1c Base URL 只允许 http/https', () => {
     const fetcher = vi.fn()
     expect(() => new OpenAICompatibleAdapter('file:///etc/passwd', 'k', fetcher as unknown as typeof fetch)).toThrow('服务地址需要修正')
     expect(fetcher).not.toHaveBeenCalled()
-    // 数据未被静默删除，密钥保留；作者修正地址后（不重填密钥）即可使用
+    // 数据未被静默删除，密钥保留；修正地址属于更换地址，S1d-A2 要求重填 Key 才能保存
     expect(db.raw.prepare('SELECT COUNT(*) AS n FROM provider_configs').get()).toEqual({ n: 1 })
-    providers.save({ id: 'legacy', providerType: 'openai-compatible', displayName: '旧配置', baseUrl: 'http://localhost:11434/v1' })
+    expect(() => providers.save({ id: 'legacy', providerType: 'openai-compatible', displayName: '旧配置', baseUrl: 'http://localhost:11434/v1' }))
+      .toThrow(expect.objectContaining({ code: 'PROVIDER_KEY_REENTRY_REQUIRED', message: '地址已变更，为防止密钥发往新地址，请重新填写 Key。' }))
+    expect(providers.list()[0].hasApiKey).toBe(true)
+    providers.save({ id: 'legacy', providerType: 'openai-compatible', displayName: '旧配置', baseUrl: 'http://localhost:11434/v1', apiKey: 'new-key' })
     expect(providers.list()[0].baseUrlError).toBeUndefined()
     expect(providers.list()[0].hasApiKey).toBe(true)
     expect(() => providers.getWithSecret('legacy')).not.toThrow()
