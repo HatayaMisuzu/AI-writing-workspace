@@ -1,5 +1,5 @@
 import type { AppErrorShape, ModelConfig, ProviderCapabilities, ProviderConfig, ProviderInput, RoutedTask } from '../../shared/domain'
-import { checkBaseUrl } from '../../shared/base-url'
+import { checkBaseUrl, redactBaseUrl } from '../../shared/base-url'
 import type { AppDatabase } from '../database/database'
 import { randomUUID } from 'node:crypto'
 
@@ -28,7 +28,7 @@ export class ProviderService {
   list(): ProviderConfig[] {
     const rows = this.db.raw.prepare('SELECT * FROM provider_configs ORDER BY updated_at DESC').all() as ProviderRow[]
     return rows.map((row) => ({ id: row.id, providerType: row.provider_type, displayName: row.display_name,
-      baseUrl: row.base_url, ...baseUrlIssue(row.base_url), hasApiKey: Boolean(row.encrypted_api_key), createdAt: row.created_at, updatedAt: row.updated_at }))
+      baseUrl: redactBaseUrl(row.base_url), ...baseUrlIssue(row.base_url), hasApiKey: Boolean(row.encrypted_api_key), createdAt: row.created_at, updatedAt: row.updated_at }))
   }
 
   save(input: ProviderInput): ProviderConfig {
@@ -50,7 +50,7 @@ export class ProviderService {
     if (!row.encrypted_api_key) throw new Error('PROVIDER_KEY_MISSING')
     requireValidBaseUrl(row.base_url)
     return {
-      config: { id: row.id, providerType: row.provider_type, displayName: row.display_name, baseUrl: row.base_url,
+      config: { id: row.id, providerType: row.provider_type, displayName: row.display_name, baseUrl: requireValidBaseUrl(row.base_url),
         hasApiKey: true, createdAt: row.created_at, updatedAt: row.updated_at },
       apiKey: this.codec.decrypt(row.encrypted_api_key)
     }

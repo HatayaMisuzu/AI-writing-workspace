@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createTestDb, testCodec } from './helpers'
-import { BASE_URL_MISSING_SCHEME, BASE_URL_UNSUPPORTED_SCHEME, checkBaseUrl } from '../src/shared/base-url'
+import { BASE_URL_HAS_CREDENTIALS, BASE_URL_MISSING_SCHEME, redactBaseUrl, BASE_URL_UNSUPPORTED_SCHEME, checkBaseUrl } from '../src/shared/base-url'
 import { OpenAICompatibleAdapter, ProviderService } from '../src/main/ai/provider'
 import { providerInputSchema } from '../src/main/ipc/schemas'
 
@@ -61,5 +61,42 @@ describe('S1c Base URL 只允许 http/https', () => {
   it('存量无协议地址标记为缺协议提示', () => {
     const db = createTestDb(); insertLegacy(db, 'l2', 'localhost:11434')
     expect(new ProviderService(db, testCodec).list()[0].baseUrlError).toBe(BASE_URL_MISSING_SCHEME)
+  })
+
+  it('拒绝带账号/密码的地址，提示把密钥填在 Key 栏，且报错不回显密码', () => {
+    for (const value of ['http://u:p4ssw0rd@host', 'http://u@host', 'https://user:p4ssw0rd@api.example.com/v1', 'http://:p4ssw0rd@localhost:11434']) {
+      expect(checkBaseUrl(value), value).toEqual({ ok: false, message: BASE_URL_HAS_CREDENTIALS })
+      const parsed = providerInputSchema.safeParse({ id: 'p', providerType: 'openai-compatible', displayName: 'x', baseUrl: value })
+      expect(parsed.success).toBe(false)
+      expect(JSON.stringify(parsed.error?.issues)).not.toContain('p4ssw0rd')
+      expect(parsed.error?.message).not.toContain('p4ssw0rd')
+    }
+    expect(BASE_URL_HAS_CREDENTIALS).toContain('密钥请填在 Key 栏')
+    const db = createTestDb(); const providers = new ProviderService(db, testCodec)
+    let thrown: unknown
+    try { providers.save({ id: 'p', providerType: 'openai-compatible', displayName: 'x', baseUrl: 'http://u:p4ssw0rd@host', apiKey: 'k' }) } catch (error) { thrown = error }
+    expect(String((thrown as Error).message)).toContain('密钥请填在 Key 栏'); expect(String((thrown as Error).message)).not.toContain('p4ssw0rd')
+    expect(providers.list()).toEqual([])
+  })
+
+  it('存量带密码地址：标记需修正、界面不回显密码、不解密不发请求、数据保留', () => {
+    const db = createTestDb(); insertLegacy(db, 'cred', 'http://u:p4ssw0rd@localhost:11434/v1')
+    const providers = new ProviderService(db, testCodec)
+    const [item] = providers.list()
+    expect(item.baseUrlError).toBe(BASE_URL_HAS_CREDENTIALS)
+    expect(JSON.stringify(item)).not.toContain('p4ssw0rd')
+    expect(item.baseUrl).toBe('http://***@localhost:11434/v1')
+    let thrown: unknown
+    try { providers.getWithSecret('cred') } catch (error) { thrown = error }
+    expect(thrown).toMatchObject({ code: 'PROVIDER_BASE_URL_INVALID' })
+    expect(String((thrown as Error).message)).not.toContain('p4ssw0rd')
+    expect(db.raw.prepare('SELECT COUNT(*) AS n FROM provider_configs').get()).toEqual({ n: 1 })
+    expect(redactBaseUrl('https://a.example/v1')).toBe('https://a.example/v1')
+  })
+
+  it('内网/本机地址放行', () => {
+    for (const value of ['http://192.168.1.10:8000/v1', 'http://10.0.0.2', 'http://172.16.5.4:11434', 'http://[::1]:8080', 'http://ollama.lan:11434/v1', 'http://localhost']) {
+      expect(checkBaseUrl(value).ok, value).toBe(true)
+    }
   })
 })
