@@ -20,9 +20,9 @@ const emptyDoc = { type: 'doc', content: [{ type: 'paragraph' }] }
 
 describe('S12 migration v9', () => {
   it('CURRENT is 9; creates foreshadow_meta', () => {
-    expect(CURRENT_SCHEMA_VERSION).toBe(9)
+    expect(CURRENT_SCHEMA_VERSION).toBe(10)
     const db = createTestDb()
-    expect(db.raw.prepare("SELECT value_json FROM app_settings WHERE key = 'schema_version'").get()).toEqual({ value_json: '9' })
+    expect(db.raw.prepare("SELECT value_json FROM app_settings WHERE key = 'schema_version'").get()).toEqual({ value_json: '10' })
     expect(db.raw.prepare("SELECT name FROM sqlite_master WHERE name = 'foreshadow_meta'").get()).toBeTruthy()
     db.close()
   })
@@ -32,12 +32,12 @@ describe('S12 migration v9', () => {
     const path = join(dir, 'db.sqlite')
     try {
       const seed = new AppDatabase(path)
-      expect(seed.raw.prepare("SELECT value_json FROM app_settings WHERE key = 'schema_version'").get()).toEqual({ value_json: '9' })
+      expect(seed.raw.prepare("SELECT value_json FROM app_settings WHERE key = 'schema_version'").get()).toEqual({ value_json: '10' })
       seed.raw.exec('DROP TABLE IF EXISTS foreshadow_meta')
       seed.raw.prepare("UPDATE app_settings SET value_json = ? WHERE key = 'schema_version'").run(JSON.stringify(8))
       seed.close()
       const db = new AppDatabase(path)
-      expect(db.raw.prepare("SELECT value_json FROM app_settings WHERE key = 'schema_version'").get()).toEqual({ value_json: '9' })
+      expect(db.raw.prepare("SELECT value_json FROM app_settings WHERE key = 'schema_version'").get()).toEqual({ value_json: '10' })
       expect(db.raw.prepare("SELECT name FROM sqlite_master WHERE name = 'foreshadow_meta'").get()).toBeTruthy()
       db.close()
     } finally {

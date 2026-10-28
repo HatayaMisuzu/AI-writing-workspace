@@ -22,6 +22,7 @@ import { MemoryIntentRunner } from '../ai/memory-intent'
 import { ProofreadingRunner } from '../ai/proofreading-runner'
 import { WritingDailyService } from '../services/writing-daily-service'
 import { ForeshadowService } from '../services/foreshadow-service'
+import { TimelineService } from '../services/timeline-service'
 
 const trustedSender = (event: IpcMainInvokeEvent | IpcMainEvent): void => {
   if (event.senderFrame !== event.sender.mainFrame) throw new Error('IPC_UNTRUSTED_FRAME')
@@ -39,7 +40,7 @@ const handle = <T extends unknown[], R>(channel: string, fn: (...args: T) => R |
 }
 
 import {
-  idSchema, shortTextSchema, contentSchema, nonNegativeIntSchema, projectCreateSchema, documentCreateSchema, documentSaveSchema, noteSaveSchema, characterSaveSchema, providerInputSchema, modelSchema, routeSchema, patchProposalSchema, snapshotReasonSchema, aiStartSchema, aiPreviewContextSchema, noteSectionSchema, outlineSaveSchema, batchCreateChaptersSchema, writingGoalsInputSchema, chapterStatusSchema, foreshadowRegisterSchema, foreshadowSetStateSchema, foreshadowUpdateMetaSchema
+  idSchema, shortTextSchema, contentSchema, nonNegativeIntSchema, projectCreateSchema, documentCreateSchema, documentSaveSchema, noteSaveSchema, characterSaveSchema, providerInputSchema, modelSchema, routeSchema, patchProposalSchema, snapshotReasonSchema, aiStartSchema, aiPreviewContextSchema, noteSectionSchema, outlineSaveSchema, batchCreateChaptersSchema, writingGoalsInputSchema, chapterStatusSchema, foreshadowRegisterSchema, foreshadowSetStateSchema, foreshadowUpdateMetaSchema, timelineSortModeSchema, timelineEventSaveSchema
 } from './schemas'
 const parse = <T>(schema: z.ZodType<T>, value: unknown): T => schema.parse(value)
 
@@ -66,6 +67,7 @@ export function registerIpc(db: AppDatabase, codec: SecretCodec, network?: Netwo
   const proofreading = new ProofreadingRunner(db, providers)
   const writingDaily = new WritingDailyService(db)
   const foreshadows = new ForeshadowService(db)
+  const timeline = new TimelineService(db)
 
   handle('window:minimize', () => BrowserWindow.getFocusedWindow()?.minimize())
   handle('window:toggle-maximize', () => {
@@ -142,6 +144,12 @@ export function registerIpc(db: AppDatabase, codec: SecretCodec, network?: Netwo
       characterIds: parsed.characterIds
     })
   })
+
+  handle('timeline:list', (projectId: string, mode?: string) => timeline.list(parse(idSchema, projectId), parse(timelineSortModeSchema.optional(), mode)))
+  handle('timeline:list-for-chapter', (projectId: string, chapterId: string) => timeline.listForChapter(parse(idSchema, projectId), parse(idSchema, chapterId)))
+  handle('timeline:list-for-character', (projectId: string, characterId: string) => timeline.listForCharacter(parse(idSchema, projectId), parse(idSchema, characterId)))
+  handle('timeline:save', (input: unknown) => timeline.save(parse(timelineEventSaveSchema, input)))
+  handle('timeline:delete', (projectId: string, eventId: string) => timeline.delete(parse(idSchema, projectId), parse(idSchema, eventId)))
 
   handle('chat:list-threads', (projectId: string) => chat.listThreads(projectId))
   handle('chat:list-messages', (projectId: string, threadId: string, before?: ChatCursor, limit?: number) => chat.listMessages(projectId, threadId, before, limit))

@@ -423,3 +423,17 @@ export interface NodeOutline {
   hook: string
   updatedAt: number
 }
+
+/** P1-1 F9 时间线事件：纯作者手动录入，不进 AI 上下文。 */
+export interface TimelineEvent {
+  id: string
+  projectId: string
+  storyTimeLabel: string
+  sortKey: number
+  title: string
+  chapterId: string | null
+  characterIds: string[]
+  createdAt: number
+  updatedAt: number
+}
+export type TimelineSortMode = 'story' | 'chapter'

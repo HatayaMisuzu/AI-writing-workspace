@@ -8,6 +8,7 @@ import { ChapterOutlineAside, CharactersView, HistoryView, IdeasView, MemoryView
 import { DailyStatsView } from './DailyStatsView'
 import { StockpileView } from './StockpileView'
 import { ForeshadowView } from './ForeshadowView'
+import { RelatedTimelineEvents, TimelineView } from './TimelineView'
 import { Modal } from '../components/Modal'
 import { parseSearchSnippet } from '../services/search-snippet'
 
@@ -22,6 +23,8 @@ export function WorkspaceScreen({ project, onProjectChanged, onSettings, onRegis
   const [selected, setSelected] = useState<DocumentNode>()
   const [content, setContent] = useState<DocumentContent>()
   const [section, setSection] = useState<ProjectSection>('manuscript')
+  const [timelineFocus, setTimelineFocus] = useState<string>()
+  const [characterFocus, setCharacterFocus] = useState<string>()
   const [assistantCollapsed, setAssistantCollapsed] = useState(false)
   const [focusMode, setFocusMode] = useState(false)
   const [selection, setSelection] = useState<EditorSelection>()
@@ -93,6 +96,18 @@ export function WorkspaceScreen({ project, onProjectChanged, onSettings, onRegis
     if (next === section) return
     try { await flushAll(); setSection(next); setNavigationError(undefined) }
     catch (error) { setNavigationError(`保存失败，无法离开当前内容：${error instanceof Error ? error.message : String(error)}`) }
+  }
+  const openChapterById = async (chapterId: string): Promise<void> => {
+    const node = tree.find((item) => item.id === chapterId)
+    if (!node) { setNavigationError('关联章节已被删除。'); return }
+    if (node.id === selected?.id) { try { await flushAll(); setSection('manuscript'); setNavigationError(undefined) } catch (error) { setNavigationError(String(error)) } return }
+    await openDocument(node)
+  }
+  const openTimelineEvent = async (eventId: string): Promise<void> => {
+    try { await flushAll(); setTimelineFocus(eventId); setSection('timeline'); setNavigationError(undefined) } catch (error) { setNavigationError(String(error)) }
+  }
+  const openCharacter = async (characterId: string): Promise<void> => {
+    try { await flushAll(); setCharacterFocus(characterId); setSection('characters'); setNavigationError(undefined) } catch (error) { setNavigationError(String(error)) }
   }
   const requestCreateNode = async (type: 'volume' | 'chapter', parentId?: string): Promise<void> => {
     try { await flushAll() } catch (error) { setNavigationError(`保存失败，未创建新节点：${error instanceof Error ? error.message : String(error)}`); return }
@@ -178,13 +193,13 @@ export function WorkspaceScreen({ project, onProjectChanged, onSettings, onRegis
   }, [onProjectChanged, refreshTree, selected?.id])
 
   return <div className={focusMode ? 'workspace-screen is-focus' : 'workspace-screen'}>
-    {!focusMode && <ProjectSidebar project={project} tree={tree} selectedId={selected?.id} section={section} onSection={(next) => void changeSection(next)} onSelect={(node) => void openDocument(node)} onNewVolume={() => void requestCreateNode('volume')} onNewChapter={(parent) => void requestCreateNode('chapter', parent)} onRename={(node) => setNodeEditor({ node, action: 'rename', title: node.title })} onDelete={(node) => setNodeEditor({ node, action: 'delete', title: node.title })} onReorder={async (documentId, parentId, orderIndex) => { try { await flushAll(); await window.workspace.documents.reorder(project.id, documentId, parentId, orderIndex); await refreshTree() } catch (error) { setNavigationError(String(error)) } }}  onSetStatus={async (node, status) => { try { await window.workspace.documents.setStatus(project.id, node.id, status); await refreshTree() } catch (error) { setNavigationError(String(error)) } }} />}
+    {!focusMode && <ProjectSidebar project={project} tree={tree} selectedId={selected?.id} section={section} onSection={(next) => { setTimelineFocus(undefined); setCharacterFocus(undefined); void changeSection(next) }} onSelect={(node) => void openDocument(node)} onNewVolume={() => void requestCreateNode('volume')} onNewChapter={(parent) => void requestCreateNode('chapter', parent)} onRename={(node) => setNodeEditor({ node, action: 'rename', title: node.title })} onDelete={(node) => setNodeEditor({ node, action: 'delete', title: node.title })} onReorder={async (documentId, parentId, orderIndex) => { try { await flushAll(); await window.workspace.documents.reorder(project.id, documentId, parentId, orderIndex); await refreshTree() } catch (error) { setNavigationError(String(error)) } }}  onSetStatus={async (node, status) => { try { await window.workspace.documents.setStatus(project.id, node.id, status); await refreshTree() } catch (error) { setNavigationError(String(error)) } }} />}
     <div className="workspace-main">
       <div className="workspace-actions"><button onClick={() => setSearchOpen(true)}><Search size={16} />全文检索</button><button onClick={() => setIdeaOpen(true)}><Lightbulb size={16} />快速灵感 <kbd>Ctrl J</kbd></button>{selected && <button onClick={() => setPatchOpen(true)}><SlidersHorizontal size={16} />修改提案</button>}{selected && selection && selection.text.trim() && <button type="button" onClick={() => void registerForeshadow()}><BookmarkPlus size={16} />登记为伏笔</button>}<span />{focusMode && <button onClick={() => setFocusMode(false)}><SidebarClose size={16} />退出专注</button>}</div>
       {navigationError && <div className="navigation-error" role="alert">{navigationError}</div>}
       {section === 'manuscript' && selected && content ? <div className="manuscript-with-outline">
           <EditorSurface node={selected} content={content} focusMode={focusMode} onFocusMode={setFocusMode} onSaved={(saved) => { setContent(saved); void refreshTree(); onProjectChanged() }} onSelection={setSelection} onRegisterController={registerController} onOpenPatches={() => setPatchOpen(true)} />
-          {!focusMode && <ChapterOutlineAside projectId={project.id} chapter={selected} />}
+          {!focusMode && <div className="manuscript-aside-stack"><ChapterOutlineAside projectId={project.id} chapter={selected} />{selected.type === 'chapter' && <RelatedTimelineEvents projectId={project.id} chapterId={selected.id} onOpenEvent={(id) => void openTimelineEvent(id)} />}</div>}
         </div>
         : section === 'outline' ? <OutlineView projectId={project.id} tree={tree} onTreeChanged={async () => { await refreshTree(); onProjectChanged() }} onOpenChapter={(node) => void openDocument(node)} onRegisterFlush={registerAuxiliaryFlush} />
         : section === 'ideas' ? <IdeasView projectId={project.id} onRegisterFlush={registerAuxiliaryFlush} />
@@ -192,9 +207,10 @@ export function WorkspaceScreen({ project, onProjectChanged, onSettings, onRegis
         : section === 'ai-data' ? <MemoryView projectId={project.id} />
         : section === 'story' ? <NotesView projectId={project.id} section="story" onRegisterFlush={registerAuxiliaryFlush} />
         : section === 'references' ? <NotesView projectId={project.id} section="reference" onRegisterFlush={registerAuxiliaryFlush} />
-        : section === 'characters' ? <CharactersView projectId={project.id} onRegisterFlush={registerAuxiliaryFlush} />
+        : section === 'characters' ? <CharactersView projectId={project.id} onRegisterFlush={registerAuxiliaryFlush} focusCharacterId={characterFocus} onOpenTimelineEvent={(id) => void openTimelineEvent(id)} />
         : section === 'daily' ? <DailyStatsView project={project} />
         : section === 'stockpile' ? <StockpileView project={project} chapters={tree.filter((node) => node.type === 'chapter')} onProgressChanged={() => { onProjectChanged(); void refreshTree() }} />
+        : section === 'timeline' ? <TimelineView project={project} chapters={tree.filter((node) => node.type === 'chapter')} focusEventId={timelineFocus} onOpenChapter={(id) => void openChapterById(id)} onOpenCharacter={(id) => void openCharacter(id)} />
         : section === 'foreshadow' ? <ForeshadowView project={project} chapters={tree.filter((node) => node.type === 'chapter')} />
         : <section className="project-view placeholder-view"><FilePlus2 size={34} /><h1>内容</h1><p>这是辅助层，不要求作者维护复杂结构。</p></section>}
       <footer className="workspace-status"><span className="saved-dot" />本地项目<span>本章 {content?.wordCount.toLocaleString() ?? 0} 字</span><span>全书 {totalWords.toLocaleString()} 字</span><span>项目内容严格隔离</span></footer>
