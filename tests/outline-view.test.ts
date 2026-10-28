@@ -19,11 +19,11 @@ describe('S4 outline view helpers（组件状态）', () => {
 
   it('buildOutlineCards 顺序与章树同源', () => {
     const tree: DocumentNode[] = [
-      { id: 'v2', projectId: 'p', parentId: null, type: 'volume', title: '卷二', orderIndex: 1, wordCount: 0, revision: 0, createdAt: 2, updatedAt: 2 },
-      { id: 'v1', projectId: 'p', parentId: null, type: 'volume', title: '卷一', orderIndex: 0, wordCount: 0, revision: 0, createdAt: 1, updatedAt: 1 },
-      { id: 'c2', projectId: 'p', parentId: 'v1', type: 'chapter', title: '第二章', orderIndex: 1, wordCount: 0, revision: 0, createdAt: 4, updatedAt: 4 },
-      { id: 'c1', projectId: 'p', parentId: 'v1', type: 'chapter', title: '第一章', orderIndex: 0, wordCount: 0, revision: 0, createdAt: 3, updatedAt: 3 },
-      { id: 'c3', projectId: 'p', parentId: 'v2', type: 'chapter', title: '第三章', orderIndex: 0, wordCount: 0, revision: 0, createdAt: 5, updatedAt: 5 }
+      { id: 'v2', projectId: 'p', parentId: null, type: 'volume', title: '卷二', orderIndex: 1, status: 'outline', wordCount: 0, revision: 0, createdAt: 2, updatedAt: 2 },
+      { id: 'v1', projectId: 'p', parentId: null, type: 'volume', title: '卷一', orderIndex: 0, status: 'outline', wordCount: 0, revision: 0, createdAt: 1, updatedAt: 1 },
+      { id: 'c2', projectId: 'p', parentId: 'v1', type: 'chapter', title: '第二章', orderIndex: 1, status: 'outline', wordCount: 0, revision: 0, createdAt: 4, updatedAt: 4 },
+      { id: 'c1', projectId: 'p', parentId: 'v1', type: 'chapter', title: '第一章', orderIndex: 0, status: 'outline', wordCount: 0, revision: 0, createdAt: 3, updatedAt: 3 },
+      { id: 'c3', projectId: 'p', parentId: 'v2', type: 'chapter', title: '第三章', orderIndex: 0, status: 'outline', wordCount: 0, revision: 0, createdAt: 5, updatedAt: 5 }
     ]
     const outlines: NodeOutline[] = [
       { nodeId: 'c1', projectId: 'p', summary: '开篇', beats: ['遇雨'], hook: '有人敲门', updatedAt: 1 },

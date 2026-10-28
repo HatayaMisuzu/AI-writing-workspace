@@ -1,12 +1,14 @@
 import { createHash, randomUUID } from 'node:crypto'
-import type { DocumentContent, DocumentNode, DocumentType, SearchResult, Snapshot, TextOrigin, NodeOutline } from '../../shared/domain'
+import type { ChapterStatus, DocumentContent, DocumentNode, DocumentType, SearchResult, Snapshot, TextOrigin, NodeOutline, SerialProgress, StockpileSummary } from '../../shared/domain'
+import { computeStockpile } from '../../shared/stockpile'
 import type { AppDatabase } from '../database/database'
 import { WritingDailyService } from './writing-daily-service'
 import { StyleSampleService } from './style-sample-service'
 
 type NodeRow = {
   id: string; project_id: string; parent_id: string | null; type: DocumentType; title: string
-  order_index: number; word_count: number | null; revision: number | null; created_at: number; updated_at: number
+  order_index: number; status: ChapterStatus; word_count: number | null; revision: number | null
+  created_at: number; updated_at: number
 }
 type ContentRow = {
   document_id: string; project_id: string; editor_json: string; plain_text: string
@@ -15,7 +17,7 @@ type ContentRow = {
 
 const mapNode = (row: NodeRow): DocumentNode => ({
   id: row.id, projectId: row.project_id, parentId: row.parent_id, type: row.type, title: row.title,
-  orderIndex: row.order_index, wordCount: row.word_count ?? 0, revision: row.revision ?? 0,
+  orderIndex: row.order_index, status: row.status ?? 'outline', wordCount: row.word_count ?? 0, revision: row.revision ?? 0,
   createdAt: row.created_at, updatedAt: row.updated_at
 })
 
@@ -73,6 +75,60 @@ export class DocumentService {
     return rows.map(mapNode)
   }
 
+  setChapterStatus(projectId: string, documentId: string, status: ChapterStatus): DocumentNode {
+    const node = this.assertNode(projectId, documentId)
+    if (node.type !== 'chapter') throw new Error('CHAPTER_STATUS_REQUIRES_CHAPTER')
+    if (!['outline', 'draft', 'final'].includes(status)) throw new Error('CHAPTER_STATUS_INVALID')
+    this.db.raw.prepare('UPDATE document_nodes SET status = ?, updated_at = ? WHERE id = ? AND project_id = ?')
+      .run(status, Date.now(), documentId, projectId)
+    return mapNode(this.assertNode(projectId, documentId))
+  }
+
+  private readSettings(projectId: string): Record<string, unknown> {
+    const row = this.db.raw.prepare('SELECT settings_json FROM projects WHERE id = ?').get(projectId) as
+      | { settings_json: string } | undefined
+    if (!row) throw new Error('PROJECT_NOT_FOUND')
+    try {
+      const parsed = JSON.parse(row.settings_json || '{}') as unknown
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {}
+    } catch { return {} }
+  }
+
+  getSerialProgress(projectId: string): SerialProgress {
+    const settings = this.readSettings(projectId)
+    const id = settings.serialProgressChapterId
+    return { progressChapterId: typeof id === 'string' && id.length > 0 ? id : null }
+  }
+
+  setSerialProgress(projectId: string, progressChapterId: string | null): SerialProgress {
+    const settings = this.readSettings(projectId)
+    if (progressChapterId) {
+      const node = this.assertNode(projectId, progressChapterId)
+      if (node.type !== 'chapter') throw new Error('SERIAL_PROGRESS_REQUIRES_CHAPTER')
+      settings.serialProgressChapterId = progressChapterId
+    } else {
+      delete settings.serialProgressChapterId
+    }
+    this.db.raw.prepare('UPDATE projects SET settings_json = ?, updated_at = ? WHERE id = ?')
+      .run(JSON.stringify(settings), Date.now(), projectId)
+    return this.getSerialProgress(projectId)
+  }
+
+  getStockpile(projectId: string): StockpileSummary {
+    const chapters = this.listOrderedChapters(projectId)
+    const progress = this.getSerialProgress(projectId)
+    const goals = this.writingDaily.getGoals(projectId)
+    const computed = computeStockpile({
+      chapters: chapters.map((chapter) => ({
+        id: chapter.id, title: chapter.title, status: chapter.status, wordCount: chapter.wordCount
+      })),
+      progressChapterId: progress.progressChapterId,
+      dailyChapterGoalEnabled: goals.dailyChapterGoalEnabled,
+      dailyChapterGoal: goals.dailyChapterGoal
+    })
+    return { ...computed, progress }
+  }
+
   getContent(projectId: string, documentId: string): DocumentContent {
     this.assertNode(projectId, documentId)
     const row = this.db.raw.prepare('SELECT * FROM document_contents WHERE document_id = ? AND project_id = ?')
@@ -93,10 +149,12 @@ export class DocumentService {
       WHERE project_id = ? AND parent_id IS ?
     `).get(input.projectId, input.parentId ?? null) as { value: number }
     this.db.transaction(() => {
+      // 新章默认构思（0 字）；卷用 outline 占位。不自动定稿。
+      const initialStatus: ChapterStatus = 'outline'
       this.db.raw.prepare(`INSERT INTO document_nodes
-        (id, project_id, parent_id, type, title, order_index, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
-        .run(id, input.projectId, input.parentId ?? null, input.type, input.title.trim(), max.value + 1, now, now)
+        (id, project_id, parent_id, type, title, order_index, status, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(id, input.projectId, input.parentId ?? null, input.type, input.title.trim(), max.value + 1, initialStatus, now, now)
       if (input.type !== 'volume') {
         const empty = JSON.stringify({ type: 'doc', content: [{ type: 'paragraph' }] })
         this.db.raw.prepare(`INSERT INTO document_contents

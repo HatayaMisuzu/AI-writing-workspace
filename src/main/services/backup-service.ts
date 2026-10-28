@@ -137,6 +137,8 @@ function validateBackup(payload: BackupPayload): void {
     assertEnum(row.type, ['volume', 'chapter', 'scene', 'note'], 'BACKUP_INVALID_NODE_TYPE')
     assertInteger(row.order_index, 0, 'BACKUP_INVALID_NODE_ORDER')
     if (row.parent_id && !nodeIds.has(row.parent_id as string)) throw new Error('BACKUP_INVALID_NODE_PARENT')
+    // status 可选以兼容旧备份；缺省按字数在导入后不重推，导入时用 outline
+    if (row.status !== undefined) assertEnum(row.status, ['outline', 'draft', 'final'], 'BACKUP_INVALID_CHAPTER_STATUS')
   })
   const contentIds = new Set<string>()
   payload.contents.forEach((row) => {
@@ -275,13 +277,31 @@ export class BackupService {
     payload.styles?.forEach((item) => idMap.set(item.id as string, randomUUID()))
     payload.patches.forEach((item) => idMap.set(item.id as string, randomUUID()))
     const now = Date.now()
+    // S11：进度指针是章节 id，导入时必须随 idMap 重映射，否则往返后指针悬空。
+    let settingsJson = String(payload.project.settings_json ?? '{}')
+    try {
+      const settings = JSON.parse(settingsJson) as Record<string, unknown>
+      if (settings && typeof settings === 'object' && !Array.isArray(settings)) {
+        const pointer = settings.serialProgressChapterId
+        if (typeof pointer === 'string' && pointer.length > 0) {
+          const mapped = idMap.get(pointer)
+          if (mapped) settings.serialProgressChapterId = mapped
+          else delete settings.serialProgressChapterId
+        }
+        settingsJson = JSON.stringify(settings)
+      }
+    } catch { /* keep original settings_json */ }
+
     this.db.transaction(() => {
       this.db.raw.prepare(`INSERT INTO projects(id,title,project_type,description,cover_seed,settings_json,archived,created_at,updated_at,last_opened_at)
         VALUES (?,?,?,?,?,?,0,?,?,?)`).run(...[projectId, `${payload.project.title as string}（已导入）`, payload.project.project_type,
-        payload.project.description ?? '', projectId.slice(0, 8), payload.project.settings_json ?? '{}', now, now, now].map(sqlValue))
-      const nodeInsert = this.db.raw.prepare(`INSERT INTO document_nodes(id,project_id,parent_id,type,title,order_index,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)`)
-      payload.nodes.forEach((node) => nodeInsert.run(...[idMap.get(node.id as string), projectId,
-        node.parent_id ? idMap.get(node.parent_id as string) : null, node.type, node.title, node.order_index, now, now].map(sqlValue)))
+        payload.project.description ?? '', projectId.slice(0, 8), settingsJson, now, now, now].map(sqlValue))
+      const nodeInsert = this.db.raw.prepare(`INSERT INTO document_nodes(id,project_id,parent_id,type,title,order_index,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)`)
+      payload.nodes.forEach((node) => {
+        const status = ['outline', 'draft', 'final'].includes(String(node.status)) ? node.status : 'outline'
+        nodeInsert.run(...[idMap.get(node.id as string), projectId,
+          node.parent_id ? idMap.get(node.parent_id as string) : null, node.type, node.title, node.order_index, status, now, now].map(sqlValue))
+      })
       const contentInsert = this.db.raw.prepare(`INSERT INTO document_contents(document_id,project_id,editor_json,plain_text,word_count,revision,updated_at) VALUES (?,?,?,?,?,?,?)`)
       const ftsInsert = this.db.raw.prepare('INSERT INTO document_fts(project_id,document_id,title,plain_text) VALUES (?,?,?,?)')
       payload.contents.forEach((content) => {
@@ -409,9 +429,10 @@ export class BackupService {
     }
   }
 
-  async exportManuscript(projectId: string, path: string, format: 'txt' | 'md' | 'docx'): Promise<void> {
+  async exportManuscript(projectId: string, path: string, format: 'txt' | 'md' | 'docx', options?: { onlyFinal?: boolean }): Promise<void> {
+    const onlyFinal = options?.onlyFinal === true
     const chapters = this.db.raw.prepare(`
-      SELECT COALESCE(v.title, '') AS volume_title, c.title, dc.plain_text
+      SELECT COALESCE(v.title, '') AS volume_title, c.title, dc.plain_text, c.status AS status
       FROM document_nodes c
       LEFT JOIN document_nodes v
         ON v.id = c.parent_id AND v.project_id = c.project_id AND v.type = 'volume'
@@ -419,12 +440,13 @@ export class BackupService {
         ON dc.document_id = c.id AND dc.project_id = c.project_id
       WHERE c.project_id = ? AND c.type = 'chapter'
       ORDER BY COALESCE(v.order_index, 2147483647), c.order_index, c.created_at
-    `).all(projectId) as Array<{ volume_title: string; title: string; plain_text: string | null }>
+    `).all(projectId) as Array<{ volume_title: string; title: string; plain_text: string | null; status: string }>
+    const filtered = onlyFinal ? chapters.filter((chapter) => chapter.status === 'final') : chapters
     const MISSING_PLACEHOLDER = '［本章内容缺失：导出时正文数据不完整，请检查应用数据］'
     if (format === 'docx') {
       const children: Paragraph[] = []
       let currentVolume = ''
-      chapters.forEach((chapter) => {
+      filtered.forEach((chapter) => {
         if (chapter.volume_title !== currentVolume) {
           currentVolume = chapter.volume_title
           children.push(new Paragraph({ text: currentVolume, heading: HeadingLevel.HEADING_1 }))
@@ -438,7 +460,7 @@ export class BackupService {
     }
     let currentVolume = ''
     const parts: string[] = []
-    chapters.forEach((chapter) => {
+    filtered.forEach((chapter) => {
       if (chapter.volume_title !== currentVolume) {
         currentVolume = chapter.volume_title
         parts.push(format === 'md' ? `# ${currentVolume}` : currentVolume)

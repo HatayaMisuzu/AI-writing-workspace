@@ -23,7 +23,11 @@ const api: WorkspaceApi = {
     reorder: (projectId, documentId, parentId, orderIndex) => invoke('documents:reorder', projectId, documentId, parentId, orderIndex),
     delete: (projectId, documentId) => invoke('documents:delete', projectId, documentId), save: (input) => invoke('documents:save', input),
     search: (projectId, query) => invoke('documents:search', projectId, query),
-    batchCreateChapters: (input) => invoke('documents:batch-create-chapters', input)
+    batchCreateChapters: (input) => invoke('documents:batch-create-chapters', input),
+    setStatus: (projectId, documentId, status) => invoke('documents:set-status', projectId, documentId, status),
+    getStockpile: (projectId) => invoke('documents:get-stockpile', projectId),
+    getSerialProgress: (projectId) => invoke('documents:get-serial-progress', projectId),
+    setSerialProgress: (projectId, progressChapterId) => invoke('documents:set-serial-progress', projectId, progressChapterId)
   },
   snapshots: {
     create: (projectId, documentId, reason) => invoke('snapshots:create', projectId, documentId, reason),
@@ -60,7 +64,7 @@ const api: WorkspaceApi = {
   backup: {
     exportProject: (projectId) => invoke('backup:export-project', projectId), importProject: () => invoke('backup:import-project'),
     importManuscript: () => invoke('backup:import-manuscript'),
-    exportManuscript: (projectId, format) => invoke('backup:export-manuscript', projectId, format)
+    exportManuscript: (projectId, format, onlyFinal) => invoke('backup:export-manuscript', projectId, format, onlyFinal)
   },
   ai: {
     start: (request, onEvent) => {

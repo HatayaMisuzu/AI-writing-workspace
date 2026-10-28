@@ -38,7 +38,7 @@ const handle = <T extends unknown[], R>(channel: string, fn: (...args: T) => R |
 }
 
 import {
-  idSchema, shortTextSchema, contentSchema, nonNegativeIntSchema, projectCreateSchema, documentCreateSchema, documentSaveSchema, noteSaveSchema, characterSaveSchema, providerInputSchema, modelSchema, routeSchema, patchProposalSchema, snapshotReasonSchema, aiStartSchema, aiPreviewContextSchema, noteSectionSchema, outlineSaveSchema, batchCreateChaptersSchema, writingGoalsInputSchema
+  idSchema, shortTextSchema, contentSchema, nonNegativeIntSchema, projectCreateSchema, documentCreateSchema, documentSaveSchema, noteSaveSchema, characterSaveSchema, providerInputSchema, modelSchema, routeSchema, patchProposalSchema, snapshotReasonSchema, aiStartSchema, aiPreviewContextSchema, noteSectionSchema, outlineSaveSchema, batchCreateChaptersSchema, writingGoalsInputSchema, chapterStatusSchema
 } from './schemas'
 const parse = <T>(schema: z.ZodType<T>, value: unknown): T => schema.parse(value)
 
@@ -102,6 +102,10 @@ export function registerIpc(db: AppDatabase, codec: SecretCodec, network?: Netwo
   handle('outlines:list', (projectId: string) => documents.listOutlines(parse(idSchema, projectId)))
   handle('outlines:save', (input: unknown) => documents.saveOutline(parse(outlineSaveSchema, input)))
   handle('documents:batch-create-chapters', (input: unknown) => documents.batchCreateChaptersFromOutlines(parse(batchCreateChaptersSchema, input)))
+  handle('documents:set-status', (projectId: string, documentId: string, status: unknown) => documents.setChapterStatus(parse(idSchema, projectId), parse(idSchema, documentId), parse(chapterStatusSchema, status)))
+  handle('documents:get-stockpile', (projectId: string) => documents.getStockpile(parse(idSchema, projectId)))
+  handle('documents:get-serial-progress', (projectId: string) => documents.getSerialProgress(parse(idSchema, projectId)))
+  handle('documents:set-serial-progress', (projectId: string, progressChapterId: unknown) => documents.setSerialProgress(parse(idSchema, projectId), parse(idSchema.nullable(), progressChapterId)))
   handle('notes:save', (input: unknown) => projectContent.saveNote(parse(noteSaveSchema, input)))
   handle('notes:delete', (projectId: string, noteId: string) => projectContent.deleteNote(parse(idSchema, projectId), parse(idSchema, noteId)))
   handle('characters:list', (projectId: string) => projectContent.listCharacters(projectId))
@@ -190,13 +194,15 @@ export function registerIpc(db: AppDatabase, codec: SecretCodec, network?: Netwo
     if (result.canceled || !result.filePaths[0]) return null
     return backup.importManuscript(result.filePaths[0])
   })
-  handle('backup:export-manuscript', async (projectId: string, format: 'txt' | 'md' | 'docx') => {
+  handle('backup:export-manuscript', async (projectId: string, format: 'txt' | 'md' | 'docx', onlyFinal?: boolean) => {
     projectId = parse(idSchema, projectId)
     format = parse(z.enum(['txt', 'md', 'docx']), format)
+    const finalOnly = parse(z.boolean().optional(), onlyFinal) === true
     const project = projects.get(projectId)
-    const result = await dialog.showSaveDialog({ defaultPath: `${project.title}.${format}`, filters: [{ name: format.toUpperCase(), extensions: [format] }] })
+    const suffix = finalOnly ? '-仅定稿' : ''
+    const result = await dialog.showSaveDialog({ defaultPath: `${project.title}${suffix}.${format}`, filters: [{ name: format.toUpperCase(), extensions: [format] }] })
     if (result.canceled || !result.filePath) return null
-    await backup.exportManuscript(projectId, result.filePath, format)
+    await backup.exportManuscript(projectId, result.filePath, format, { onlyFinal: finalOnly })
     return result.filePath
   })
 

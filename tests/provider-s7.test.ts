@@ -23,12 +23,12 @@ const sseChunk = (text: string): string =>
 
 describe('S7 Provider 预设 / 空 key / 超时 / 上下文窗口', () => {
   it('迁移领号 v6：model_configs 含 context_window / max_output', async () => {
-    expect(CURRENT_SCHEMA_VERSION).toBe(7)
+    expect(CURRENT_SCHEMA_VERSION).toBe(8)
     const dir = await mkdtemp(join(tmpdir(), 'inkstone-s7-mig-'))
     try {
       const path = join(dir, 'v5.sqlite')
       const first = new AppDatabase(path)
-      expect(first.raw.prepare("SELECT value_json FROM app_settings WHERE key = 'schema_version'").get()).toEqual({ value_json: '7' })
+      expect(first.raw.prepare("SELECT value_json FROM app_settings WHERE key = 'schema_version'").get()).toEqual({ value_json: '8' })
       // 模拟从 v5 升级：写回 5 并去掉列不可行（SQLite），改为手工建旧表
       first.close()
       await rm(path, { force: true })
@@ -54,7 +54,7 @@ describe('S7 Provider 预设 / 空 key / 超时 / 上下文窗口', () => {
       const pcols = (migrated.raw.prepare('PRAGMA table_info(provider_configs)').all() as Array<{ name: string }>).map((c) => c.name)
       expect(pcols).toContain('first_token_timeout_ms')
       expect(pcols).toContain('total_timeout_ms')
-      expect(migrated.raw.prepare("SELECT value_json FROM app_settings WHERE key = 'schema_version'").get()).toEqual({ value_json: '7' })
+      expect(migrated.raw.prepare("SELECT value_json FROM app_settings WHERE key = 'schema_version'").get()).toEqual({ value_json: '8' })
       migrated.close()
     } finally {
       await rm(dir, { recursive: true, force: true })
