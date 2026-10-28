@@ -1,5 +1,5 @@
 import type { AppErrorShape, ModelConfig, ProviderCapabilities, ProviderConfig, ProviderInput, RoutedTask } from '../../shared/domain'
-import { checkBaseUrl, displayBaseUrl } from '../../shared/base-url'
+import { checkBaseUrl, displayBaseUrl, redactSecretsInText, restoreRedactedSecrets } from '../../shared/base-url'
 import type { AppDatabase } from '../database/database'
 import { randomUUID } from 'node:crypto'
 
@@ -11,6 +11,12 @@ export interface SecretCodec {
 type ProviderRow = { id: string; provider_type: 'openai-compatible'; display_name: string; base_url: string; encrypted_api_key: Buffer | null; created_at: number; updated_at: number }
 
 const baseUrlIssue = (url: string): { baseUrlError?: string } => { const check = checkBaseUrl(url); return check.ok ? {} : { baseUrlError: check.message } }
+/** 在 path 上追加端点，query（含作者放在地址里的密钥参数）原样保留在末尾。 */
+const endpointUrl = (base: string, endpoint: string): string => {
+  const q = base.indexOf('?')
+  const path = q < 0 ? base : base.slice(0, q); const query = q < 0 ? '' : base.slice(q)
+  return `${normalizeBaseUrl(path)}/${endpoint}${query}`
+}
 const normalizeBaseUrl = (url: string): string => url.trim().replace(/\/+$/, '')
 /** S1c：任何请求前都校验 Base URL；不合法则抛错且不调用 fetch、不解密密钥。 */
 const requireValidBaseUrl = (url: string): string => {
@@ -33,6 +39,9 @@ export class ProviderService {
 
   save(input: ProviderInput): ProviderConfig {
     const existing = this.db.raw.prepare('SELECT * FROM provider_configs WHERE id = ?').get(input.id) as ProviderRow | undefined
+    // S1d：界面拿到的是脱敏地址，*** 按参数名还原为已保存的原值；还原不了则拒绝，绝不把 *** 写入
+    const baseUrl = restoreRedactedSecrets(input.baseUrl, existing?.base_url)
+    if (baseUrl === undefined) throw Object.assign(new Error(`服务地址需要修正：地址中的 *** 是已隐藏的密钥，找不到原值，请重新填写。`), { code: 'PROVIDER_BASE_URL_INVALID' })
     const now = Date.now()
     const encrypted = input.apiKey ? this.codec.encrypt(input.apiKey) : existing?.encrypted_api_key ?? null
     this.db.raw.prepare(`INSERT INTO provider_configs
@@ -40,7 +49,7 @@ export class ProviderService {
       VALUES (?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET provider_type=excluded.provider_type, display_name=excluded.display_name,
       base_url=excluded.base_url, encrypted_api_key=excluded.encrypted_api_key, updated_at=excluded.updated_at`)
-      .run(input.id || randomUUID(), input.providerType, input.displayName.trim(), requireValidBaseUrl(input.baseUrl), encrypted, existing?.created_at ?? now, now)
+      .run(input.id || randomUUID(), input.providerType, input.displayName.trim(), requireValidBaseUrl(baseUrl), encrypted, existing?.created_at ?? now, now)
     return this.list().find((item) => item.id === input.id) ?? this.list()[0]
   }
 
@@ -136,7 +145,7 @@ export class OpenAICompatibleAdapter {
     const request = deadlineSignal(input.signal, input.timeoutMs)
     let response: Response
     try {
-      response = await this.fetcher(`${normalizeBaseUrl(this.baseUrl)}/chat/completions`, {
+      response = await this.fetcher(endpointUrl(this.baseUrl, 'chat/completions'), {
         method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${this.apiKey}` },
         body: JSON.stringify({ model: input.model, messages: input.messages, stream: true }), signal: request.signal
       })
@@ -193,7 +202,7 @@ export class OpenAICompatibleAdapter {
     const request = deadlineSignal(input.signal, input.timeoutMs)
     let response: Response
     try {
-      response = await this.fetcher(`${normalizeBaseUrl(this.baseUrl)}/chat/completions`, {
+      response = await this.fetcher(endpointUrl(this.baseUrl, 'chat/completions'), {
         method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${this.apiKey}` },
         body: JSON.stringify({ model: input.model, messages: input.messages, stream: false }), signal: request.signal
       })
@@ -224,7 +233,7 @@ export class OpenAICompatibleAdapter {
     if (signal?.aborted || (error instanceof DOMException && error.name === 'AbortError')) {
       return Object.assign(new Error('请求已取消。'), { code: 'PROVIDER_CANCELLED', recoverable: true })
     }
-    const details = error instanceof Error ? error.message : String(error)
+    const details = redactSecretsInText(error instanceof Error ? error.message : String(error))
     return Object.assign(new Error('无法连接模型服务，请检查网络与 Base URL。'), { code: 'PROVIDER_NETWORK_ERROR', recoverable: true, details })
   }
 
