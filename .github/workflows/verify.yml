@@ -20,6 +20,8 @@ jobs:
       - run: npm run verify
       - run: npm run test:e2e
       - run: npm audit --omit=dev
+      # S0b：electron 等运行时在 devDependencies，--omit=dev 看不到；含 dev 依赖的高危门禁
+      - run: npm audit --audit-level=high
 
   package-windows:
     runs-on: windows-latest
@@ -58,6 +60,8 @@ jobs:
       # 注：Linux e2e 暂不在 CI 运行。Playwright 的 Electron loader 强制追加 --password-store=basic，
       # safeStorage 落到 basic_text 后应用按设计抛 SECURE_STORAGE_UNAVAILABLE（不降级明文），e2e 的 providers:save 步骤必然失败。
       - run: npm audit --omit=dev
+      # S0b：electron 等运行时在 devDependencies，--omit=dev 看不到；含 dev 依赖的高危门禁
+      - run: npm audit --audit-level=high
 
   package-linux:
     runs-on: ubuntu-24.04
