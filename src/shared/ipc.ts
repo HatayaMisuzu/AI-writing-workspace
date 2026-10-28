@@ -2,7 +2,7 @@ import type {
   ContextBundle,
   AITaskEnvelope, Character, ChatCursor, ChatMessage, ChatThread, DigestStatus, DocumentContent, DocumentNode, Idea, LocalLintIssue,
   MemoryItem, MemoryProposal, ModelConfig, NodeOutline, Project, ProjectNote, ProjectType, ProofreadIssue, ProviderConfig,
-  ProviderInput, RoutedTask, SearchResult, Snapshot, TaskModelRoute, TextOrigin, TextPatch
+  ProviderInput, RoutedTask, SearchResult, Snapshot, TaskModelRoute, TextOrigin, TextPatch, WritingDailyRow, WritingGoals
 } from './domain'
 
 export interface WorkspaceApi {
@@ -91,6 +91,18 @@ export interface WorkspaceApi {
   }
   /** S2 e2e：读取 webRequest 拦截日志 */
   network: { blockedLog(): Promise<Array<{ url: string; reason: string; at: number }>> }
+  /** S9：日更统计与可选目标（数据层无默认目标；UI 在 S10）。 */
+  writing: {
+    getDay(projectId: string, date?: string): Promise<WritingDailyRow>
+    listRange(projectId: string, fromDate: string, toDate: string): Promise<WritingDailyRow[]>
+    getGoals(projectId: string): Promise<WritingGoals>
+    setGoals(projectId: string, input: {
+      dailyWordGoalEnabled?: boolean
+      dailyWordGoal?: number | null
+      dailyChapterGoalEnabled?: boolean
+      dailyChapterGoal?: number | null
+    }): Promise<WritingGoals>
+  }
   backup: {
     exportProject(projectId: string): Promise<string | null>
     importProject(): Promise<Project | null>

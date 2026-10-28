@@ -3,7 +3,7 @@ import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { schema } from './schema'
 
-export const CURRENT_SCHEMA_VERSION = 6
+export const CURRENT_SCHEMA_VERSION = 7
 
 export class AppDatabase {
   readonly raw: DatabaseSync
@@ -120,6 +120,25 @@ export class AppDatabase {
         this.writeVersion(6)
       })
       version = 6
+    }
+    if (version < 7) {
+      // v7（S9）：writing_daily 日更统计表。目标存在 settings_json，迁移绝不预置任何默认目标值。
+      this.transaction(() => {
+        this.raw.exec(`
+CREATE TABLE IF NOT EXISTS writing_daily (
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  date TEXT NOT NULL,
+  human_words_added INTEGER NOT NULL DEFAULT 0,
+  human_words_deleted INTEGER NOT NULL DEFAULT 0,
+  ai_words_accepted INTEGER NOT NULL DEFAULT 0,
+  active_seconds INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (project_id, date)
+);
+CREATE INDEX IF NOT EXISTS idx_writing_daily_project_date ON writing_daily(project_id, date);
+`)
+        this.writeVersion(7)
+      })
+      version = 7
     }
     this.raw.prepare("UPDATE chat_messages SET status = 'error' WHERE status = 'streaming'").run()
     if (version !== CURRENT_SCHEMA_VERSION) throw new Error(`DATABASE_SCHEMA_MIGRATION_INCOMPLETE:${version}`)

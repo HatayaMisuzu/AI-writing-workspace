@@ -51,6 +51,12 @@ const api: WorkspaceApi = {
     testUrl: (input) => invoke('providers:test-url', input)
   },
   network: { blockedLog: () => invoke('network:blocked-log') },
+  writing: {
+    getDay: (projectId, date) => invoke('writing:get-day', projectId, date),
+    listRange: (projectId, fromDate, toDate) => invoke('writing:list-range', projectId, fromDate, toDate),
+    getGoals: (projectId) => invoke('writing:get-goals', projectId),
+    setGoals: (projectId, input) => invoke('writing:set-goals', projectId, input)
+  },
   backup: {
     exportProject: (projectId) => invoke('backup:export-project', projectId), importProject: () => invoke('backup:import-project'),
     importManuscript: () => invoke('backup:import-manuscript'),
