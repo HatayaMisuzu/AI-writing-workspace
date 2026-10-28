@@ -108,3 +108,31 @@ export const chapterStatusSchema = z.enum(['outline', 'draft', 'final'])
 export const serialProgressSchema = z.object({
   progressChapterId: idSchema.nullable()
 }).strict()
+
+export const foreshadowStateSchema = z.enum(['planted', 'hinting', 'resolved', 'abandoned'])
+export const foreshadowRegisterSchema = z.object({
+  projectId: idSchema,
+  chapterId: idSchema,
+  name: z.string().trim().max(200).optional(),
+  content: contentSchema,
+  fromPm: z.number().int().nonnegative(),
+  toPm: z.number().int().nonnegative(),
+  plannedChapterId: idSchema.nullable().optional(),
+  characterIds: z.array(idSchema).max(100).optional()
+}).strict()
+export const foreshadowSetStateSchema = z.object({
+  projectId: idSchema,
+  memoryId: idSchema,
+  state: foreshadowStateSchema,
+  abandonReason: z.string().max(5_000).optional(),
+  resolvedChapterId: idSchema.nullable().optional(),
+  plannedChapterId: idSchema.nullable().optional(),
+  characterIds: z.array(idSchema).max(100).optional()
+}).strict()
+export const foreshadowUpdateMetaSchema = z.object({
+  projectId: idSchema,
+  memoryId: idSchema,
+  plannedChapterId: idSchema.nullable().optional(),
+  resolvedChapterId: idSchema.nullable().optional(),
+  characterIds: z.array(idSchema).max(100).optional()
+}).strict()

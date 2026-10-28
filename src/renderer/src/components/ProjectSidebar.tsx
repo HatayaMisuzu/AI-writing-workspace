@@ -2,8 +2,8 @@ import { ChevronDown, FileText, Lightbulb, Pencil, Plus, Trash2 } from 'lucide-r
 import type { ChapterStatus, DocumentNode, Project } from '../../../shared/domain'
 import { CHAPTER_STATUS_LABEL, CHAPTER_STATUSES } from '../../../shared/stockpile'
 
-export type ProjectSection = 'manuscript' | 'outline' | 'ideas' | 'story' | 'characters' | 'references' | 'ai-data' | 'history' | 'daily' | 'stockpile'
-const sections: Array<[ProjectSection, string]> = [['manuscript','正文'],['outline','大纲'],['ideas','灵感'],['story','故事'],['characters','人物'],['references','资料'],['daily','日更'],['stockpile','存稿'],['ai-data','AI 数据'],['history','历史']]
+export type ProjectSection = 'manuscript' | 'outline' | 'ideas' | 'story' | 'characters' | 'references' | 'ai-data' | 'history' | 'daily' | 'stockpile' | 'foreshadow'
+const sections: Array<[ProjectSection, string]> = [['manuscript','正文'],['outline','大纲'],['ideas','灵感'],['story','故事'],['characters','人物'],['references','资料'],['daily','日更'],['stockpile','存稿'],['foreshadow','伏笔'],['ai-data','AI 数据'],['history','历史']]
 
 const nextStatus = (status: ChapterStatus): ChapterStatus => {
   const index = CHAPTER_STATUSES.indexOf(status)

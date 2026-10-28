@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { Character, ProjectNote } from '../../shared/domain'
+import { mergeCharacterFields, normalizeCharacterFields } from '../../shared/character-fields'
 import type { AppDatabase } from '../database/database'
 
 export class ProjectContentService {
@@ -31,7 +32,7 @@ export class ProjectContentService {
     const rows = this.db.raw.prepare('SELECT * FROM characters WHERE project_id = ? ORDER BY updated_at DESC').all(projectId) as Array<Record<string, unknown>>
     return rows.map((row) => ({ id: row.id as string, projectId: row.project_id as string, name: row.name as string,
       aliases: JSON.parse(row.aliases_json as string) as string[], notes: row.notes as string,
-      fields: JSON.parse(row.fields_json as string) as Record<string, string>, createdAt: row.created_at as number, updatedAt: row.updated_at as number }))
+      fields: normalizeCharacterFields(JSON.parse(row.fields_json as string) as Record<string, string>), createdAt: row.created_at as number, updatedAt: row.updated_at as number }))
   }
 
   saveCharacter(input: { id?: string; projectId: string; name: string; aliases?: string[]; notes?: string; fields?: Record<string, string> }): Character {
@@ -41,7 +42,7 @@ export class ProjectContentService {
       ON CONFLICT(id) DO UPDATE SET name=excluded.name,aliases_json=excluded.aliases_json,notes=excluded.notes,fields_json=excluded.fields_json,updated_at=excluded.updated_at
       WHERE project_id=excluded.project_id`)
       .run(id, input.projectId, input.name.trim() || '未命名人物', JSON.stringify(input.aliases ?? existing?.aliases ?? []),
-        input.notes ?? existing?.notes ?? '', JSON.stringify(input.fields ?? existing?.fields ?? {}), now, now)
+        input.notes ?? existing?.notes ?? '', JSON.stringify(input.fields !== undefined ? (Object.keys(input.fields).length === 0 ? normalizeCharacterFields({}) : mergeCharacterFields(existing?.fields, input.fields)) : normalizeCharacterFields(existing?.fields ?? {})), now, now)
     const character = this.listCharacters(input.projectId).find((item) => item.id === id)
     if (!character) throw new Error('CHARACTER_NOT_FOUND_IN_PROJECT')
     return character

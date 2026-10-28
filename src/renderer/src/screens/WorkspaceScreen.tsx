@@ -1,4 +1,4 @@
-import { FilePlus2, Lightbulb, Search, SidebarClose, SlidersHorizontal } from 'lucide-react'
+import { BookmarkPlus, FilePlus2, Lightbulb, Search, SidebarClose, SlidersHorizontal } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { DocumentContent, DocumentNode, DocumentTaskTarget, Project, SearchResult, TextPatch } from '../../../shared/domain'
 import { ProjectSidebar, type ProjectSection } from '../components/ProjectSidebar'
@@ -7,6 +7,7 @@ import { AssistantPanel } from '../components/AssistantPanel'
 import { ChapterOutlineAside, CharactersView, HistoryView, IdeasView, MemoryView, NotesView, OutlineView, PatchDrawer } from './ProjectViews'
 import { DailyStatsView } from './DailyStatsView'
 import { StockpileView } from './StockpileView'
+import { ForeshadowView } from './ForeshadowView'
 import { Modal } from '../components/Modal'
 import { parseSearchSnippet } from '../services/search-snippet'
 
@@ -149,6 +150,26 @@ export function WorkspaceScreen({ project, onProjectChanged, onSettings, onRegis
     if (!target) throw new Error('来源章节已被删除。')
     await openDocument(target)
   }, [openDocument, tree])
+  const registerForeshadow = useCallback(async (): Promise<void> => {
+    if (!selected || !selection || !selection.text.trim()) return
+    try {
+      await flushAll()
+      const name = selection.text.trim().slice(0, 24)
+      await window.workspace.foreshadows.register({
+        projectId: project.id,
+        chapterId: selected.id,
+        name,
+        content: selection.text,
+        fromPm: selection.fromPm,
+        toPm: selection.toPm
+      })
+      setNavigationError(undefined)
+      setSection('foreshadow')
+    } catch (error) {
+      setNavigationError(error instanceof Error ? error.message : String(error))
+    }
+  }, [flushAll, project.id, selected, selection])
+
   const acceptPatch = useCallback(async (patch: TextPatch): Promise<TextPatch> => {
     if (!editorController.current || patch.documentId !== selected?.id) throw new Error('请先打开提案所属章节。')
     const result = await editorController.current.applyPatch(patch)
@@ -159,7 +180,7 @@ export function WorkspaceScreen({ project, onProjectChanged, onSettings, onRegis
   return <div className={focusMode ? 'workspace-screen is-focus' : 'workspace-screen'}>
     {!focusMode && <ProjectSidebar project={project} tree={tree} selectedId={selected?.id} section={section} onSection={(next) => void changeSection(next)} onSelect={(node) => void openDocument(node)} onNewVolume={() => void requestCreateNode('volume')} onNewChapter={(parent) => void requestCreateNode('chapter', parent)} onRename={(node) => setNodeEditor({ node, action: 'rename', title: node.title })} onDelete={(node) => setNodeEditor({ node, action: 'delete', title: node.title })} onReorder={async (documentId, parentId, orderIndex) => { try { await flushAll(); await window.workspace.documents.reorder(project.id, documentId, parentId, orderIndex); await refreshTree() } catch (error) { setNavigationError(String(error)) } }}  onSetStatus={async (node, status) => { try { await window.workspace.documents.setStatus(project.id, node.id, status); await refreshTree() } catch (error) { setNavigationError(String(error)) } }} />}
     <div className="workspace-main">
-      <div className="workspace-actions"><button onClick={() => setSearchOpen(true)}><Search size={16} />全文检索</button><button onClick={() => setIdeaOpen(true)}><Lightbulb size={16} />快速灵感 <kbd>Ctrl J</kbd></button>{selected && <button onClick={() => setPatchOpen(true)}><SlidersHorizontal size={16} />修改提案</button>}<span />{focusMode && <button onClick={() => setFocusMode(false)}><SidebarClose size={16} />退出专注</button>}</div>
+      <div className="workspace-actions"><button onClick={() => setSearchOpen(true)}><Search size={16} />全文检索</button><button onClick={() => setIdeaOpen(true)}><Lightbulb size={16} />快速灵感 <kbd>Ctrl J</kbd></button>{selected && <button onClick={() => setPatchOpen(true)}><SlidersHorizontal size={16} />修改提案</button>}{selected && selection && selection.text.trim() && <button type="button" onClick={() => void registerForeshadow()}><BookmarkPlus size={16} />登记为伏笔</button>}<span />{focusMode && <button onClick={() => setFocusMode(false)}><SidebarClose size={16} />退出专注</button>}</div>
       {navigationError && <div className="navigation-error" role="alert">{navigationError}</div>}
       {section === 'manuscript' && selected && content ? <div className="manuscript-with-outline">
           <EditorSurface node={selected} content={content} focusMode={focusMode} onFocusMode={setFocusMode} onSaved={(saved) => { setContent(saved); void refreshTree(); onProjectChanged() }} onSelection={setSelection} onRegisterController={registerController} onOpenPatches={() => setPatchOpen(true)} />
@@ -174,6 +195,7 @@ export function WorkspaceScreen({ project, onProjectChanged, onSettings, onRegis
         : section === 'characters' ? <CharactersView projectId={project.id} onRegisterFlush={registerAuxiliaryFlush} />
         : section === 'daily' ? <DailyStatsView project={project} />
         : section === 'stockpile' ? <StockpileView project={project} chapters={tree.filter((node) => node.type === 'chapter')} onProgressChanged={() => { onProjectChanged(); void refreshTree() }} />
+        : section === 'foreshadow' ? <ForeshadowView project={project} chapters={tree.filter((node) => node.type === 'chapter')} />
         : <section className="project-view placeholder-view"><FilePlus2 size={34} /><h1>内容</h1><p>这是辅助层，不要求作者维护复杂结构。</p></section>}
       <footer className="workspace-status"><span className="saved-dot" />本地项目<span>本章 {content?.wordCount.toLocaleString() ?? 0} 字</span><span>全书 {totalWords.toLocaleString()} 字</span><span>项目内容严格隔离</span></footer>
     </div>

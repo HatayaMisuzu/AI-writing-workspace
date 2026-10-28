@@ -143,6 +143,45 @@ export interface MemoryItem {
   updatedAt: number
 }
 
+
+/** S12 F4：人物卡固定字段键（存 fields_json，无新表） */
+export const CHARACTER_FIELD_KEYS = [
+  'identity', 'appearance', 'personality', 'goal', 'firstAppearanceChapter', 'currentState'
+] as const
+export type CharacterFieldKey = (typeof CHARACTER_FIELD_KEYS)[number]
+export const CHARACTER_FIELD_LABELS: Record<CharacterFieldKey, string> = {
+  identity: '身份',
+  appearance: '外貌',
+  personality: '性格',
+  goal: '目标',
+  firstAppearanceChapter: '首次出场章',
+  currentState: '当前状态'
+}
+
+/** S12 F8：伏笔台账状态（本地，与平台无关） */
+export type ForeshadowState = 'planted' | 'hinting' | 'resolved' | 'abandoned'
+
+export interface ForeshadowMeta {
+  memoryId: string
+  projectId: string
+  plannedChapterId: string | null
+  resolvedChapterId: string | null
+  state: ForeshadowState
+  abandonReason: string
+  characterIds: string[]
+}
+
+export interface ForeshadowEntry {
+  memory: MemoryItem
+  meta: ForeshadowMeta
+  /** 显示名称（登记时填写；缺省取内容截断） */
+  name: string
+  /** 选区起止（作者登记时写入 source_location） */
+  selectionFrom?: number
+  selectionTo?: number
+  overdue: boolean
+}
+
 export interface Snapshot {
   id: string
   projectId: string

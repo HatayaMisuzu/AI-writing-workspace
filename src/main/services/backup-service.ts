@@ -45,6 +45,7 @@ interface BackupPayload {
   styles?: Array<Record<string, unknown>>
   outlines?: Array<Record<string, unknown>>
   writingDaily?: Array<Record<string, unknown>>
+  foreshadowMeta?: Array<Record<string, unknown>>
   patches: Array<Record<string, unknown>>
 }
 
@@ -59,7 +60,8 @@ const backupPayloadSchema = z.object({
   threads: z.array(rowSchema), messages: z.array(rowSchema), digests: z.array(rowSchema), origins: z.array(rowSchema),
   feedback: z.array(rowSchema), styles: z.array(rowSchema).optional(), patches: z.array(rowSchema),
   outlines: z.array(z.record(z.string(), z.unknown())).optional(),
-  writingDaily: z.array(z.record(z.string(), z.unknown())).optional()
+  writingDaily: z.array(z.record(z.string(), z.unknown())).optional(),
+  foreshadowMeta: z.array(z.record(z.string(), z.unknown())).optional()
 })
 
 async function atomicWriteFile(path: string, data: string | Uint8Array): Promise<void> {
@@ -161,6 +163,11 @@ function validateBackup(payload: BackupPayload): void {
   payload.characters.forEach((row) => {
     if (!Array.isArray(JSON.parse(String(row.aliases_json))) || typeof JSON.parse(String(row.fields_json)) !== 'object') throw new Error('BACKUP_INVALID_CHARACTER_JSON')
   })
+  ;(payload.foreshadowMeta ?? []).forEach((row) => {
+    if (typeof row.memory_id !== 'string' || typeof row.project_id !== 'string') throw new Error('BACKUP_INVALID_FORESHADOW_META')
+    if (row.state !== undefined) assertEnum(row.state, ['planted', 'hinting', 'resolved', 'abandoned'], 'BACKUP_INVALID_FORESHADOW_STATE')
+    try { if (!Array.isArray(JSON.parse(String(row.character_ids_json ?? '[]')))) throw new Error('bad') } catch { throw new Error('BACKUP_INVALID_FORESHADOW_CHARACTERS') }
+  })
   payload.messages.forEach((row) => {
     if (!threadIds.has(row.thread_id as string)) throw new Error('BACKUP_INVALID_MESSAGE_THREAD')
     assertEnum(row.role, ['user', 'assistant'], 'BACKUP_INVALID_MESSAGE_ROLE')
@@ -245,7 +252,8 @@ export class BackupService {
       digests: rows(this.db, 'chapter_digests', projectId), origins: rows(this.db, 'text_origins', projectId),
       feedback: rows(this.db, 'style_feedback', projectId), styles: rows(this.db, 'style_samples', projectId),
       patches: rows(this.db, 'text_patches', projectId), outlines: rows(this.db, 'node_outlines', projectId),
-      writingDaily: rows(this.db, 'writing_daily', projectId)
+      writingDaily: rows(this.db, 'writing_daily', projectId),
+      foreshadowMeta: rows(this.db, 'foreshadow_meta', projectId)
     }
     await atomicWriteFile(path, JSON.stringify(payload, (_key, value) => Buffer.isBuffer(value) ? value.toString('base64') : value, 2))
   }
@@ -325,6 +333,21 @@ export class BackupService {
       payload.memories.forEach((item) => memoryInsert.run(...[idMap.get(item.id as string), projectId, item.type, item.content, item.status,
         item.source_type, idMap.get(item.source_id as string) ?? item.source_id, item.source_location, item.confidence,
         item.reader_visible_from, item.source_revision, now, now].map(sqlValue)))
+      const foreshadowInsert = this.db.raw.prepare(`INSERT INTO foreshadow_meta(memory_id,project_id,planned_chapter_id,resolved_chapter_id,state,abandon_reason,character_ids_json) VALUES (?,?,?,?,?,?,?)`)
+      payload.foreshadowMeta?.forEach((item) => {
+        const memoryId = idMap.get(item.memory_id as string)
+        if (!memoryId) return
+        let characterIds: string[] = []
+        try { characterIds = JSON.parse(String(item.character_ids_json ?? '[]')) as string[] } catch { characterIds = [] }
+        const mappedCharacters = characterIds.map((id) => idMap.get(id)).filter((id): id is string => Boolean(id))
+        const state = ['planted', 'hinting', 'resolved', 'abandoned'].includes(String(item.state)) ? item.state : 'planted'
+        foreshadowInsert.run(...[
+          memoryId, projectId,
+          item.planned_chapter_id ? idMap.get(item.planned_chapter_id as string) ?? null : null,
+          item.resolved_chapter_id ? idMap.get(item.resolved_chapter_id as string) ?? null : null,
+          state, item.abandon_reason ?? '', JSON.stringify(mappedCharacters)
+        ].map(sqlValue))
+      })
       const snapshotInsert = this.db.raw.prepare(`INSERT INTO snapshots(id,project_id,document_id,reason,revision,content,plain_text,metadata_json,created_at) VALUES (?,?,?,?,?,?,?,?,?)`)
       payload.snapshots.forEach((item) => snapshotInsert.run(...[idMap.get(item.id as string), projectId, idMap.get(item.document_id as string), item.reason, item.revision, item.content, item.plain_text, item.metadata_json, item.created_at].map(sqlValue)))
       const threadInsert = this.db.raw.prepare(`INSERT INTO chat_threads(id,project_id,title,summary,created_at,updated_at) VALUES (?,?,?,?,?,?)`)
