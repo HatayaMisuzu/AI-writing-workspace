@@ -31,11 +31,93 @@ export const checkBaseUrl = (raw: string): BaseUrlCheck => {
   return { ok: true, url }
 }
 
+// S1d：query 中视为密钥的参数名（大小写不敏感，按解码后的完整参数名匹配）
+export const SECRET_QUERY_PARAMS = ['key', 'api_key', 'apikey', 'token', 'access_token', 'secret', 'password', 'sig', 'api-key', 'client_secret', 'refresh_token', 'signature', 'auth'] as const
+export const REDACTED = '***'
+export const BASE_URL_QUERY_SECRET_HINT = '地址中含有密钥参数（如 key=、token=），建议把密钥填在 Key 栏；界面与日志中该值会显示为 ***。'
+const secretNames = new Set<string>(SECRET_QUERY_PARAMS)
+const decodeName = (name: string): string => { try { return decodeURIComponent(name.replace(/\+/g, ' ')).trim().toLowerCase() } catch { return name.trim().toLowerCase() } }
+const isSecretName = (name: string): boolean => secretNames.has(decodeName(name))
+
+type QueryPart = { raw: string; name: string; value?: string }
+const splitUrl = (raw: string): { head: string; query?: string; hash: string } => {
+  const hashAt = raw.indexOf('#'); const hash = hashAt < 0 ? '' : raw.slice(hashAt); const rest = hashAt < 0 ? raw : raw.slice(0, hashAt)
+  const q = rest.indexOf('?')
+  return q < 0 ? { head: rest, hash } : { head: rest.slice(0, q), query: rest.slice(q + 1), hash }
+}
+const parseQuery = (query: string): QueryPart[] => query.split('&').map((raw) => {
+  const eq = raw.indexOf('=')
+  return eq < 0 ? { raw, name: raw } : { raw, name: raw.slice(0, eq), value: raw.slice(eq + 1) }
+})
+const joinUrl = (head: string, parts: QueryPart[] | undefined, hash: string): string =>
+  `${head}${parts ? `?${parts.map((part) => part.value === undefined ? part.raw : `${part.name}=${part.value}`).join('&')}` : ''}${hash}`
+
+/** 地址 query 中是否带有密钥类参数（有值）。 */
+export const hasSecretQuery = (raw: string): boolean => {
+  const { query } = splitUrl(raw)
+  return query !== undefined && parseQuery(query).some((part) => part.value !== undefined && part.value !== '' && isSecretName(part.name))
+}
+
+/** 把 query 中密钥类参数的值替换为 ***（其余部分原样保留）。 */
+export const redactQuerySecrets = (raw: string): string => {
+  const { head, query, hash } = splitUrl(raw)
+  if (query === undefined) return raw
+  return joinUrl(head, parseQuery(query).map((part) => part.value !== undefined && part.value !== '' && isSecretName(part.name) ? { ...part, value: REDACTED } : part), hash)
+}
+
+/** 任意文本（报错详情、日志）中出现的 name=value 密钥参数一律脱敏。 */
+export const redactSecretsInText = (text: string): string =>
+  text.replace(/(^|[?&;\s"'(])((?:key|api_key|apikey|api-key|token|access_token|refresh_token|secret|client_secret|password|signature|sig|auth))=([^&#\s"')]+)/gi, `$1$2=${REDACTED}`)
+
+const endpointParts = (raw: string): { protocol: string; host: string; port: string; path: string } | undefined => {
+  // *** 只允许出现在 query：host/path 里一旦有 * 就拒绝比较（勿用 x 占位，否则已存 host 标签为 x 时会被当成同一端点）
+  const { head } = splitUrl(raw)
+  if (head.includes('*')) return undefined
+  const checked = checkBaseUrl(head)
+  if (!checked.ok) return undefined
+  try {
+    const url = new URL(checked.url)
+    return { protocol: url.protocol, host: url.hostname.toLowerCase(), port: url.port, path: url.pathname.replace(/\/+$/, '') }
+  } catch { return undefined }
+}
+
+/** 两个地址的 scheme、host、port（默认端口规范化）是否一致；withPath 时 path 也须一致。任一无法解析视为不一致。 */
+export const sameEndpoint = (a: string, b: string, withPath = false): boolean => {
+  const x = endpointParts(a); const y = endpointParts(b)
+  if (!x || !y) return false
+  return x.protocol === y.protocol && x.host === y.host && x.port === y.port && (!withPath || x.path === y.path)
+}
+
+/**
+ * 设置页编辑再保存时，界面拿到的是脱敏后的地址：密钥参数值为 *** 时，按参数名（同名按出现次序）
+ * 用已保存的原值还原，避免把 *** 写回覆盖原值。找不到原值则返回 undefined（调用方应拒绝保存）。
+ */
+export const restoreRedactedSecrets = (input: string, original: string | undefined): string | undefined => {
+  const { head, query, hash } = splitUrl(input)
+  if (query === undefined) return input
+  const parts = parseQuery(query)
+  if (!parts.some((part) => part.value === REDACTED && isSecretName(part.name))) return input
+  // S1d-A：只有 scheme/host/port/path 都与已存地址一致才还原，防止把原密钥带到新地址
+  if (original === undefined || !sameEndpoint(input, original, true)) return undefined
+  const originals = parseQuery(splitUrl(original).query ?? '')
+  const used = new Map<string, number>()
+  let missing = false
+  const restored = parts.map((part) => {
+    if (part.value !== REDACTED || !isSecretName(part.name)) return part
+    const name = decodeName(part.name); const index = used.get(name) ?? 0; used.set(name, index + 1)
+    const source = originals.filter((item) => item.value !== undefined && decodeName(item.name) === name)[index]
+    if (!source) { missing = true; return part }
+    return { ...part, value: source.value }
+  })
+  return missing ? undefined : joinUrl(head, restored, hash)
+}
+
 /**
  * 隐去地址中的账号密码，不依赖写法是否标准（http:\\u:p@h、http:u:p@h、user:p@host 等）：
  * 协议（若有）及其后的斜杠/反斜杠之后、最后一个 @ 之前的内容全部替换为 ***。
  */
-export const redactBaseUrl = (raw: string): string => {
+export const redactBaseUrl = (input: string): string => {
+  const raw = redactQuerySecrets(input)
   const at = raw.lastIndexOf('@')
   if (at < 0) return raw
   const prefix = /^\s*[a-z][a-z0-9+.-]*:[\\/]*/i.exec(raw)?.[0] ?? ''

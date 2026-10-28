@@ -20,6 +20,8 @@ jobs:
       - run: npm run verify
       - run: npm run test:e2e
       - run: npm audit --omit=dev
+      # S0b：electron 等运行时在 devDependencies，--omit=dev 看不到；含 dev 依赖的高危门禁
+      - run: npm audit --audit-level=high
 
   package-windows:
     runs-on: windows-latest
@@ -62,6 +64,8 @@ jobs:
       - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - run: xvfb-run -a dbus-run-session -- bash scripts/ci/linux-e2e.sh
       - run: npm audit --omit=dev
+      # S0b：electron 等运行时在 devDependencies，--omit=dev 看不到；含 dev 依赖的高危门禁
+      - run: npm audit --audit-level=high
 
   package-linux:
     runs-on: ubuntu-24.04

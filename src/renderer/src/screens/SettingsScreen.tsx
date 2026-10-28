@@ -1,7 +1,8 @@
 import { Check, Plus, Save, Server, TestTube2, XCircle } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import type { ModelConfig, ProviderConfig, RoutedTask } from '../../../shared/domain'
-import { checkBaseUrl } from '../../../shared/base-url'
+import { userErrorMessage } from '../../../shared/user-error'
+import { BASE_URL_QUERY_SECRET_HINT, checkBaseUrl, hasSecretQuery } from '../../../shared/base-url'
 
 const defaultCapabilities = { streaming: true, tools: false, structuredOutput: false, cancellation: true }
 const routedTasks: Array<[RoutedTask, string]> = [
@@ -37,7 +38,7 @@ export function SettingsScreen(): React.JSX.Element {
   const run = async (action: () => Promise<void>): Promise<void> => {
     setBusy(true)
     try { await action() }
-    catch (error) { setNotice({ ok: false, text: `操作失败：${error instanceof Error ? error.message : String(error)}` }) }
+    catch (error) { setNotice({ ok: false, text: `操作失败：${userErrorMessage(error)}` }) }
     finally { setBusy(false) }
   }
   const saveProvider = (): Promise<void> => run(async () => {
@@ -46,7 +47,7 @@ export function SettingsScreen(): React.JSX.Element {
     if (!urlCheck.ok) throw new Error(urlCheck.message)
     const id = selectedId ?? crypto.randomUUID()
     await window.workspace.providers.save({ id, providerType: 'openai-compatible', displayName: form.displayName, baseUrl: form.baseUrl, apiKey: form.apiKey || undefined })
-    setSelectedId(id); setNotice({ ok: true, text: '服务配置已安全保存到本机。' }); await reload()
+    setSelectedId(id); setNotice({ ok: true, text: hasSecretQuery(form.baseUrl) ? `服务配置已安全保存到本机。${BASE_URL_QUERY_SECRET_HINT}` : '服务配置已安全保存到本机。' }); await reload()
   })
   const saveModel = (): Promise<void> => run(async () => {
     if (!selectedId) throw new Error('请先保存一个服务。')
@@ -84,7 +85,8 @@ export function SettingsScreen(): React.JSX.Element {
           <label><span>显示名称</span><input value={form.displayName} onChange={(event) => setForm({ ...form, displayName: event.target.value })} /></label>
           <label><span>API Base URL</span><input value={form.baseUrl} onChange={(event) => setForm({ ...form, baseUrl: event.target.value })} placeholder="https://api.example.com/v1" /></label>
           {form.baseUrl.trim() && !checkBaseUrl(form.baseUrl).ok ? <div className="inline-error" role="alert">{(checkBaseUrl(form.baseUrl) as { message: string }).message}</div>
-            : selected?.baseUrlError && form.baseUrl === selected.baseUrl ? <div className="inline-error" role="alert">需修正地址：{selected.baseUrlError} 原地址已隐藏，请重新填写后保存；在此之前不会发送任何请求。</div> : null}
+            : hasSecretQuery(form.baseUrl) ? <div className="context-note" role="note">{BASE_URL_QUERY_SECRET_HINT}</div>
+            : selected?.baseUrlError && form.baseUrl === selected.baseUrl ? <div className="inline-error" role="alert">需修正地址：{selected.baseUrlError} 原地址已隐藏，请重新填写地址，并在 Key 栏重新填写 Key 后再保存；在此之前不会发送任何请求。</div> : null}
           <label><span>API Key</span><input type="password" value={form.apiKey} onChange={(event) => setForm({ ...form, apiKey: event.target.value })} placeholder={selected?.hasApiKey ? '已安全保存；留空保持不变' : '仅在本机加密保存'} /></label>
           <div className="secure-note"><Check size={15} />密钥由操作系统安全存储，界面与日志无法读取明文。</div>
           <div className="form-actions"><button disabled={busy} onClick={() => void test()}><TestTube2 size={16} />测试连接</button><button className="primary" disabled={busy} onClick={() => void saveProvider()}><Save size={16} />保存服务</button></div>
