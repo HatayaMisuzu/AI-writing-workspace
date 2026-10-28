@@ -243,22 +243,41 @@ try {
     assert.ok(fixtureHits > fixtureHitsBeforeProvider, `配置 Provider 后 fixture 应收到请求，实际 hits=${fixtureHits}`)
   })
 
-  await record('U04 跨章续写候选不能插入当前章', async () => {
+  // S8：续写候选须「采用为补丁」才 propose；未接受前正文不变；补丁只绑来源章
+  await record('U04 跨章续写候选采用为补丁只写来源章', async () => {
     await openChapter(running.page, '第一章')
     await running.page.getByRole('button', { name: '续写', exact: true }).click()
     await running.page.getByPlaceholder('和同行者聊聊这部作品…').fill('请续写一段候选')
     await running.page.getByRole('button', { name: '发送' }).click()
     await openChapter(running.page, '第二章')
     await running.page.getByText('续写候选', { exact: true }).waitFor({ timeout: 15_000 })
-    await running.page.getByRole('button', { name: '插入候选' }).last().click()
-    await running.page.getByText(/插入失败：请先打开候选所属章节/).waitFor()
-    const before = await running.page.evaluate(({ projectId, chapterB }) => window.workspace.documents.get(projectId, chapterB), ids)
-    assert.equal(before.plainText, '同字原文。最后一次输入会保存。')
-    await running.page.getByRole('button', { name: '打开来源章节' }).last().click()
-    await running.page.getByRole('button', { name: '插入候选' }).last().click()
-    await running.page.getByText('已插入正文', { exact: true }).waitFor()
+    await running.page.getByRole('button', { name: '采用为补丁' }).last().click()
+    await running.page.getByText('已提出补丁', { exact: true }).waitFor()
+    const mid = await running.page.evaluate(async ({ projectId, chapterA, chapterB }) => {
+      const patchesA = await window.workspace.patches.list(projectId, chapterA)
+      const patchesB = await window.workspace.patches.list(projectId, chapterB)
+      return {
+        generationProposed: patchesA.filter((patch) => patch.status === 'proposed' && patch.replacement.includes('续写候选')).length,
+        bProposed: patchesB.filter((patch) => patch.status === 'proposed').length,
+        bodyA: (await window.workspace.documents.get(projectId, chapterA)).plainText,
+        bodyB: (await window.workspace.documents.get(projectId, chapterB)).plainText
+      }
+    }, ids)
+    assert.equal(mid.generationProposed, 1, '来源章应有 1 条续写 proposed 补丁')
+    assert.equal(mid.bProposed, 0, '当前章不应有补丁')
+    assert.equal(mid.bodyB, '同字原文。最后一次输入会保存。')
+    assert.ok(!mid.bodyA.includes('续写候选'), '接受前来源章正文不应写入候选')
+    // createPatch 会打开提案抽屉，挡住「打开来源章节」；先关再回来源章
+    const drawer = running.page.locator('.patch-drawer')
+    if (await drawer.count()) await drawer.getByRole('button', { name: '关闭' }).click()
+    await openChapter(running.page, '第一章')
+    await running.page.getByRole('button', { name: '修改提案' }).click()
+    const genCard = running.page.locator('.patch-drawer article').filter({ hasText: '续写候选' })
+    await genCard.getByRole('button', { name: '接受并应用' }).click()
+    await genCard.getByText('已接受', { exact: true }).waitFor({ timeout: 10_000 })
     const after = await running.page.evaluate(({ projectId, chapterA }) => window.workspace.documents.get(projectId, chapterA), ids)
     assert.match(after.plainText, /续写候选/)
+    await running.page.locator('.patch-drawer').getByRole('button', { name: '关闭' }).click()
   })
 
   await record('U01 编辑后旧本地校对结果立即失效', async () => {

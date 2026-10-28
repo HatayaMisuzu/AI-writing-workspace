@@ -120,5 +120,5 @@ export interface AIStartRequest {
 
 export type AIStreamEvent =
   | { type: 'chunk'; requestId: string; chunk: string; context?: unknown }
-  | { type: 'done'; requestId: string }
+  | { type: 'done'; requestId: string; candidates?: string[] }
   | { type: 'error'; requestId: string; message: string; code?: string }

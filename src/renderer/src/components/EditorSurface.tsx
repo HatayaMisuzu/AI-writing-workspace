@@ -123,6 +123,10 @@ export function EditorSurface({ node, content, focusMode, onFocusMode, onSaved, 
           const currentText = editor.state.doc.textBetween(selection.fromPm, selection.toPm, '\n')
           if (currentText !== selection.text) throw new Error('选区已经变化，请重新选择后发送。')
           frozenSelection = { ...selection, originalHash: textIdentity(currentText) }
+        } else {
+          // S8：无选区时冻结光标为插入点（空 range），供执笔候选走插入型补丁。
+          const from = editor.state.selection.from
+          frozenSelection = { fromPm: from, toPm: from, text: '', originalHash: textIdentity('') }
         }
         return { requestId, projectId: node.projectId, documentId: node.id,
           sourceRevision: coordinator.currentRevision(), selection: frozenSelection }

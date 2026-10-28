@@ -207,6 +207,8 @@ export interface AITaskEnvelope {
   excludedIds?: string[]
   /** S6：默认不发送的来源（如大纲）被作者勾选后列入；只作用于单次请求。 */
   includedIds?: string[]
+  /** S8：执笔（generation）候选数，默认 1、最多 3；其他模式忽略。 */
+  candidateCount?: number
 }
 
 export interface ContextItem {

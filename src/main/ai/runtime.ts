@@ -5,6 +5,7 @@ import { historyPolicy } from './history-policy'
 import { composeProviderMessages } from './prompt-composer'
 import { OpenAICompatibleAdapter, ProviderService, type ProviderMessage } from './provider'
 import { computeContextInputBudget, DEFAULT_CONTEXT_WINDOW, DEFAULT_MAX_OUTPUT } from '../../shared/provider-presets'
+import { normalizeCandidateCount } from '../../shared/candidate-count'
 import { ChatService } from '../services/chat-service'
 import { DocumentService } from '../services/document-service'
 
@@ -23,7 +24,7 @@ export class AICreativeRuntime {
     this.context = new ContextEngine(db); this.chat = new ChatService(db)
   }
 
-  async *run(requestId: string, task: AITaskEnvelope, threadId: string, userMessageId: string, assistantMessageId: string): AsyncIterable<{ requestId: string; chunk: string; context?: ContextBundle }> {
+  async *run(requestId: string, task: AITaskEnvelope, threadId: string, userMessageId: string, assistantMessageId: string): AsyncIterable<{ requestId: string; chunk: string; context?: ContextBundle; candidates?: string[] }> {
     if (this.controllers.has(requestId)) throw new Error('AI_REQUEST_ID_IN_USE')
     const controller = new AbortController()
     this.controllers.set(requestId, controller)
@@ -41,18 +42,30 @@ export class AICreativeRuntime {
       this.chat.startTurn({ projectId: task.projectId, threadId, userMessageId, assistantMessageId, content: task.userIntent, mode: task.mode, target: task.target, contextSnapshot: this.contextSnapshot(context) })
       started = true
       const adapter = this.adapterFactory(config.baseUrl, apiKey)
-      let first = true
-      for await (const chunk of adapter.chat({
-        model: model.modelId, messages, signal: controller.signal,
-        timeoutMs: timeouts.totalTimeoutMs, firstTokenTimeoutMs: timeouts.firstTokenTimeoutMs
-      })) {
-        assistant += chunk
-        this.chat.updateAssistant(task.projectId, threadId, assistantMessageId, assistant, 'streaming')
-        yield { requestId, chunk, context: first ? context : undefined }
-        first = false
+      // S8：仅 generation 使用候选数；其余模式固定 1 次请求。
+      const count = task.mode === 'generation' ? normalizeCandidateCount(task.candidateCount) : 1
+      const candidates: string[] = []
+      for (let index = 0; index < count; index += 1) {
+        let text = ''
+        let firstChunk = true
+        for await (const chunk of adapter.chat({
+          model: model.modelId, messages, signal: controller.signal,
+          timeoutMs: timeouts.totalTimeoutMs, firstTokenTimeoutMs: timeouts.firstTokenTimeoutMs
+        })) {
+          text += chunk
+          if (index === 0) {
+            assistant = text
+            this.chat.updateAssistant(task.projectId, threadId, assistantMessageId, assistant, 'streaming')
+            yield { requestId, chunk, context: firstChunk ? context : undefined }
+            firstChunk = false
+          }
+        }
+        if (!text.trim()) throw new Error(count > 1 ? `第 ${index + 1} 个候选没有可用内容。` : '模型没有返回可用内容。')
+        candidates.push(text)
       }
-      if (!assistant.trim()) throw new Error('模型没有返回可用内容。')
+      assistant = candidates[0] ?? ''
       this.chat.updateAssistant(task.projectId, threadId, assistantMessageId, assistant, 'complete')
+      if (task.mode === 'generation') yield { requestId, chunk: '', candidates }
     } catch (error) {
       if (!started) {
         this.chat.startTurn({ projectId: task.projectId, threadId, userMessageId, assistantMessageId, content: task.userIntent, mode: task.mode, target: task.target })

@@ -201,10 +201,14 @@ export function registerIpc(db: AppDatabase, codec: SecretCodec, network?: Netwo
       if (target && (target.requestId !== request.requestId || target.projectId !== request.task.projectId || target.documentId !== request.task.documentId)) {
         throw new Error('AI_TARGET_IDENTITY_INVALID')
       }
+      let candidates: string[] | undefined
       for await (const result of runtime.run(request.requestId, request.task, request.threadId, request.userMessageId, request.assistantMessageId)) {
-        if (!event.sender.isDestroyed()) event.sender.send('ai:event', { type: 'chunk', requestId: request.requestId, chunk: result.chunk, context: result.context })
+        if (result.candidates) candidates = result.candidates
+        if (result.chunk && !event.sender.isDestroyed()) {
+          event.sender.send('ai:event', { type: 'chunk', requestId: request.requestId, chunk: result.chunk, context: result.context })
+        }
       }
-      if (!event.sender.isDestroyed()) event.sender.send('ai:event', { type: 'done', requestId: request.requestId })
+      if (!event.sender.isDestroyed()) event.sender.send('ai:event', { type: 'done', requestId: request.requestId, candidates })
     } catch (error) {
       const shaped = error as Error & { code?: string }
       if (!event.sender.isDestroyed()) event.sender.send('ai:event', { type: 'error', requestId: request?.requestId ?? 'invalid', message: shaped.message, code: shaped.code })
