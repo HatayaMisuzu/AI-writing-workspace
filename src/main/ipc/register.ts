@@ -21,6 +21,7 @@ import { ChatService } from '../services/chat-service'
 import { MemoryIntentRunner } from '../ai/memory-intent'
 import { ProofreadingRunner } from '../ai/proofreading-runner'
 import { WritingDailyService } from '../services/writing-daily-service'
+import { ForeshadowService } from '../services/foreshadow-service'
 
 const trustedSender = (event: IpcMainInvokeEvent | IpcMainEvent): void => {
   if (event.senderFrame !== event.sender.mainFrame) throw new Error('IPC_UNTRUSTED_FRAME')
@@ -38,7 +39,7 @@ const handle = <T extends unknown[], R>(channel: string, fn: (...args: T) => R |
 }
 
 import {
-  idSchema, shortTextSchema, contentSchema, nonNegativeIntSchema, projectCreateSchema, documentCreateSchema, documentSaveSchema, noteSaveSchema, characterSaveSchema, providerInputSchema, modelSchema, routeSchema, patchProposalSchema, snapshotReasonSchema, aiStartSchema, aiPreviewContextSchema, noteSectionSchema, outlineSaveSchema, batchCreateChaptersSchema, writingGoalsInputSchema, chapterStatusSchema
+  idSchema, shortTextSchema, contentSchema, nonNegativeIntSchema, projectCreateSchema, documentCreateSchema, documentSaveSchema, noteSaveSchema, characterSaveSchema, providerInputSchema, modelSchema, routeSchema, patchProposalSchema, snapshotReasonSchema, aiStartSchema, aiPreviewContextSchema, noteSectionSchema, outlineSaveSchema, batchCreateChaptersSchema, writingGoalsInputSchema, chapterStatusSchema, foreshadowRegisterSchema, foreshadowSetStateSchema, foreshadowUpdateMetaSchema
 } from './schemas'
 const parse = <T>(schema: z.ZodType<T>, value: unknown): T => schema.parse(value)
 
@@ -64,6 +65,7 @@ export function registerIpc(db: AppDatabase, codec: SecretCodec, network?: Netwo
   const memoryIntent = new MemoryIntentRunner(db, providers)
   const proofreading = new ProofreadingRunner(db, providers)
   const writingDaily = new WritingDailyService(db)
+  const foreshadows = new ForeshadowService(db)
 
   handle('window:minimize', () => BrowserWindow.getFocusedWindow()?.minimize())
   handle('window:toggle-maximize', () => {
@@ -117,6 +119,30 @@ export function registerIpc(db: AppDatabase, codec: SecretCodec, network?: Netwo
   handle('memories:retire', (projectId: string, memoryId: string) => memories.retire(parse(idSchema, projectId), parse(idSchema, memoryId)))
   handle('memories:replace', (projectId: string, memoryId: string, content: string) => memories.proposeReplacement(parse(idSchema, projectId), parse(idSchema, memoryId), parse(contentSchema, content)))
   handle('memories:extract-intent', (projectId: string, sourceId: string, content: string) => memoryIntent.extractAndCreate(parse(idSchema, projectId), parse(idSchema, sourceId), parse(contentSchema, content)))
+  handle('foreshadows:list-ledger', (projectId: string) => foreshadows.listLedger(parse(idSchema, projectId)))
+  handle('foreshadows:list-pending', (projectId: string) => foreshadows.listPending(parse(idSchema, projectId)))
+  handle('foreshadows:register', (input: unknown) => {
+    const parsed = parse(foreshadowRegisterSchema, input)
+    return foreshadows.registerFromSelection(parsed)
+  })
+  handle('foreshadows:set-state', (input: unknown) => {
+    const parsed = parse(foreshadowSetStateSchema, input)
+    return foreshadows.setState(parsed.projectId, parsed.memoryId, parsed.state, {
+      abandonReason: parsed.abandonReason,
+      resolvedChapterId: parsed.resolvedChapterId,
+      plannedChapterId: parsed.plannedChapterId,
+      characterIds: parsed.characterIds
+    })
+  })
+  handle('foreshadows:update-meta', (input: unknown) => {
+    const parsed = parse(foreshadowUpdateMetaSchema, input)
+    return foreshadows.updateMeta(parsed.projectId, parsed.memoryId, {
+      plannedChapterId: parsed.plannedChapterId,
+      resolvedChapterId: parsed.resolvedChapterId,
+      characterIds: parsed.characterIds
+    })
+  })
+
   handle('chat:list-threads', (projectId: string) => chat.listThreads(projectId))
   handle('chat:list-messages', (projectId: string, threadId: string, before?: ChatCursor, limit?: number) => chat.listMessages(projectId, threadId, before, limit))
   handle('chat:new-thread', (projectId: string, title?: string) => chat.createThread(parse(idSchema, projectId), parse(shortTextSchema.optional(), title)))

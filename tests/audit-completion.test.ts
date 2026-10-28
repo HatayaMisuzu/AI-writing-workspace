@@ -205,7 +205,11 @@ describe('stable persistence boundaries', () => {
     const created = content.saveCharacter({ projectId: project.id, name: '旧名', aliases: ['别名'], notes: '笔记', fields: { age: '18', faction: '北方' } })
     const saved = content.saveCharacter({ id: created.id, projectId: project.id, name: '新名' })
     expect(saved).toMatchObject({ name: '新名', aliases: ['别名'], notes: '笔记', fields: { age: '18', faction: '北方' } })
-    expect(content.saveCharacter({ id: created.id, projectId: project.id, name: '新名', fields: {} }).fields).toEqual({})
+    // S12：固定键始终可读；显式 fields:{} 清空扩展键，固定键回落为空串
+    expect(content.saveCharacter({ id: created.id, projectId: project.id, name: '新名', fields: {} }).fields).toMatchObject({
+      identity: '', appearance: '', personality: '', goal: '', firstAppearanceChapter: '', currentState: ''
+    })
+    expect(content.saveCharacter({ id: created.id, projectId: project.id, name: '新名', fields: {} }).fields).not.toHaveProperty('age')
   })
 })
 

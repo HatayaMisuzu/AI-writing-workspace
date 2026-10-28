@@ -17,7 +17,8 @@ const v4Schema = (): string => {
   result = result.replace("CHECK(section IN ('story','reference','outline'))", "CHECK(section IN ('story','reference'))")
   result = result.replace(/\n {2}status TEXT NOT NULL DEFAULT 'outline' CHECK\(status IN \('outline','draft','final'\)\),/, '')
   result = result.replace(/CREATE TABLE IF NOT EXISTS writing_daily \([\s\S]*?\);\nCREATE INDEX IF NOT EXISTS idx_writing_daily_project_date ON writing_daily\(project_id, date\);\n/, '')
-  if (result.includes('node_outlines') || result.includes("'outline'") || result.includes('writing_daily') || /status TEXT NOT NULL DEFAULT 'outline'/.test(result)) {
+  result = result.replace(/CREATE TABLE IF NOT EXISTS foreshadow_meta \([\s\S]*?\);\nCREATE INDEX IF NOT EXISTS idx_foreshadow_meta_project ON foreshadow_meta\(project_id, state\);\n/, '')
+  if (result.includes('node_outlines') || result.includes("'outline'") || result.includes('writing_daily') || result.includes('foreshadow_meta') || /status TEXT NOT NULL DEFAULT 'outline'/.test(result)) {
     throw new Error('v4 schema fixture out of date')
   }
   return result
@@ -28,7 +29,7 @@ describe('S3 node_outlines migration (v4 → v5)', () => {
   afterEach(async () => { await Promise.all(dirs.splice(0).map((path) => rm(path, { recursive: true, force: true }))) })
 
   it('upgrades a v4 database, preserves old data and accepts outline notes', async () => {
-    expect(CURRENT_SCHEMA_VERSION).toBe(8)
+    expect(CURRENT_SCHEMA_VERSION).toBe(9)
     const dir = await mkdtemp(join(tmpdir(), 'inkstone-v4-outline-')); dirs.push(dir); const path = join(dir, 'v4.sqlite')
     const old = new DatabaseSync(path)
     old.exec(v4Schema())
@@ -43,7 +44,7 @@ describe('S3 node_outlines migration (v4 → v5)', () => {
     old.close()
 
     const db = new AppDatabase(path)
-    expect(db.raw.prepare("SELECT value_json FROM app_settings WHERE key = 'schema_version'").get()).toEqual({ value_json: '8' })
+    expect(db.raw.prepare("SELECT value_json FROM app_settings WHERE key = 'schema_version'").get()).toEqual({ value_json: '9' })
     const content = new ProjectContentService(db)
     expect(content.listNotes('p1', 'story')).toMatchObject([{ id: 'n1', title: '旧笔记', content: '旧内容', createdAt: 1, updatedAt: 2 }])
     expect(content.listNotes('p1', 'reference')).toMatchObject([{ id: 'n2', title: '旧资料' }])
@@ -62,7 +63,7 @@ describe('S3 node_outlines migration (v4 → v5)', () => {
     db.close()
 
     const reopened = new AppDatabase(path)
-    expect(reopened.raw.prepare("SELECT value_json FROM app_settings WHERE key = 'schema_version'").get()).toEqual({ value_json: '8' })
+    expect(reopened.raw.prepare("SELECT value_json FROM app_settings WHERE key = 'schema_version'").get()).toEqual({ value_json: '9' })
     reopened.close()
   })
 
@@ -70,7 +71,7 @@ describe('S3 node_outlines migration (v4 → v5)', () => {
     const db = createTestDb()
     const sql = (db.raw.prepare("SELECT sql FROM sqlite_master WHERE name = 'project_notes'").get() as { sql: string }).sql
     expect(sql).toContain("'outline'")
-    expect(db.raw.prepare("SELECT value_json FROM app_settings WHERE key = 'schema_version'").get()).toEqual({ value_json: '8' })
+    expect(db.raw.prepare("SELECT value_json FROM app_settings WHERE key = 'schema_version'").get()).toEqual({ value_json: '9' })
     db.close()
   })
 })

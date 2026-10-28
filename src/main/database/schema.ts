@@ -245,6 +245,18 @@ CREATE TABLE IF NOT EXISTS writing_daily (
 );
 CREATE INDEX IF NOT EXISTS idx_writing_daily_project_date ON writing_daily(project_id, date);
 
+
+CREATE TABLE IF NOT EXISTS foreshadow_meta (
+  memory_id TEXT PRIMARY KEY REFERENCES memories(id) ON DELETE CASCADE,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  planned_chapter_id TEXT REFERENCES document_nodes(id) ON DELETE SET NULL,
+  resolved_chapter_id TEXT REFERENCES document_nodes(id) ON DELETE SET NULL,
+  state TEXT NOT NULL DEFAULT 'planted' CHECK(state IN ('planted','hinting','resolved','abandoned')),
+  abandon_reason TEXT NOT NULL DEFAULT '',
+  character_ids_json TEXT NOT NULL DEFAULT '[]'
+);
+CREATE INDEX IF NOT EXISTS idx_foreshadow_meta_project ON foreshadow_meta(project_id, state);
+
 CREATE TABLE IF NOT EXISTS app_settings (
   key TEXT PRIMARY KEY,
   value_json TEXT NOT NULL,

@@ -3,7 +3,7 @@ import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { schema } from './schema'
 
-export const CURRENT_SCHEMA_VERSION = 8
+export const CURRENT_SCHEMA_VERSION = 9
 
 export class AppDatabase {
   readonly raw: DatabaseSync
@@ -162,6 +162,27 @@ WHERE type = 'chapter'
       })
       version = 8
     }
+
+    if (version < 9) {
+      // v9（S12）：foreshadow_meta 伏笔台账扩展；人物固定字段仍存 characters.fields_json，无新表。
+      this.transaction(() => {
+        this.raw.exec(`
+CREATE TABLE IF NOT EXISTS foreshadow_meta (
+  memory_id TEXT PRIMARY KEY REFERENCES memories(id) ON DELETE CASCADE,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  planned_chapter_id TEXT REFERENCES document_nodes(id) ON DELETE SET NULL,
+  resolved_chapter_id TEXT REFERENCES document_nodes(id) ON DELETE SET NULL,
+  state TEXT NOT NULL DEFAULT 'planted' CHECK(state IN ('planted','hinting','resolved','abandoned')),
+  abandon_reason TEXT NOT NULL DEFAULT '',
+  character_ids_json TEXT NOT NULL DEFAULT '[]'
+);
+CREATE INDEX IF NOT EXISTS idx_foreshadow_meta_project ON foreshadow_meta(project_id, state);
+`)
+        this.writeVersion(9)
+      })
+      version = 9
+    }
+
     this.raw.prepare("UPDATE chat_messages SET status = 'error' WHERE status = 'streaming'").run()
     if (version !== CURRENT_SCHEMA_VERSION) throw new Error(`DATABASE_SCHEMA_MIGRATION_INCOMPLETE:${version}`)
   }

@@ -2,7 +2,7 @@ import type {
   ContextBundle,
   AITaskEnvelope, Character, ChatCursor, ChatMessage, ChatThread, DigestStatus, DocumentContent, DocumentNode, Idea, LocalLintIssue,
   MemoryItem, MemoryProposal, ModelConfig, NodeOutline, Project, ProjectNote, ProjectType, ProofreadIssue, ProviderConfig,
-  ProviderInput, RoutedTask, SearchResult, Snapshot, TaskModelRoute, TextOrigin, TextPatch, WritingDailyRow, WritingGoals, ChapterStatus, SerialProgress, StockpileSummary
+  ProviderInput, RoutedTask, SearchResult, Snapshot, TaskModelRoute, TextOrigin, TextPatch, WritingDailyRow, WritingGoals, ChapterStatus, SerialProgress, StockpileSummary, ForeshadowEntry, ForeshadowState
 } from './domain'
 
 export interface WorkspaceApi {
@@ -54,6 +54,23 @@ export interface WorkspaceApi {
     list(projectId: string): Promise<Character[]>
     save(input: { id?: string; projectId: string; name: string; aliases?: string[]; notes?: string; fields?: Record<string, string> }): Promise<Character>
     delete(projectId: string, characterId: string): Promise<void>
+  }
+  foreshadows: {
+    listLedger(projectId: string): Promise<ForeshadowEntry[]>
+    listPending(projectId: string): Promise<ForeshadowEntry[]>
+    register(input: {
+      projectId: string; chapterId: string; name?: string; content: string
+      fromPm: number; toPm: number; plannedChapterId?: string | null; characterIds?: string[]
+    }): Promise<ForeshadowEntry>
+    setState(input: {
+      projectId: string; memoryId: string; state: ForeshadowState
+      abandonReason?: string; resolvedChapterId?: string | null
+      plannedChapterId?: string | null; characterIds?: string[]
+    }): Promise<ForeshadowEntry>
+    updateMeta(input: {
+      projectId: string; memoryId: string
+      plannedChapterId?: string | null; resolvedChapterId?: string | null; characterIds?: string[]
+    }): Promise<ForeshadowEntry>
   }
   memories: {
     list(projectId: string): Promise<MemoryItem[]>

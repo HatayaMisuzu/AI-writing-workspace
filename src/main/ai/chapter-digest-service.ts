@@ -4,6 +4,7 @@ import type { AppDatabase } from '../database/database'
 import type { DigestStatus } from '../../shared/domain'
 import { DocumentService } from '../services/document-service'
 import { MemoryService } from '../services/memory-service'
+import { ForeshadowService } from '../services/foreshadow-service'
 
 const candidateSchema = z.object({
   type: z.enum(['fact','event','character_state','relationship','decision','idea','question','foreshadowing','style_signal']).default('fact'),
@@ -32,7 +33,12 @@ const parseJson = (raw: string): unknown => {
 export class ChapterDigestService {
   private readonly documents: DocumentService
   private readonly memories: MemoryService
-  constructor(private readonly db: AppDatabase) { this.documents = new DocumentService(db); this.memories = new MemoryService(db) }
+  private readonly foreshadows: ForeshadowService
+  constructor(private readonly db: AppDatabase) {
+    this.documents = new DocumentService(db)
+    this.memories = new MemoryService(db)
+    this.foreshadows = new ForeshadowService(db)
+  }
 
   storeFromModel(projectId: string, chapterId: string, raw: string, sourceRevision?: number): { id: string; payload: ChapterDigestPayload } {
     const content = this.documents.getContent(projectId, chapterId)
@@ -49,11 +55,17 @@ export class ChapterDigestService {
       this.db.raw.prepare(`INSERT INTO chapter_digests
         (id,project_id,chapter_id,chapter_revision,summary,structured_payload,stale,created_at)
         VALUES (?,?,?,?,?,?,0,?)`).run(id, projectId, chapterId, frozenRevision, payload.summary, JSON.stringify(payload), Date.now())
-      payload.memoryCandidates.forEach((candidate) => this.memories.create({
-        projectId, type: candidate.type, content: candidate.content, status: 'suggested', sourceType: 'chapter', sourceId: chapterId,
-        confidence: candidate.confidence, readerVisibleFrom: candidate.readerVisibleFrom,
-        sourceRevision: frozenRevision, sourceDigestId: id
-      }))
+      payload.memoryCandidates.forEach((candidate) => {
+        const memory = this.memories.create({
+          projectId, type: candidate.type, content: candidate.content, status: 'suggested', sourceType: 'chapter', sourceId: chapterId,
+          confidence: candidate.confidence, readerVisibleFrom: candidate.readerVisibleFrom,
+          sourceRevision: frozenRevision, sourceDigestId: id
+        })
+        // S12：记录员伏笔候选只进 suggested；附 meta 便于确认后进台账，绝不直接 confirmed。
+        if (candidate.type === 'foreshadowing') {
+          this.foreshadows.attachSuggestedMeta(projectId, memory.id, { plannedChapterId: chapterId })
+        }
+      })
     })
     return { id, payload }
   }

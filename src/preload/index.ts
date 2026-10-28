@@ -38,6 +38,13 @@ const api: WorkspaceApi = {
   outlines: { get: (projectId, nodeId) => invoke('outlines:get', projectId, nodeId), list: (projectId) => invoke('outlines:list', projectId), save: (input) => invoke('outlines:save', input) },
   notes: { list: (projectId, section) => invoke('notes:list', projectId, section), save: (input) => invoke('notes:save', input), delete: (projectId, id) => invoke('notes:delete', projectId, id) },
   characters: { list: (projectId) => invoke('characters:list', projectId), save: (input) => invoke('characters:save', input), delete: (projectId, id) => invoke('characters:delete', projectId, id) },
+  foreshadows: {
+    listLedger: (projectId) => invoke('foreshadows:list-ledger', projectId),
+    listPending: (projectId) => invoke('foreshadows:list-pending', projectId),
+    register: (input) => invoke('foreshadows:register', input),
+    setState: (input) => invoke('foreshadows:set-state', input),
+    updateMeta: (input) => invoke('foreshadows:update-meta', input)
+  },
   memories: { list: (projectId) => invoke('memories:list', projectId), confirm: (projectId, id) => invoke('memories:confirm', projectId, id), reject: (projectId, id) => invoke('memories:reject', projectId, id), retire: (projectId, id) => invoke('memories:retire', projectId, id), replace: (projectId, id, content) => invoke('memories:replace', projectId, id, content), extractIntent: (projectId, sourceId, content) => invoke('memories:extract-intent', projectId, sourceId, content) },
   chat: { listThreads: (projectId) => invoke('chat:list-threads', projectId), listMessages: (projectId, threadId, before, limit) => invoke('chat:list-messages', projectId, threadId, before, limit), newThread: (projectId, title) => invoke('chat:new-thread', projectId, title) },
   patches: {

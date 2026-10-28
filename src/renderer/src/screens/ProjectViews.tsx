@@ -4,6 +4,8 @@ import type { Character, DocumentContent, DocumentNode, Idea, MemoryItem, NodeOu
 import { Modal } from '../components/Modal'
 import { buildHistoryDiff } from '../services/history-diff'
 import { buildOutlineCards, noteSectionLabel, outlinePreviewText, parseBatchOutlineLines } from '../services/outline-view'
+import { CHARACTER_FIELD_KEYS, CHARACTER_FIELD_LABELS, type CharacterFieldKey } from '../../../shared/domain'
+import { normalizeCharacterFields, readFixedCharacterFields } from '../../../shared/character-fields'
 
 const snapshotReason = (reason: Snapshot['reason']): string => ({
   interval: '定时保存', large_delete: '大段删除前', ai_edit: 'AI 修改前', manual: '手动快照', pre_restore: '恢复前备份'
@@ -74,22 +76,32 @@ export function NotesView({ projectId, section, onRegisterFlush }: { projectId: 
 }
 
 export function CharactersView({ projectId, onRegisterFlush }: { projectId: string } & FlushRegistration): React.JSX.Element {
+  const emptyFields = (): Record<CharacterFieldKey, string> => readFixedCharacterFields({})
   const [items, setItems] = useState<Character[]>([])
-  const [draft, setDraft] = useState<{ id?: string; name: string; aliases: string; notes: string }>({ name: '', aliases: '', notes: '' })
+  const [draft, setDraft] = useState<{ id?: string; name: string; aliases: string; notes: string; fields: Record<CharacterFieldKey, string> }>({
+    name: '', aliases: '', notes: '', fields: emptyFields()
+  })
   const draftRef = useRef(draft); const savedRef = useRef(JSON.stringify(draft))
   const load = useCallback(() => void window.workspace.characters.list(projectId).then(setItems), [projectId])
-  useEffect(() => { load(); const empty = { name: '', aliases: '', notes: '' }; setDraft(empty); savedRef.current = JSON.stringify(empty) }, [load])
+  useEffect(() => { load(); const empty = { name: '', aliases: '', notes: '', fields: emptyFields() }; setDraft(empty); savedRef.current = JSON.stringify(empty) }, [load])
   useEffect(() => { draftRef.current = draft }, [draft])
-  const selectDraft = useCallback((next: { id?: string; name: string; aliases: string; notes: string }): void => { setDraft(next); draftRef.current = next; savedRef.current = JSON.stringify(next) }, [])
+  const selectDraft = useCallback((next: { id?: string; name: string; aliases: string; notes: string; fields: Record<CharacterFieldKey, string> }): void => {
+    setDraft(next); draftRef.current = next; savedRef.current = JSON.stringify(next)
+  }, [])
   const flush = useCallback(async (): Promise<void> => {
     const current = draftRef.current
-    if (JSON.stringify(current) === savedRef.current || (!current.id && !current.name.trim() && !current.aliases.trim() && !current.notes.trim())) return
-    const saved = await window.workspace.characters.save({ id: current.id, projectId, name: current.name,
-      aliases: current.aliases.split(/[、,，]/).map((item) => item.trim()).filter(Boolean), notes: current.notes })
-    selectDraft({ id: saved.id, name: saved.name, aliases: saved.aliases.join('、'), notes: saved.notes }); load()
+    if (JSON.stringify(current) === savedRef.current || (!current.id && !current.name.trim() && !current.notes.trim() && !current.aliases.trim() && CHARACTER_FIELD_KEYS.every((key) => !current.fields[key].trim()))) return
+    const saved = await window.workspace.characters.save({
+      id: current.id, projectId, name: current.name, aliases: current.aliases.split('、').map((part) => part.trim()).filter(Boolean),
+      notes: current.notes, fields: normalizeCharacterFields(current.fields)
+    })
+    selectDraft({ id: saved.id, name: saved.name, aliases: saved.aliases.join('、'), notes: saved.notes, fields: readFixedCharacterFields(saved.fields) }); load()
   }, [load, projectId, selectDraft])
   useEffect(() => { onRegisterFlush(flush); return () => onRegisterFlush(undefined) }, [flush, onRegisterFlush])
-  return <section className="project-view content-manager"><header><div><h1>人物</h1><p>只记录你真正需要的信息，所有字段都可留空。</p></div><button onClick={() => void flush().then(() => selectDraft({ name: '', aliases: '', notes: '' }))}><Plus size={16} />新建人物</button></header><div className="content-manager-grid"><aside>{items.map((item) => <button key={item.id} className={draft.id === item.id ? 'active' : ''} onClick={() => void flush().then(() => selectDraft({ id: item.id, name: item.name, aliases: item.aliases.join('、'), notes: item.notes }))}><UserRound size={16} /><strong>{item.name}</strong><small>{item.aliases.join('、') || '暂无别名'}</small></button>)}</aside><div className="note-editor character-editor"><label><span>姓名</span><input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></label><label><span>别名（用顿号分隔）</span><input value={draft.aliases} onChange={(event) => setDraft({ ...draft, aliases: event.target.value })} /></label><label><span>自由笔记</span><textarea value={draft.notes} onChange={(event) => setDraft({ ...draft, notes: event.target.value })} /></label><div><button className="primary" onClick={() => void flush()}><Save size={15} />保存</button>{draft.id && <ConfirmAction title="删除人物" message="确定删除这个人物吗？" onConfirm={async () => { await window.workspace.characters.delete(projectId, draft.id!); selectDraft({ name: '', aliases: '', notes: '' }); load() }}><Trash2 size={15} />删除</ConfirmAction>}</div></div></div></section>
+  const setField = (key: CharacterFieldKey, value: string): void => {
+    setDraft((prev) => ({ ...prev, fields: { ...prev.fields, [key]: value } }))
+  }
+  return <section className="project-view content-manager" data-testid="characters-view"><header><div><h1>人物</h1><p>固定字段均可留空；不预置身份文案。所有内容只属于当前作品。</p></div><button onClick={() => void flush().then(() => selectDraft({ name: '', aliases: '', notes: '', fields: emptyFields() }))}><Plus size={16} />新建人物</button></header><div className="content-manager-grid"><aside>{items.map((item) => <button key={item.id} className={draft.id === item.id ? 'active' : ''} onClick={() => void flush().then(() => selectDraft({ id: item.id, name: item.name, aliases: item.aliases.join('、'), notes: item.notes, fields: readFixedCharacterFields(item.fields) }))}><UserRound size={16} /><strong>{item.name}</strong><small>{item.aliases.join('、') || item.fields.identity || '暂无别名'}</small></button>)}</aside><div className="note-editor character-editor"><label><span>姓名</span><input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></label><label><span>别名（用顿号分隔）</span><input value={draft.aliases} onChange={(event) => setDraft({ ...draft, aliases: event.target.value })} /></label>{CHARACTER_FIELD_KEYS.map((key) => <label key={key}><span>{CHARACTER_FIELD_LABELS[key]}</span>{key === 'currentState' || key === 'appearance' || key === 'personality' || key === 'goal' ? <textarea value={draft.fields[key]} onChange={(event) => setField(key, event.target.value)} rows={2} /> : <input value={draft.fields[key]} onChange={(event) => setField(key, event.target.value)} />}</label>)}<label><span>自由笔记</span><textarea value={draft.notes} onChange={(event) => setDraft({ ...draft, notes: event.target.value })} /></label><div><button className="primary" onClick={() => void flush()}><Save size={15} />保存</button>{draft.id && <ConfirmAction title="删除人物" message="确定删除这个人物吗？" onConfirm={async () => { await window.workspace.characters.delete(projectId, draft.id!); selectDraft({ name: '', aliases: '', notes: '', fields: emptyFields() }); load() }}><Trash2 size={15} />删除</ConfirmAction>}</div></div></div></section>
 }
 
 export function HistoryView({ projectId, document, currentContent, onRestored }: { projectId: string; document?: DocumentNode; currentContent?: DocumentContent; onRestored?(content: Awaited<ReturnType<typeof window.workspace.snapshots.restore>>): void }): React.JSX.Element {

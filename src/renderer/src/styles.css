@@ -466,3 +466,24 @@ button.danger-button { color: #fff; background: var(--danger); border-color: var
   padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px;
 }
 .stockpile-chapter-list small { color: var(--muted); }
+
+/* S12 伏笔台账 + 人物固定字段 */
+.foreshadow-section { margin: 18px 0 22px; }
+.foreshadow-section h2 { display: flex; align-items: center; gap: 8px; font-size: 15px; margin: 0 0 10px; }
+.foreshadow-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.foreshadow-item {
+  border: 1px solid var(--line); border-radius: 10px; background: #fff;
+  padding: 12px 14px; display: flex; flex-direction: column; gap: 6px;
+}
+.foreshadow-item.is-overdue { border-color: #e0b089; background: #fff8f2; }
+.foreshadow-item-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.foreshadow-state { font-size: 11px; border-radius: 999px; padding: 1px 8px; border: 1px solid var(--line); color: var(--muted); }
+.foreshadow-state.state-planted { background: #f3f1ea; }
+.foreshadow-state.state-hinting { background: #eef3f8; color: #3d5a80; }
+.foreshadow-state.state-resolved { background: #e8f3ee; color: #1f4d3c; }
+.foreshadow-state.state-abandoned { background: #f3ecec; color: #6b6570; }
+.foreshadow-overdue { display: inline-flex; align-items: center; gap: 4px; color: #9a4b16; font-size: 12px; font-weight: 600; }
+.foreshadow-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+.foreshadow-abandon-form { margin-top: 8px; display: flex; flex-direction: column; gap: 8px; }
+.foreshadow-abandon { color: var(--muted); }
+.character-editor label span { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
