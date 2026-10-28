@@ -199,6 +199,69 @@ try {
     if (!persisted) throw new Error('notes.list(outline) 未回读到刚保存的全书大纲')
   })
 
+
+  // S10：日更面板 — 未设目标只显示统计；开启正整数目标后进度出现，关闭后消失
+  await record('S10 日更面板未设目标无进度、开启后进度正确', async () => {
+    await running.page.getByRole('button', { name: '正文', exact: true }).click()
+    const editor = running.page.locator('.manuscript-editor')
+    await editor.waitFor()
+    // 追加一段确定字数，保证今日码字 > 0（净值随旅程累加，以 IPC 为准）
+    const body = `${(await editor.innerText()).trim()}\n${'日'.repeat(40)}`
+    await editor.fill(body)
+    await waitSaved(running.page)
+
+    const day = await running.page.evaluate(async () => {
+      const [project] = await window.workspace.projects.list()
+      const goals = await window.workspace.writing.getGoals(project.id)
+      const today = await window.workspace.writing.getDay(project.id)
+      return { projectId: project.id, goals, today }
+    })
+    assert.equal(day.goals.dailyWordGoalEnabled, false)
+    assert.equal(day.goals.dailyWordGoal, null)
+    assert.ok(day.today.humanWordsNetDisplay > 0, `写字后今日码字应 > 0，实际 ${day.today.humanWordsNetDisplay}`)
+
+    await running.page.getByRole('button', { name: '日更', exact: true }).click()
+    const panel = running.page.locator('.daily-stats-view')
+    await panel.waitFor({ timeout: 10_000 })
+    // 面板 load 是异步的，等到码字卡片出现后刷新一次确保对齐
+    await panel.getByTestId('daily-human-words').waitFor()
+    await panel.getByRole('button', { name: '刷新' }).click()
+    await panel.getByTestId('daily-ai-words').waitFor()
+    await panel.getByText('今日码字', { exact: false }).waitFor()
+    await panel.getByText('采纳 AI 字数', { exact: false }).waitFor()
+    await panel.getByTestId('daily-calendar').waitFor()
+
+    // ⑦ 未启用：无进度条、无「/ 目标」、无达成提示
+    assert.equal(await panel.locator('.daily-word-progress').count(), 0, '未设目标不应渲染进度条')
+    assert.equal(await panel.locator('[data-testid="daily-goal-suffix"]').count(), 0, '未设目标不应出现 / 目标')
+    assert.equal(await panel.getByText('已达成').count(), 0)
+    assert.equal(await panel.getByText('未达成').count(), 0)
+
+    const humanLabel = String(day.today.humanWordsNetDisplay)
+    const humanBefore = (await panel.getByTestId('daily-human-words').innerText()).replace(/\s+/g, ' ')
+    assert.ok(humanBefore.includes(humanLabel), `面板码字应显示 ${humanLabel}，实际：${humanBefore}`)
+
+    // ⑧ 目标设为 2× 今日码字 → 进度 50%
+    const goal = day.today.humanWordsNetDisplay * 2
+    await panel.getByLabel('启用字数目标').check()
+    await panel.getByLabel('日更字数目标').fill(String(goal))
+    await panel.getByRole('button', { name: '保存目标' }).click()
+    await panel.locator('.daily-word-progress').waitFor({ timeout: 10_000 })
+    await panel.getByTestId('daily-goal-suffix').getByText(`/ 目标 ${goal}`).waitFor()
+    const pct = await panel.locator('.daily-word-progress').getAttribute('aria-valuenow')
+    assert.equal(pct, '50', `${day.today.humanWordsNetDisplay}/${goal} 进度应为 50%，实际 ${pct}`)
+
+    // 关闭后进度消失，统计数值仍在
+    await panel.getByLabel('启用字数目标').uncheck()
+    await panel.getByRole('button', { name: '保存目标' }).click()
+    await panel.locator('.daily-word-progress').waitFor({ state: 'detached', timeout: 10_000 })
+    assert.equal(await panel.locator('[data-testid="daily-goal-suffix"]').count(), 0)
+    const humanAfter = (await panel.getByTestId('daily-human-words').innerText()).replace(/\s+/g, ' ')
+    assert.ok(humanAfter.includes(humanLabel), `关闭目标后码字应不变（${humanLabel}），实际：${humanAfter}`)
+    assert.equal(await panel.getByText('已达成').count(), 0)
+    assert.equal(await panel.getByText('未达成').count(), 0)
+  })
+
   const fixtureHitsBeforeProvider = fixtureHits
   const ids = await running.page.evaluate(async ({ baseUrl }) => {
     const [project] = await window.workspace.projects.list()

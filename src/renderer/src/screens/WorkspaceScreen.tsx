@@ -5,6 +5,7 @@ import { ProjectSidebar, type ProjectSection } from '../components/ProjectSideba
 import { EditorSurface, type EditorController, type EditorSelection } from '../components/EditorSurface'
 import { AssistantPanel } from '../components/AssistantPanel'
 import { ChapterOutlineAside, CharactersView, HistoryView, IdeasView, MemoryView, NotesView, OutlineView, PatchDrawer } from './ProjectViews'
+import { DailyStatsView } from './DailyStatsView'
 import { Modal } from '../components/Modal'
 import { parseSearchSnippet } from '../services/search-snippet'
 
@@ -170,6 +171,7 @@ export function WorkspaceScreen({ project, onProjectChanged, onSettings, onRegis
         : section === 'story' ? <NotesView projectId={project.id} section="story" onRegisterFlush={registerAuxiliaryFlush} />
         : section === 'references' ? <NotesView projectId={project.id} section="reference" onRegisterFlush={registerAuxiliaryFlush} />
         : section === 'characters' ? <CharactersView projectId={project.id} onRegisterFlush={registerAuxiliaryFlush} />
+        : section === 'daily' ? <DailyStatsView project={project} />
         : <section className="project-view placeholder-view"><FilePlus2 size={34} /><h1>内容</h1><p>这是辅助层，不要求作者维护复杂结构。</p></section>}
       <footer className="workspace-status"><span className="saved-dot" />本地项目<span>本章 {content?.wordCount.toLocaleString() ?? 0} 字</span><span>全书 {totalWords.toLocaleString()} 字</span><span>项目内容严格隔离</span></footer>
     </div>
