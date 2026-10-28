@@ -81,7 +81,9 @@ export const aiTaskSchema = z.object({
   target: z.object({ requestId: idSchema, projectId: idSchema, documentId: idSchema, sourceRevision: z.number().int().nonnegative(),
     selection: z.object({ fromPm: z.number().int().nonnegative(), toPm: z.number().int().nonnegative(), text: z.string().max(200_000), originalHash: z.string().min(1).max(200) }).optional() }).optional(),
   excludedIds: z.array(contextSourceIdSchema).max(500).optional(),
-  includedIds: z.array(contextSourceIdSchema).max(500).optional()
+  includedIds: z.array(contextSourceIdSchema).max(500).optional(),
+  /** S8：执笔候选数 1–3；缺省由 runtime 归一为 1。 */
+  candidateCount: z.number().int().min(1).max(3).optional()
 })
 export const aiStartSchema = z.object({
   requestId: idSchema, threadId: idSchema, userMessageId: idSchema, assistantMessageId: idSchema,

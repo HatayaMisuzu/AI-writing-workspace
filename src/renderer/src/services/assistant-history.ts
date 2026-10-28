@@ -10,6 +10,9 @@ export interface AssistantHistoryMessage {
   replyToUserId?: string
   historical?: boolean
   inserted?: boolean
+  /** S8：内存中的执笔候选（未选中的不写 text_patches）。 */
+  candidates?: string[]
+  activeCandidateIndex?: number
   target?: DocumentTaskTarget
 }
 
@@ -41,6 +44,19 @@ export function retryInputForMessage(messages: AssistantHistoryMessage[], failed
 
 export function canInsertCandidate(message: AssistantHistoryMessage): boolean {
   return message.role === 'assistant' && message.mode === 'generation' && !message.status && !message.inserted && Boolean(message.content) && Boolean(message.target)
+}
+
+/** S8：采用候选为插入型补丁前，须有冻结的插入点（selection，可为 empty range）。 */
+export function canProposeGenerationPatch(message: AssistantHistoryMessage): boolean {
+  return canInsertCandidate(message) && Boolean(message.target?.selection) && Boolean(activeCandidateText(message))
+}
+
+export function activeCandidateText(message: Pick<AssistantHistoryMessage, 'content' | 'candidates' | 'activeCandidateIndex'>): string {
+  if (message.candidates?.length) {
+    const index = Math.min(Math.max(0, message.activeCandidateIndex ?? 0), message.candidates.length - 1)
+    return message.candidates[index] ?? message.content
+  }
+  return message.content
 }
 
 export function resolveModelDisplayName(mode: RoutedTask, models: ModelConfig[], routes: Record<RoutedTask, string | 'default'>): string {
