@@ -174,6 +174,31 @@ try {
     await running.page.locator('.chapter-outline-aside').getByText('要点甲').waitFor()
   })
 
+  await record('S4 全书大纲可看改保存', async () => {
+    await running.page.getByRole('button', { name: '大纲', exact: true }).click()
+    const slot = running.page.locator('.book-outline-slot')
+    await slot.getByRole('heading', { name: '全书大纲' }).waitFor({ timeout: 10_000 })
+    await slot.getByPlaceholder('标题').fill('全书核心大纲验收')
+    await slot.getByPlaceholder('从一段自由笔记开始……').fill('主角从小镇出发，核心冲突已定')
+    await slot.getByRole('button', { name: '保存', exact: true }).click()
+    await slot.getByText('全书核心大纲验收', { exact: true }).waitFor({ timeout: 10_000 })
+    // 离开再进入，证明落库可回读
+    await running.page.getByRole('button', { name: '正文', exact: true }).click()
+    await running.page.locator('.manuscript-editor').waitFor()
+    await running.page.getByRole('button', { name: '大纲', exact: true }).click()
+    const slot2 = running.page.locator('.book-outline-slot')
+    await slot2.getByText('全书核心大纲验收', { exact: true }).waitFor({ timeout: 10_000 })
+    await slot2.getByRole('button', { name: /全书核心大纲验收/ }).click()
+    const body = await slot2.locator('textarea').inputValue()
+    if (!body.includes('核心冲突已定')) throw new Error('全书大纲正文未回填: ' + body)
+    const persisted = await running.page.evaluate(async () => {
+      const [project] = await window.workspace.projects.list()
+      const notes = await window.workspace.notes.list(project.id, 'outline')
+      return notes.some((n) => n.title === '全书核心大纲验收' && n.content.includes('核心冲突已定') && n.section === 'outline')
+    })
+    if (!persisted) throw new Error('notes.list(outline) 未回读到刚保存的全书大纲')
+  })
+
   const fixtureHitsBeforeProvider = fixtureHits
   const ids = await running.page.evaluate(async ({ baseUrl }) => {
     const [project] = await window.workspace.projects.list()

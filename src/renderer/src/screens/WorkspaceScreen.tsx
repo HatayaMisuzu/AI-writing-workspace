@@ -168,7 +168,7 @@ export function WorkspaceScreen({ project, onProjectChanged, onSettings, onRegis
           <EditorSurface node={selected} content={content} focusMode={focusMode} onFocusMode={setFocusMode} onSaved={(saved) => { setContent(saved); void refreshTree(); onProjectChanged() }} onSelection={setSelection} onRegisterController={registerController} onOpenPatches={() => setPatchOpen(true)} />
           {!focusMode && <ChapterOutlineAside projectId={project.id} chapter={selected} />}
         </div>
-        : section === 'outline' ? <OutlineView projectId={project.id} tree={tree} onTreeChanged={async () => { await refreshTree(); onProjectChanged() }} onOpenChapter={(node) => void openDocument(node)} />
+        : section === 'outline' ? <OutlineView projectId={project.id} tree={tree} onTreeChanged={async () => { await refreshTree(); onProjectChanged() }} onOpenChapter={(node) => void openDocument(node)} onRegisterFlush={registerAuxiliaryFlush} />
         : section === 'ideas' ? <IdeasView projectId={project.id} onRegisterFlush={registerAuxiliaryFlush} />
         : section === 'history' ? <HistoryView projectId={project.id} document={selected} currentContent={content} onRestored={(restored) => { setContent(restored); void refreshTree() }} />
         : section === 'ai-data' ? <MemoryView projectId={project.id} />

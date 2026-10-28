@@ -52,3 +52,7 @@ export const outlinePreviewText = (card: Pick<OutlineCard, 'summary' | 'beats' |
   ].filter(Boolean)
   return parts.join(' · ')
 }
+
+/** NotesView 分区标题（含全书大纲）。 */
+export const noteSectionLabel = (section: 'story' | 'reference' | 'outline'): string =>
+  section === 'outline' ? '全书大纲' : section === 'story' ? '故事笔记' : '参考资料'

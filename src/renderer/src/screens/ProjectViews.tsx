@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Character, DocumentContent, DocumentNode, Idea, MemoryItem, NodeOutline, ProjectNote, Snapshot, TextPatch } from '../../../shared/domain'
 import { Modal } from '../components/Modal'
 import { buildHistoryDiff } from '../services/history-diff'
-import { buildOutlineCards, outlinePreviewText, parseBatchOutlineLines } from '../services/outline-view'
+import { buildOutlineCards, noteSectionLabel, outlinePreviewText, parseBatchOutlineLines } from '../services/outline-view'
 
 const snapshotReason = (reason: Snapshot['reason']): string => ({
   interval: '定时保存', large_delete: '大段删除前', ai_edit: 'AI 修改前', manual: '手动快照', pre_restore: '恢复前备份'
@@ -69,7 +69,7 @@ export function NotesView({ projectId, section, onRegisterFlush }: { projectId: 
     selectDraft({ id: saved.id, title: saved.title, content: saved.content }); load()
   }, [load, projectId, section, selectDraft])
   useEffect(() => { onRegisterFlush(flush); return () => onRegisterFlush(undefined) }, [flush, onRegisterFlush])
-  const label = section === 'story' ? '故事笔记' : '参考资料'
+  const label = noteSectionLabel(section)
   return <section className="project-view content-manager"><header><div><h1>{label}</h1><p>自由记录，不要求填写复杂结构。</p></div><button onClick={() => void flush().then(() => selectDraft({ title: '', content: '' }))}><Plus size={16} />新建</button></header><div className="content-manager-grid"><aside>{items.map((item) => <button key={item.id} className={draft.id === item.id ? 'active' : ''} onClick={() => void flush().then(() => selectDraft({ id: item.id, title: item.title, content: item.content }))}><strong>{item.title}</strong><small>{new Date(item.updatedAt).toLocaleDateString()}</small></button>)}</aside><div className="note-editor"><input value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} placeholder="标题" /><textarea value={draft.content} onChange={(event) => setDraft({ ...draft, content: event.target.value })} placeholder="从一段自由笔记开始……" /><div><button className="primary" onClick={() => void flush()}><Save size={15} />保存</button>{draft.id && <ConfirmAction title="删除笔记" message="删除后无法恢复。确定删除这条笔记吗？" onConfirm={async () => { await window.workspace.notes.delete(projectId, draft.id!); selectDraft({ title: '', content: '' }); load() }}><Trash2 size={15} />删除</ConfirmAction>}</div></div></div></section>
 }
 
@@ -104,10 +104,10 @@ export function HistoryView({ projectId, document, currentContent, onRestored }:
 
 
 /** S4：大纲视图 — 卡片列表，顺序与章树同源；支持批量建章。 */
-export function OutlineView({ projectId, tree, onTreeChanged, onOpenChapter }: {
+export function OutlineView({ projectId, tree, onTreeChanged, onOpenChapter, onRegisterFlush }: {
   projectId: string; tree: DocumentNode[]; onTreeChanged(): Promise<void> | void
   onOpenChapter(node: DocumentNode): void
-}): React.JSX.Element {
+} & FlushRegistration): React.JSX.Element {
   const [outlines, setOutlines] = useState<NodeOutline[]>([])
   const [batchOpen, setBatchOpen] = useState(false)
   const [batchText, setBatchText] = useState('')
@@ -151,9 +151,13 @@ export function OutlineView({ projectId, tree, onTreeChanged, onOpenChapter }: {
 
   return <section className="project-view outline-view">
     <header>
-      <div><h1>大纲</h1><p>卷梗概与章细纲；顺序与正文目录一致。批量建章会生成空章（构思）并带上细纲。</p></div>
+      <div><h1>大纲</h1><p>三层：全书核心大纲 → 卷梗概 → 章细纲。顺序与正文目录一致。批量建章会生成空章（构思）并带上细纲。</p></div>
       <button className="primary" disabled={!volumes.length} onClick={() => { setError(undefined); setBatchOpen(true) }}><Plus size={16} />批量建章</button>
     </header>
+    <div className="book-outline-slot" aria-label="全书核心大纲">
+      <NotesView projectId={projectId} section="outline" onRegisterFlush={onRegisterFlush} />
+    </div>
+    <h2 className="outline-layer-heading">卷 / 章细纲</h2>
     {error && <div className="inline-error" role="alert">{error}</div>}
     {cards.length === 0 ? <div className="empty-section"><ListTree size={28} /><h3>还没有卷章</h3><p>先在正文区建卷，再回到这里规划细纲。</p></div>
       : <div className="outline-card-list" aria-label="大纲卡片">

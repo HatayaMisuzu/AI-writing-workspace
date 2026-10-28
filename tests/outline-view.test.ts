@@ -5,6 +5,7 @@ import { DocumentService } from '../src/main/services/document-service'
 import {
   batchChapterTitle,
   buildOutlineCards,
+  noteSectionLabel,
   outlinePreviewText,
   parseBatchOutlineLines
 } from '../src/renderer/src/services/outline-view'
@@ -74,5 +75,13 @@ describe('S4 批量建 10 章顺序', () => {
       .toThrow('BATCH_OUTLINE_LINES_REQUIRED')
     expect(() => docs.batchCreateChaptersFromOutlines({ projectId: project.id, volumeId: chapter.id, lines: ['x'] }))
       .toThrow('CHAPTER_REQUIRES_VOLUME')
+  })
+})
+
+describe('S4 全书大纲入口', () => {
+  it('noteSectionLabel 标注全书大纲', () => {
+    expect(noteSectionLabel('outline')).toBe('全书大纲')
+    expect(noteSectionLabel('story')).toBe('故事笔记')
+    expect(noteSectionLabel('reference')).toBe('参考资料')
   })
 })
