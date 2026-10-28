@@ -253,24 +253,29 @@ try {
     await running.page.getByText('续写候选', { exact: true }).waitFor({ timeout: 15_000 })
     await running.page.getByRole('button', { name: '采用为补丁' }).last().click()
     await running.page.getByText('已提出补丁', { exact: true }).waitFor()
-    const mid = await running.page.evaluate(async ({ projectId, chapterA, chapterB }) => ({
-      a: (await window.workspace.patches.list(projectId, chapterA)).filter((patch) => patch.status === 'proposed').length,
-      b: (await window.workspace.patches.list(projectId, chapterB)).filter((patch) => patch.status === 'proposed').length,
-      bodyA: (await window.workspace.documents.get(projectId, chapterA)).plainText,
-      bodyB: (await window.workspace.documents.get(projectId, chapterB)).plainText
-    }), ids)
-    assert.equal(mid.a, 1, '来源章应有 1 条 proposed 补丁')
-    assert.equal(mid.b, 0, '当前章不应有补丁')
+    const mid = await running.page.evaluate(async ({ projectId, chapterA, chapterB }) => {
+      const patchesA = await window.workspace.patches.list(projectId, chapterA)
+      const patchesB = await window.workspace.patches.list(projectId, chapterB)
+      return {
+        generationProposed: patchesA.filter((patch) => patch.status === 'proposed' && patch.replacement.includes('续写候选')).length,
+        bProposed: patchesB.filter((patch) => patch.status === 'proposed').length,
+        bodyA: (await window.workspace.documents.get(projectId, chapterA)).plainText,
+        bodyB: (await window.workspace.documents.get(projectId, chapterB)).plainText
+      }
+    }, ids)
+    assert.equal(mid.generationProposed, 1, '来源章应有 1 条续写 proposed 补丁')
+    assert.equal(mid.bProposed, 0, '当前章不应有补丁')
     assert.equal(mid.bodyB, '同字原文。最后一次输入会保存。')
     assert.ok(!mid.bodyA.includes('续写候选'), '接受前来源章正文不应写入候选')
     await running.page.getByRole('button', { name: '打开来源章节' }).last().click()
     await running.page.locator('.manuscript-editor').waitFor()
-    // 若抽屉因跨章打开过，关了再开到来源章
     const drawer = running.page.locator('.patch-drawer')
     if (await drawer.count()) await drawer.getByRole('button', { name: '关闭' }).click().catch(() => {})
     await running.page.getByRole('button', { name: '修改提案' }).click()
-    await running.page.locator('.patch-drawer').getByRole('button', { name: '接受并应用' }).click()
-    await running.page.getByText('已接受', { exact: true }).waitFor({ timeout: 10_000 })
+    // 抽屉可能仍有 U03 的编辑提案；接受含「续写候选」的那条
+    const genCard = running.page.locator('.patch-drawer article').filter({ hasText: '续写候选' })
+    await genCard.getByRole('button', { name: '接受并应用' }).click()
+    await genCard.getByText('已接受', { exact: true }).waitFor({ timeout: 10_000 })
     const after = await running.page.evaluate(({ projectId, chapterA }) => window.workspace.documents.get(projectId, chapterA), ids)
     assert.match(after.plainText, /续写候选/)
   })
