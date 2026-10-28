@@ -1,5 +1,6 @@
 import type { AppErrorShape, ModelConfig, ProviderCapabilities, ProviderConfig, ProviderInput, RoutedTask } from '../../shared/domain'
 import { checkBaseUrl, displayBaseUrl, sameEndpoint, redactSecretsInText, restoreRedactedSecrets } from '../../shared/base-url'
+import { defaultTimeoutsForBaseUrl, isLocalBaseUrl, localConnectionErrorMessage } from '../../shared/provider-presets'
 import type { AppDatabase } from '../database/database'
 import { randomUUID } from 'node:crypto'
 
@@ -10,7 +11,7 @@ export interface SecretCodec {
 
 export const ADDRESS_CHANGED_KEY = '地址已变更，为防止密钥发往新地址，请重新填写 Key。'
 export const ADDRESS_CHANGED_QUERY_SECRET = '地址已变更，为防止密钥发往新地址，请重新填写地址中的密钥。'
-type ProviderRow = { id: string; provider_type: 'openai-compatible'; display_name: string; base_url: string; encrypted_api_key: Buffer | null; created_at: number; updated_at: number }
+type ProviderRow = { id: string; provider_type: 'openai-compatible'; display_name: string; base_url: string; encrypted_api_key: Buffer | null; created_at: number; updated_at: number; first_token_timeout_ms: number | null; total_timeout_ms: number | null }
 
 const baseUrlIssue = (url: string): { baseUrlError?: string } => { const check = checkBaseUrl(url); return check.ok ? {} : { baseUrlError: check.message } }
 /** 在 path 上追加端点，query（含作者放在地址里的密钥参数）原样保留在末尾。 */
@@ -36,7 +37,9 @@ export class ProviderService {
   list(): ProviderConfig[] {
     const rows = this.db.raw.prepare('SELECT * FROM provider_configs ORDER BY updated_at DESC').all() as ProviderRow[]
     return rows.map((row) => ({ id: row.id, providerType: row.provider_type, displayName: row.display_name,
-      baseUrl: displayBaseUrl(row.base_url), ...baseUrlIssue(row.base_url), hasApiKey: Boolean(row.encrypted_api_key), createdAt: row.created_at, updatedAt: row.updated_at }))
+      baseUrl: displayBaseUrl(row.base_url), ...baseUrlIssue(row.base_url), hasApiKey: Boolean(row.encrypted_api_key),
+      firstTokenTimeoutMs: row.first_token_timeout_ms ?? undefined, totalTimeoutMs: row.total_timeout_ms ?? undefined,
+      createdAt: row.created_at, updatedAt: row.updated_at }))
   }
 
   save(input: ProviderInput): ProviderConfig {
@@ -52,33 +55,65 @@ export class ProviderService {
     if (!input.apiKey && existing?.encrypted_api_key && !sameEndpoint(baseUrl, existing.base_url))
       throw Object.assign(new Error(ADDRESS_CHANGED_KEY), { code: 'PROVIDER_KEY_REENTRY_REQUIRED' })
     const now = Date.now()
+    // S7：空 key 不调用 encrypt（本地模型不需要安全存储）；非空才加密。
     const encrypted = input.apiKey ? this.codec.encrypt(input.apiKey) : existing?.encrypted_api_key ?? null
+    const firstToken = input.firstTokenTimeoutMs ?? existing?.first_token_timeout_ms ?? null
+    const totalTimeout = input.totalTimeoutMs ?? existing?.total_timeout_ms ?? null
     this.db.raw.prepare(`INSERT INTO provider_configs
-      (id, provider_type, display_name, base_url, encrypted_api_key, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+      (id, provider_type, display_name, base_url, encrypted_api_key, created_at, updated_at, first_token_timeout_ms, total_timeout_ms)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET provider_type=excluded.provider_type, display_name=excluded.display_name,
-      base_url=excluded.base_url, encrypted_api_key=excluded.encrypted_api_key, updated_at=excluded.updated_at`)
-      .run(input.id || randomUUID(), input.providerType, input.displayName.trim(), requireValidBaseUrl(baseUrl), encrypted, existing?.created_at ?? now, now)
+      base_url=excluded.base_url, encrypted_api_key=excluded.encrypted_api_key, updated_at=excluded.updated_at,
+      first_token_timeout_ms=excluded.first_token_timeout_ms, total_timeout_ms=excluded.total_timeout_ms`)
+      .run(input.id || randomUUID(), input.providerType, input.displayName.trim(), requireValidBaseUrl(baseUrl), encrypted, existing?.created_at ?? now, now, firstToken, totalTimeout)
     return this.list().find((item) => item.id === input.id) ?? this.list()[0]
   }
 
   getWithSecret(providerId: string): { config: ProviderConfig; apiKey: string } {
     const row = this.db.raw.prepare('SELECT * FROM provider_configs WHERE id = ?').get(providerId) as ProviderRow | undefined
     if (!row) throw new Error('PROVIDER_NOT_FOUND')
-    if (!row.encrypted_api_key) throw new Error('PROVIDER_KEY_MISSING')
-    requireValidBaseUrl(row.base_url)
+    const baseUrl = requireValidBaseUrl(row.base_url)
+    const config: ProviderConfig = {
+      id: row.id, providerType: row.provider_type, displayName: row.display_name, baseUrl,
+      hasApiKey: Boolean(row.encrypted_api_key),
+      firstTokenTimeoutMs: row.first_token_timeout_ms ?? undefined,
+      totalTimeoutMs: row.total_timeout_ms ?? undefined,
+      createdAt: row.created_at, updatedAt: row.updated_at
+    }
+    // S7：本地服务允许空 key，不触碰 safeStorage；远端仍要求已存 key。
+    if (!row.encrypted_api_key) {
+      if (isLocalBaseUrl(baseUrl)) return { config, apiKey: '' }
+      throw new Error('PROVIDER_KEY_MISSING')
+    }
+    return { config, apiKey: this.codec.decrypt(row.encrypted_api_key) }
+  }
+
+  /** 解析某服务的超时：显式配置优先，否则按本地/远端默认。 */
+  resolveTimeouts(providerId: string): { firstTokenTimeoutMs: number; totalTimeoutMs: number } {
+    const row = this.db.raw.prepare('SELECT base_url, first_token_timeout_ms, total_timeout_ms FROM provider_configs WHERE id = ?').get(providerId) as
+      { base_url: string; first_token_timeout_ms: number | null; total_timeout_ms: number | null } | undefined
+    if (!row) throw new Error('PROVIDER_NOT_FOUND')
+    const defaults = defaultTimeoutsForBaseUrl(row.base_url)
     return {
-      config: { id: row.id, providerType: row.provider_type, displayName: row.display_name, baseUrl: requireValidBaseUrl(row.base_url),
-        hasApiKey: true, createdAt: row.created_at, updatedAt: row.updated_at },
-      apiKey: this.codec.decrypt(row.encrypted_api_key)
+      firstTokenTimeoutMs: row.first_token_timeout_ms ?? defaults.firstTokenTimeoutMs,
+      totalTimeoutMs: row.total_timeout_ms ?? defaults.totalTimeoutMs
     }
   }
 
   listModels(): ModelConfig[] {
     const rows = this.db.raw.prepare('SELECT * FROM model_configs ORDER BY is_default DESC, display_name').all() as Array<Record<string, unknown>>
-    return rows.map((row) => ({ id: row.id as string, providerId: row.provider_id as string, modelId: row.model_id as string,
-      displayName: row.display_name as string, capabilities: truthfulCapabilities(JSON.parse(row.capabilities_json as string) as ProviderCapabilities),
-      enabled: Boolean(row.enabled), isDefault: Boolean(row.is_default) }))
+    return rows.map((row) => {
+      const contextWindow = typeof row.context_window === 'number' ? row.context_window as number : undefined
+      const maxOutput = typeof row.max_output === 'number' ? row.max_output as number : undefined
+      const capabilities = truthfulCapabilities(JSON.parse(row.capabilities_json as string) as ProviderCapabilities)
+      // 与 capabilities.maxContextTokens 对齐，便于旧路径读取窗口。
+      if (contextWindow && !capabilities.maxContextTokens) capabilities.maxContextTokens = contextWindow
+      return {
+        id: row.id as string, providerId: row.provider_id as string, modelId: row.model_id as string,
+        displayName: row.display_name as string, capabilities, enabled: Boolean(row.enabled), isDefault: Boolean(row.is_default),
+        contextWindow, maxOutput
+      }
+    })
   }
 
   saveModel(model: ModelConfig): ModelConfig {
@@ -87,14 +122,21 @@ export class ProviderService {
     const id = model.id || randomUUID()
     this.db.transaction(() => {
       if (model.isDefault && model.enabled) this.db.raw.prepare('UPDATE model_configs SET is_default = 0').run()
+      const contextWindow = model.contextWindow ?? model.capabilities.maxContextTokens ?? null
+      const maxOutput = model.maxOutput ?? null
+      const caps = truthfulCapabilities({
+        ...model.capabilities,
+        maxContextTokens: contextWindow ?? model.capabilities.maxContextTokens
+      })
       this.db.raw.prepare(`INSERT INTO model_configs
-        (id, provider_id, model_id, display_name, capabilities_json, enabled, is_default)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        (id, provider_id, model_id, display_name, capabilities_json, enabled, is_default, context_window, max_output)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET provider_id=excluded.provider_id, model_id=excluded.model_id,
           display_name=excluded.display_name, capabilities_json=excluded.capabilities_json,
-          enabled=excluded.enabled, is_default=excluded.is_default`)
-        .run(id, model.providerId, model.modelId.trim(), model.displayName.trim(), JSON.stringify(truthfulCapabilities(model.capabilities)),
-          model.enabled ? 1 : 0, model.enabled && model.isDefault ? 1 : 0)
+          enabled=excluded.enabled, is_default=excluded.is_default,
+          context_window=excluded.context_window, max_output=excluded.max_output`)
+        .run(id, model.providerId, model.modelId.trim(), model.displayName.trim(), JSON.stringify(caps),
+          model.enabled ? 1 : 0, model.enabled && model.isDefault ? 1 : 0, contextWindow, maxOutput)
       if (!model.enabled) {
         this.db.raw.prepare("UPDATE task_model_routes SET model_id = 'default' WHERE model_id = ?").run(id)
         const fallback = this.db.raw.prepare('SELECT id FROM model_configs WHERE id != ? AND enabled = 1 ORDER BY is_default DESC, rowid LIMIT 1').get(id) as { id: string } | undefined
@@ -137,25 +179,43 @@ export interface ProviderMessage { role: 'system' | 'user' | 'assistant' | 'tool
 const providerError = (code: string, message: string): AppErrorShape & Error =>
   Object.assign(new Error(message), { code, recoverable: true })
 
-function deadlineSignal(external?: AbortSignal, timeoutMs = 60_000): { signal: AbortSignal; dispose(): void } {
+function deadlineSignal(external?: AbortSignal, timeoutMs = 60_000): {
+  signal: AbortSignal; dispose(): void; fail(error: Error): void
+} {
   const controller = new AbortController()
   const onAbort = (): void => controller.abort(external?.reason ?? providerError('PROVIDER_CANCELLED', '请求已取消。'))
   external?.addEventListener('abort', onAbort, { once: true })
   if (external?.aborted) onAbort()
   const timer = setTimeout(() => controller.abort(providerError('PROVIDER_TIMEOUT', '模型服务响应超时，请重试。')), timeoutMs)
-  return { signal: controller.signal, dispose: () => { clearTimeout(timer); external?.removeEventListener('abort', onAbort) } }
+  return {
+    signal: controller.signal,
+    dispose: () => { clearTimeout(timer); external?.removeEventListener('abort', onAbort) },
+    fail: (error) => controller.abort(error)
+  }
 }
 
 export class OpenAICompatibleAdapter {
   private readonly baseUrl: string
   constructor(baseUrl: string, private readonly apiKey: string, private readonly fetcher: typeof fetch = fetch) { this.baseUrl = requireValidBaseUrl(baseUrl) }
 
-  async *chat(input: { model: string; messages: ProviderMessage[]; signal?: AbortSignal; timeoutMs?: number }): AsyncIterable<string> {
-    const request = deadlineSignal(input.signal, input.timeoutMs)
+  private headers(): Record<string, string> {
+    const headers: Record<string, string> = { 'content-type': 'application/json' }
+    // S7：空 key 不发 Authorization（本地 Ollama/LM Studio）
+    if (this.apiKey) headers.authorization = `Bearer ${this.apiKey}`
+    return headers
+  }
+
+  async *chat(input: {
+    model: string; messages: ProviderMessage[]; signal?: AbortSignal
+    timeoutMs?: number; firstTokenTimeoutMs?: number
+  }): AsyncIterable<string> {
+    const defaults = defaultTimeoutsForBaseUrl(this.baseUrl)
+    const request = deadlineSignal(input.signal, input.timeoutMs ?? defaults.totalTimeoutMs)
+    const firstTokenMs = input.firstTokenTimeoutMs ?? defaults.firstTokenTimeoutMs
     let response: Response
     try {
       response = await this.fetcher(endpointUrl(this.baseUrl, 'chat/completions'), {
-        method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${this.apiKey}` },
+        method: 'POST', headers: this.headers(),
         body: JSON.stringify({ model: input.model, messages: input.messages, stream: true }), signal: request.signal
       })
     } catch (error) {
@@ -166,7 +226,13 @@ export class OpenAICompatibleAdapter {
     if (!response.body) { request.dispose(); throw providerError('PROVIDER_PROTOCOL_ERROR', '模型服务没有返回响应流。') }
     const reader = response.body.getReader()
     const decoder = new TextDecoder()
-    let buffer = ''; let sawDone = false
+    let buffer = ''; let sawDone = false; let gotFirst = false
+    const firstTimer = setTimeout(() => {
+      if (!gotFirst) {
+        void reader.cancel().catch(() => undefined)
+        request.fail(providerError('PROVIDER_FIRST_TOKEN_TIMEOUT', '等待模型首个输出超时，请重试。'))
+      }
+    }, firstTokenMs)
     try {
       while (true) {
         const { done, value } = await reader.read()
@@ -185,7 +251,10 @@ export class OpenAICompatibleAdapter {
               if (json.error) throw providerError('PROVIDER_STREAM_ERROR', typeof json.error === 'string' ? json.error : json.error.message ?? '模型服务返回流错误。')
               if (!Array.isArray(json.choices)) throw providerError('PROVIDER_PROTOCOL_ERROR', '模型服务返回了无法识别的流事件。')
               const text = json.choices?.[0]?.delta?.content
-              if (text) yield text
+              if (text) {
+                if (!gotFirst) { gotFirst = true; clearTimeout(firstTimer) }
+                yield text
+              }
             } catch (error) {
               if (error instanceof Error && typeof (error as Error & { code?: unknown }).code === 'string') throw error
               throw providerError('PROVIDER_PROTOCOL_ERROR', '模型服务返回了无效 SSE 数据。')
@@ -195,24 +264,36 @@ export class OpenAICompatibleAdapter {
         }
         if (sawDone) break
       }
-      if (!sawDone) throw providerError('PROVIDER_UNEXPECTED_EOF', '模型流在完成标记前中断。')
+      if (!sawDone) {
+        if (request.signal.aborted && request.signal.reason instanceof Error
+          && typeof (request.signal.reason as Error & { code?: unknown }).code === 'string') {
+          throw request.signal.reason
+        }
+        throw providerError('PROVIDER_UNEXPECTED_EOF', '模型流在完成标记前中断。')
+      }
     } catch (error) {
+      if (request.signal.aborted && request.signal.reason instanceof Error
+        && typeof (request.signal.reason as Error & { code?: unknown }).code === 'string') {
+        throw request.signal.reason
+      }
       if (error instanceof Error && typeof (error as Error & { code?: unknown }).code === 'string') throw error
       throw this.toNetworkError(error, request.signal)
     }
     finally {
+      clearTimeout(firstTimer)
       buffer += decoder.decode()
-      reader.releaseLock()
+      try { reader.releaseLock() } catch { /* already cancelled */ }
       request.dispose()
     }
   }
 
-  async complete(input: { model: string; messages: ProviderMessage[]; signal?: AbortSignal; timeoutMs?: number }): Promise<string> {
-    const request = deadlineSignal(input.signal, input.timeoutMs)
+  async complete(input: { model: string; messages: ProviderMessage[]; signal?: AbortSignal; timeoutMs?: number; firstTokenTimeoutMs?: number }): Promise<string> {
+    const defaults = defaultTimeoutsForBaseUrl(this.baseUrl)
+    const request = deadlineSignal(input.signal, input.timeoutMs ?? defaults.totalTimeoutMs)
     let response: Response
     try {
       response = await this.fetcher(endpointUrl(this.baseUrl, 'chat/completions'), {
-        method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${this.apiKey}` },
+        method: 'POST', headers: this.headers(),
         body: JSON.stringify({ model: input.model, messages: input.messages, stream: false }), signal: request.signal
       })
       if (!response.ok) throw this.toError(response.status)
@@ -240,10 +321,13 @@ export class OpenAICompatibleAdapter {
   private toNetworkError(error: unknown, signal?: AbortSignal): AppErrorShape & Error {
     if (signal?.aborted && signal.reason instanceof Error && typeof (signal.reason as Error & { code?: unknown }).code === 'string') return signal.reason as AppErrorShape & Error
     if (signal?.aborted || (error instanceof DOMException && error.name === 'AbortError')) {
+      const reason = signal?.reason
+      if (reason instanceof Error && typeof (reason as Error & { code?: unknown }).code === 'string') return reason as AppErrorShape & Error
       return Object.assign(new Error('请求已取消。'), { code: 'PROVIDER_CANCELLED', recoverable: true })
     }
     const details = redactSecretsInText(error instanceof Error ? error.message : String(error))
-    return Object.assign(new Error('无法连接模型服务，请检查网络与 Base URL。'), { code: 'PROVIDER_NETWORK_ERROR', recoverable: true, details })
+    const localMsg = localConnectionErrorMessage(this.baseUrl)
+    return Object.assign(new Error(localMsg ?? '无法连接模型服务，请检查网络与 Base URL。'), { code: 'PROVIDER_NETWORK_ERROR', recoverable: true, details })
   }
 
   private toError(status: number): AppErrorShape & Error {

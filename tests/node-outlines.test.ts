@@ -24,7 +24,7 @@ describe('S3 node_outlines migration (v4 → v5)', () => {
   afterEach(async () => { await Promise.all(dirs.splice(0).map((path) => rm(path, { recursive: true, force: true }))) })
 
   it('upgrades a v4 database, preserves old data and accepts outline notes', async () => {
-    expect(CURRENT_SCHEMA_VERSION).toBe(5)
+    expect(CURRENT_SCHEMA_VERSION).toBe(6)
     const dir = await mkdtemp(join(tmpdir(), 'inkstone-v4-outline-')); dirs.push(dir); const path = join(dir, 'v4.sqlite')
     const old = new DatabaseSync(path)
     old.exec(v4Schema())
@@ -39,7 +39,7 @@ describe('S3 node_outlines migration (v4 → v5)', () => {
     old.close()
 
     const db = new AppDatabase(path)
-    expect(db.raw.prepare("SELECT value_json FROM app_settings WHERE key = 'schema_version'").get()).toEqual({ value_json: '5' })
+    expect(db.raw.prepare("SELECT value_json FROM app_settings WHERE key = 'schema_version'").get()).toEqual({ value_json: '6' })
     const content = new ProjectContentService(db)
     expect(content.listNotes('p1', 'story')).toMatchObject([{ id: 'n1', title: '旧笔记', content: '旧内容', createdAt: 1, updatedAt: 2 }])
     expect(content.listNotes('p1', 'reference')).toMatchObject([{ id: 'n2', title: '旧资料' }])
@@ -58,7 +58,7 @@ describe('S3 node_outlines migration (v4 → v5)', () => {
     db.close()
 
     const reopened = new AppDatabase(path)
-    expect(reopened.raw.prepare("SELECT value_json FROM app_settings WHERE key = 'schema_version'").get()).toEqual({ value_json: '5' })
+    expect(reopened.raw.prepare("SELECT value_json FROM app_settings WHERE key = 'schema_version'").get()).toEqual({ value_json: '6' })
     reopened.close()
   })
 
@@ -66,7 +66,7 @@ describe('S3 node_outlines migration (v4 → v5)', () => {
     const db = createTestDb()
     const sql = (db.raw.prepare("SELECT sql FROM sqlite_master WHERE name = 'project_notes'").get() as { sql: string }).sql
     expect(sql).toContain("'outline'")
-    expect(db.raw.prepare("SELECT value_json FROM app_settings WHERE key = 'schema_version'").get()).toEqual({ value_json: '5' })
+    expect(db.raw.prepare("SELECT value_json FROM app_settings WHERE key = 'schema_version'").get()).toEqual({ value_json: '6' })
     db.close()
   })
 })
