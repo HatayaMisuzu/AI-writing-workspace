@@ -27,6 +27,12 @@ export const outlineSaveSchema = z.object({
   projectId: idSchema, nodeId: idSchema, summary: contentSchema.optional(),
   beats: z.array(shortTextSchema).max(1_000).optional(), hook: shortTextSchema.optional()
 })
+/** S4：批量建章 — 每行一条细纲 summary */
+export const batchCreateChaptersSchema = z.object({
+  projectId: idSchema,
+  volumeId: idSchema,
+  lines: z.array(z.string().trim().min(1).max(2_000)).min(1).max(200)
+})
 export const noteSaveSchema = z.object({
   id: idSchema.optional(), projectId: idSchema, section: noteSectionSchema,
   title: shortTextSchema, content: contentSchema

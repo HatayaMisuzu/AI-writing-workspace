@@ -292,3 +292,26 @@ button.danger-button { color: #fff; background: var(--danger); border-color: var
 @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; transition: none !important; animation: none !important; } }
 .context-sources { max-height: 220px; overflow: auto; border-bottom: 1px solid #eeeeea; font-size: 10px; }.context-sources ul { list-style: none; margin: 0; padding: 4px 10px 8px; }.context-sources li { margin: 6px 0; }.context-sources label { display: grid; grid-template-columns: auto 1fr; gap: 2px 6px; }.context-sources label span, .context-sources label small { grid-column: 2; color: var(--muted); }.context-sources li.omitted strong, .context-inspector li.omitted strong { color: var(--muted); text-decoration: line-through; }
 .provider-warning { margin-left: auto; color: #b3261e; font-size: 10px; }
+
+/* S4 大纲视图 + 编辑器侧栏细纲 */
+.manuscript-with-outline { min-height: 0; overflow: hidden; display: grid; grid-template-columns: minmax(0, 1fr) 240px; }
+.is-focus .manuscript-with-outline { grid-template-columns: 1fr; }
+.outline-card-list { display: flex; flex-direction: column; gap: 12px; padding: 22px 0 60px; }
+.outline-card { border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; background: #fff; }
+.outline-card.volume { background: #f7f6f3; }
+.outline-card > header { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 8px; }
+.outline-card > header > div { display: flex; gap: 8px; }
+.outline-preview { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.55; white-space: pre-wrap; }
+.chapter-outline-aside { min-width: 0; min-height: 0; overflow: auto; border-left: 1px solid var(--line); background: #f7f6f3; padding: 14px 12px 24px; display: flex; flex-direction: column; gap: 10px; }
+.chapter-outline-aside > header { display: flex; flex-direction: column; gap: 2px; }
+.chapter-outline-aside h2 { margin: 0; font-size: 14px; }
+.chapter-outline-aside small { color: var(--muted); font-size: 11px; }
+.chapter-outline-aside label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+.chapter-outline-aside textarea, .chapter-outline-aside input { width: 100%; border: 1px solid var(--line); border-radius: 6px; padding: 8px; font-size: 12px; background: #fff; color: var(--ink); resize: vertical; }
+.chapter-outline-actions { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--muted); }
+
+.book-outline-slot { margin: 18px 0 8px; border: 1px solid var(--line); border-radius: 10px; background: #fff; overflow: hidden; }
+.book-outline-slot .project-view.content-manager { padding: 18px 20px 22px; }
+.book-outline-slot .project-view > header { padding-bottom: 14px; }
+.book-outline-slot .project-view h1 { font-size: 22px; margin-bottom: 4px; }
+.outline-layer-heading { font-size: 15px; margin: 28px 0 8px; color: var(--muted); font-weight: 600; }

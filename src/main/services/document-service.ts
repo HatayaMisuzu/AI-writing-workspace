@@ -273,6 +273,29 @@ export class DocumentService {
     return saved
   }
 
+  /**
+   * S4：输入 N 行细纲 → 在指定卷下生成 N 个空章节（0 字=构思；status 列属 S11）并写入细纲 summary。
+   * 顺序：追加在卷内已有章之后，order_index 递增。不套外层事务（createNode 自带事务）。
+   */
+  batchCreateChaptersFromOutlines(input: { projectId: string; volumeId: string; lines: string[] }): DocumentNode[] {
+    const volume = this.assertNode(input.projectId, input.volumeId)
+    if (volume.type !== 'volume') throw new Error('CHAPTER_REQUIRES_VOLUME')
+    const lines = input.lines.map((line) => line.trim()).filter((line) => line.length > 0)
+    if (!lines.length) throw new Error('BATCH_OUTLINE_LINES_REQUIRED')
+    if (lines.length > 200) throw new Error('BATCH_OUTLINE_LINES_TOO_MANY')
+    const created: DocumentNode[] = []
+    for (const line of lines) {
+      const existing = this.db.raw.prepare(`
+        SELECT COUNT(*) AS n FROM document_nodes WHERE project_id = ? AND parent_id = ? AND type = 'chapter'
+      `).get(input.projectId, input.volumeId) as { n: number }
+      const title = `第${existing.n + 1}章`
+      const node = this.createNode({ projectId: input.projectId, parentId: input.volumeId, type: 'chapter', title })
+      this.saveOutline({ projectId: input.projectId, nodeId: node.id, summary: line, beats: [], hook: '' })
+      created.push(node)
+    }
+    return created
+  }
+
   hashRange(text: string): string {
     return createHash('sha256').update(text).digest('hex')
   }
