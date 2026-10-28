@@ -8,7 +8,7 @@ import { ContextEngine } from '../src/main/ai/context-engine'
 import { ProviderService, type ProviderMessage } from '../src/main/ai/provider'
 import { AICreativeRuntime } from '../src/main/ai/runtime'
 import { aiPreviewContextSchema, aiStartSchema } from '../src/main/ipc/schemas'
-import { isRowChecked, toContextSourceRows, toggleExcludedId } from '../src/renderer/src/services/context-sources'
+import { clearedExclusionState, isRowChecked, toContextSourceRows, toggleExcludedId } from '../src/renderer/src/services/context-sources'
 import type { AITaskEnvelope, ContextBundle } from '../src/shared/domain'
 
 const setup = (maxContextTokens = 16_000) => {
@@ -145,6 +145,15 @@ describe('S6 上下文来源清单与逐条排除（R4）', () => {
     const row = { id: 'outline:v', kind: 'outline' as const, title: '大纲', reason: '', preview: '', included: false, truncated: false, omittedReason: 'default_excluded' as const }
     expect(isRowChecked(row, [], [])).toBe(false)
     expect(isRowChecked(row, [], ['outline:v'])).toBe(true)
+  })
+
+  it('O1：新对话 / 切换对话共用清空排除态', () => {
+    const dirty = { excludedIds: ['m1', 'doc'], includedIds: ['outline:v'] }
+    const afterSwitch = clearedExclusionState()
+    const afterNewChat = clearedExclusionState()
+    expect(afterSwitch).toEqual({ excludedIds: [], includedIds: [] })
+    expect(afterNewChat).toEqual(afterSwitch)
+    expect(afterNewChat).not.toEqual(dirty)
   })
 
 })

@@ -2,7 +2,7 @@ import { Bot, Check, ChevronRight, Copy, FileSearch, MessageSquarePlus, PenLine,
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { AIMode, ChatThread, ContextBundle, DigestStatus, DocumentTaskTarget, MemoryProposal, ModelConfig, Project, RoutedTask } from '../../../shared/domain'
 import type { EditorSelection } from './EditorSurface'
-import { isRowChecked, omittedLabel, toContextSourceRows, toggleExcludedId, toggleIncludedId, type ContextSourceRow } from '../services/context-sources'
+import { clearedExclusionState, isRowChecked, omittedLabel, toContextSourceRows, toggleExcludedId, toggleIncludedId, type ContextSourceRow } from '../services/context-sources'
 import { canInsertCandidate, mapChatHistory, resolveDisplayedModelMode, resolveModelDisplayName, retryInputForMessage, type AssistantHistoryMessage } from '../services/assistant-history'
 
 type ContextSummary = { count: number; tokens: number; items: ContextSourceRow[] }
@@ -59,7 +59,7 @@ export function AssistantPanel({ project, documentId, documentRevision, selectio
     const history = await window.workspace.chat.listMessages(project.id, thread.id, undefined, 50)
     followLatest.current = true
     setThreads(available); setThreadId(thread.id); setMessages(mapChatHistory(history)); setHasEarlier(history.length === 50); setLoadingHistory(false)
-    setExcludedIds([]); setIncludedIds([]) // 排除项不持久化，只作用于单次请求
+    const cleared = clearedExclusionState(); setExcludedIds(cleared.excludedIds); setIncludedIds(cleared.includedIds) // 排除项不持久化
   }, [project.id])
 
   useEffect(() => { void loadThread().catch((error) => { setLoadingHistory(false); setMessages([{ id: crypto.randomUUID(), role: 'assistant',
@@ -109,6 +109,9 @@ export function AssistantPanel({ project, documentId, documentRevision, selectio
     if (runningId) return
     const thread = await window.workspace.chat.newThread(project.id, '新对话')
     setThreads((current) => [thread, ...current]); setThreadId(thread.id); setMessages([]); setHasEarlier(false); setInput('')
+    // O1：与切换对话一致，清空上下文排除态
+    const cleared = clearedExclusionState(); setExcludedIds(cleared.excludedIds); setIncludedIds(cleared.includedIds)
+    setSourcePreview(undefined)
   }
 
   const submit = async (): Promise<void> => {
@@ -156,7 +159,7 @@ export function AssistantPanel({ project, documentId, documentRevision, selectio
         const finalText = streamed.current.get(requestId) ?? ''
         setRunningId(undefined)
         setActiveRequestMode(undefined)
-        setExcludedIds([]); setIncludedIds([]) // 排除只作用于本次请求
+        { const cleared = clearedExclusionState(); setExcludedIds(cleared.excludedIds); setIncludedIds(cleared.includedIds) }
         setMessages((current) => current.map((item) => item.id === assistantId ? { ...item, content: finalText, status: undefined } : item))
         if (requestedMode === 'editing' && target?.selection && finalText) void onCreatePatch(target, finalText).catch((error) => {
           setMessages((current) => current.map((item) => item.id === assistantId ? { ...item, content: `${finalText}\n\n提案创建失败：${error instanceof Error ? error.message : String(error)}`, status: 'error' } : item))
