@@ -277,6 +277,7 @@ try {
     await genCard.getByText('已接受', { exact: true }).waitFor({ timeout: 10_000 })
     const after = await running.page.evaluate(({ projectId, chapterA }) => window.workspace.documents.get(projectId, chapterA), ids)
     assert.match(after.plainText, /续写候选/)
+    await running.page.locator('.patch-drawer').getByRole('button', { name: '关闭' }).click()
   })
 
   await record('U01 编辑后旧本地校对结果立即失效', async () => {
