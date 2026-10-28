@@ -58,9 +58,17 @@ export function SettingsScreen(): React.JSX.Element {
     setModel({ modelId: '', displayName: '' }); setNotice({ ok: true, text: '模型已添加。' }); await reload()
   })
   const test = (): Promise<void> => run(async () => {
+    // S2 / 决策 11：未保存（或表单地址与已存不一致）走临时放行测连；已保存且地址未改走常规测连
     const activeModel = models.find((item) => item.providerId === selectedId && item.enabled)
-    if (!selectedId || !activeModel) throw new Error('请先保存服务并添加至少一个已启用模型。')
-    const result = await window.workspace.providers.test(selectedId, activeModel.modelId)
+    const draftModelId = activeModel?.modelId || model.modelId.trim()
+    if (!form.baseUrl.trim()) throw new Error('请填写 Base URL。')
+    const urlCheck = checkBaseUrl(form.baseUrl)
+    if (!urlCheck.ok) throw new Error(urlCheck.message)
+    if (!draftModelId) throw new Error('请先填写 Model ID，或保存服务并添加已启用模型。')
+    const savedSame = Boolean(selectedId && selected && !selected.baseUrlError && form.baseUrl === selected.baseUrl)
+    const result = savedSame && selectedId && activeModel
+      ? await window.workspace.providers.test(selectedId, activeModel.modelId)
+      : await window.workspace.providers.testUrl({ baseUrl: form.baseUrl, apiKey: form.apiKey || undefined, modelId: draftModelId })
     setNotice({ ok: result.ok, text: result.ok ? '连接成功。' : `连接失败：${result.message ?? '未知错误'} 正文与本地保存不受影响。` })
   })
   const updateModel = (item: ModelConfig, changes: Partial<ModelConfig>): Promise<void> => run(async () => {

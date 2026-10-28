@@ -46,8 +46,10 @@ const api: WorkspaceApi = {
   providers: {
     list: () => invoke('providers:list'), save: (input) => invoke('providers:save', input), models: () => invoke('providers:models'),
     saveModel: (model) => invoke('providers:save-model', model), routes: () => invoke('providers:routes'), setRoute: (route) => invoke('providers:set-route', route),
-    test: (providerId, modelId) => invoke('providers:test', providerId, modelId)
+    test: (providerId, modelId) => invoke('providers:test', providerId, modelId),
+    testUrl: (input) => invoke('providers:test-url', input)
   },
+  network: { blockedLog: () => invoke('network:blocked-log') },
   backup: {
     exportProject: (projectId) => invoke('backup:export-project', projectId), importProject: () => invoke('backup:import-project'),
     importManuscript: () => invoke('backup:import-manuscript'),

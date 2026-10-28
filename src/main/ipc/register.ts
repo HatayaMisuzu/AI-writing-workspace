@@ -8,6 +8,8 @@ import { PatchService } from '../services/patch-service'
 import { lintChineseText } from '../services/local-linter'
 import { BackupService } from '../services/backup-service'
 import { OpenAICompatibleAdapter, ProviderService, type SecretCodec } from '../ai/provider'
+import { originFromBaseUrl } from '../network-policy'
+import { checkBaseUrl } from '../../shared/base-url'
 import { AICreativeRuntime } from '../ai/runtime'
 import { ChapterDigestService } from '../ai/chapter-digest-service'
 import { ChapterDigestRunner } from '../ai/digest-runner'
@@ -39,7 +41,13 @@ import {
 } from './schemas'
 const parse = <T>(schema: z.ZodType<T>, value: unknown): T => schema.parse(value)
 
-export function registerIpc(db: AppDatabase, codec: SecretCodec): void {
+export type NetworkHooks = {
+  refreshNetworkAllowlist(): void
+  allowOriginTemporarily(origin: string): () => void
+  getBlockedLog(): readonly { url: string; reason: string; at: number }[]
+}
+
+export function registerIpc(db: AppDatabase, codec: SecretCodec, network?: NetworkHooks): void {
   const projects = new ProjectService(db)
   const documents = new DocumentService(db)
   const ideas = new IdeaService(db)
@@ -117,7 +125,11 @@ export function registerIpc(db: AppDatabase, codec: SecretCodec): void {
   handle('proofreading:run', (projectId: string, documentId: string) => proofreading.run(parse(idSchema, projectId), parse(idSchema, documentId)))
 
   handle('providers:list', () => providers.list())
-  handle('providers:save', (input: ProviderInput) => providers.save(parse(providerInputSchema, input)))
+  handle('providers:save', (input: ProviderInput) => {
+    const saved = providers.save(parse(providerInputSchema, input))
+    network?.refreshNetworkAllowlist()
+    return saved
+  })
   handle('providers:models', () => providers.listModels())
   handle('providers:save-model', (model: ModelConfig) => providers.saveModel(parse(modelSchema, model)))
   handle('providers:routes', () => providers.listRoutes())
@@ -126,9 +138,31 @@ export function registerIpc(db: AppDatabase, codec: SecretCodec): void {
     try {
       providerId = parse(idSchema, providerId); modelId = parse(idSchema, modelId)
       const { config, apiKey } = providers.getWithSecret(providerId)
-      return new OpenAICompatibleAdapter(config.baseUrl, apiKey).testConnection(modelId)
+      const origin = originFromBaseUrl(config.baseUrl)
+      const revoke = origin && network ? network.allowOriginTemporarily(origin) : () => {}
+      try { return await new OpenAICompatibleAdapter(config.baseUrl, apiKey).testConnection(modelId) }
+      finally { revoke() }
     } catch (error) { return { ok: false, message: error instanceof Error ? error.message : '服务配置不可用' } }
   })
+  // S2 / 决策 11：未保存地址仅在测试连接时临时放行（不写入白名单）
+  handle('providers:test-url', async (input: { baseUrl: string; apiKey?: string; modelId: string }) => {
+    try {
+      const body = z.object({
+        baseUrl: z.string().min(1).max(2000),
+        apiKey: z.string().max(4000).optional(),
+        modelId: z.string().min(1).max(200)
+      }).parse(input)
+      const checked = checkBaseUrl(body.baseUrl)
+      if (!checked.ok) return { ok: false, message: checked.message }
+      const origin = originFromBaseUrl(checked.url)
+      if (!origin) return { ok: false, message: '无法解析服务地址' }
+      const revoke = network ? network.allowOriginTemporarily(origin) : () => {}
+      try {
+        return await new OpenAICompatibleAdapter(checked.url, body.apiKey ?? '').testConnection(body.modelId)
+      } finally { revoke() }
+    } catch (error) { return { ok: false, message: error instanceof Error ? error.message : '服务配置不可用' } }
+  })
+  handle('network:blocked-log', () => network?.getBlockedLog() ?? [])
 
   handle('backup:export-project', async (projectId: string) => {
     projectId = parse(idSchema, projectId)

@@ -15,7 +15,9 @@ const userData = await mkdtemp(join(tmpdir(), 'inkstone-e2e-'))
 const results = []
 let streamDelay = 450
 
+let fixtureHits = 0
 const fixture = createServer(async (request, response) => {
+  fixtureHits += 1
   let raw = ''
   for await (const chunk of request) raw += chunk
   const body = JSON.parse(raw || '{}')
@@ -139,6 +141,22 @@ try {
     assert.match(await running.page.locator('.manuscript-editor').innerText(), /最后一次输入会保存/)
   })
 
+  // S2 / §6 ②：未配置 Provider 时完整写作旅程 — 拦截日志被拒=0，fixture 收 0 请求
+  await record('S2 未配置 Provider 时无出网', async () => {
+    const editor = running.page.locator('.manuscript-editor')
+    await editor.fill('同字原文。最后一次输入会保存。离线旅程补一段。')
+    await waitSaved(running.page)
+    await running.page.getByRole('button', { name: '故事', exact: true }).click()
+    await running.page.getByPlaceholder('标题').fill('离线笔记')
+    await running.page.getByPlaceholder('从一段自由笔记开始……').fill('未配置模型也应可写。')
+    await running.page.getByRole('button', { name: '正文', exact: true }).click()
+    await running.page.locator('.manuscript-editor').waitFor()
+    const blocked = await running.page.evaluate(() => window.workspace.network.blockedLog())
+    assert.equal(blocked.length, 0, `未配置 Provider 时不应有被拒出网：${JSON.stringify(blocked)}`)
+    assert.equal(fixtureHits, 0, '未配置 Provider 时网络 fixture 应收到 0 个请求')
+  })
+
+  const fixtureHitsBeforeProvider = fixtureHits
   const ids = await running.page.evaluate(async ({ baseUrl }) => {
     const [project] = await window.workspace.projects.list()
     const tree = await window.workspace.documents.tree(project.id)
@@ -175,6 +193,11 @@ try {
     assert.equal(counts.a, 1)
     assert.equal(counts.b, 0)
     await running.page.locator('.patch-drawer').getByRole('button', { name: '关闭' }).click()
+  })
+
+  // S2 / §6 ③：配置本地 fixture Provider 后，只有该 origin 收到请求（AI 走已保存 origin；非白名单由单测覆盖）
+  await record('S2 仅 fixture origin 收到请求', async () => {
+    assert.ok(fixtureHits > fixtureHitsBeforeProvider, `配置 Provider 后 fixture 应收到请求，实际 hits=${fixtureHits}`)
   })
 
   await record('U04 跨章续写候选不能插入当前章', async () => {
