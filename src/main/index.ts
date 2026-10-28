@@ -1,12 +1,14 @@
-import { app, BrowserWindow, safeStorage, shell } from 'electron'
+import { app, BrowserWindow, safeStorage, session, shell } from 'electron'
 import { join } from 'node:path'
 import { AppDatabase } from './database/database'
 import { registerIpc } from './ipc/register'
 import type { SecretCodec } from './ai/provider'
 import { attachCloseHandshake } from './window-close'
 import { isAllowedExternalUrl } from './external-url'
+import { NetworkGate, originsFromProviderBaseUrls } from './network-policy'
 
 let database: AppDatabase | undefined
+let networkGate: NetworkGate | undefined
 
 if (!app.requestSingleInstanceLock()) {
   app.quit()
@@ -35,6 +37,13 @@ if (!app.requestSingleInstanceLock()) {
     else void win.loadFile(join(__dirname, '../renderer/index.html'))
   }
 
+  /** S2：从 provider_configs 刷新已保存 origin 白名单。 */
+  const refreshNetworkAllowlist = (): void => {
+    if (!database || !networkGate) return
+    const rows = database.raw.prepare('SELECT base_url AS baseUrl FROM provider_configs').all() as Array<{ baseUrl: string }>
+    networkGate.setSavedOrigins(originsFromProviderBaseUrls(rows.map((row) => row.baseUrl)))
+  }
+
   app.whenReady().then(() => {
     database = new AppDatabase(join(app.getPath('userData'), 'inkstone.sqlite'))
     const codec: SecretCodec = {
@@ -47,7 +56,25 @@ if (!app.requestSingleInstanceLock()) {
         return safeStorage.decryptString(value)
       }
     }
-    registerIpc(database, codec)
+
+    // S2 / §6：session.webRequest 白名单；开发态放行 devtools
+    const isDev = Boolean(process.env.ELECTRON_RENDERER_URL) || !app.isPackaged
+    networkGate = new NetworkGate({
+      isDev,
+      onBlocked: (entry) => {
+        console.warn(`[network-guard] blocked ${entry.reason}: ${entry.url}`)
+      }
+    })
+    refreshNetworkAllowlist()
+    session.defaultSession.webRequest.onBeforeRequest((details, callback) => {
+      callback(networkGate!.filter(details.url))
+    })
+
+    registerIpc(database, codec, {
+      refreshNetworkAllowlist,
+      allowOriginTemporarily: (origin) => networkGate!.allowTemporarily(origin),
+      getBlockedLog: () => networkGate!.getBlockedLog()
+    })
     createWindow()
     app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow() })
   })

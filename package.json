@@ -16,11 +16,12 @@
     "test:package-smoke": "node tests/package-smoke.mjs",
     "test:watch": "vitest",
     "lint": "eslint . --max-warnings=0",
-    "verify": "npm run lint && npm run typecheck && npm run test && npm run build",
+    "verify": "npm run lint && npm run typecheck && npm run test && npm run build && npm run check:network-deps",
     "release:preflight": "node scripts/release-preflight.mjs",
     "dist": "npm run release:preflight && npm run build && electron-builder --publish never",
     "dist:linux-dir": "npm run release:preflight && npm run build && electron-builder --linux dir --publish never",
-    "postinstall": "node node_modules/electron/install.js"
+    "postinstall": "node node_modules/electron/install.js",
+    "check:network-deps": "node scripts/ci/no-extra-network-deps.mjs"
   },
   "dependencies": {
     "@tiptap/extension-character-count": "3.31.3",
