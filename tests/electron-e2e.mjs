@@ -267,12 +267,11 @@ try {
     assert.equal(mid.bProposed, 0, '当前章不应有补丁')
     assert.equal(mid.bodyB, '同字原文。最后一次输入会保存。')
     assert.ok(!mid.bodyA.includes('续写候选'), '接受前来源章正文不应写入候选')
-    await running.page.getByRole('button', { name: '打开来源章节' }).last().click()
-    await running.page.locator('.manuscript-editor').waitFor()
+    // createPatch 会打开提案抽屉，挡住「打开来源章节」；先关再回来源章
     const drawer = running.page.locator('.patch-drawer')
-    if (await drawer.count()) await drawer.getByRole('button', { name: '关闭' }).click().catch(() => {})
+    if (await drawer.count()) await drawer.getByRole('button', { name: '关闭' }).click()
+    await openChapter(running.page, '第一章')
     await running.page.getByRole('button', { name: '修改提案' }).click()
-    // 抽屉可能仍有 U03 的编辑提案；接受含「续写候选」的那条
     const genCard = running.page.locator('.patch-drawer article').filter({ hasText: '续写候选' })
     await genCard.getByRole('button', { name: '接受并应用' }).click()
     await genCard.getByText('已接受', { exact: true }).waitFor({ timeout: 10_000 })
