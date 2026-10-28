@@ -257,6 +257,20 @@ CREATE TABLE IF NOT EXISTS foreshadow_meta (
 );
 CREATE INDEX IF NOT EXISTS idx_foreshadow_meta_project ON foreshadow_meta(project_id, state);
 
+
+CREATE TABLE IF NOT EXISTS timeline_events (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  story_time_label TEXT NOT NULL DEFAULT '',
+  sort_key REAL NOT NULL DEFAULT 0,
+  title TEXT NOT NULL,
+  chapter_id TEXT REFERENCES document_nodes(id) ON DELETE SET NULL,
+  character_ids_json TEXT NOT NULL DEFAULT '[]',
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_timeline_events_project ON timeline_events(project_id, sort_key);
+
 CREATE TABLE IF NOT EXISTS app_settings (
   key TEXT PRIMARY KEY,
   value_json TEXT NOT NULL,

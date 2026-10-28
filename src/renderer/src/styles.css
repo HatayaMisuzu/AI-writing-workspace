@@ -487,3 +487,23 @@ button.danger-button { color: #fff; background: var(--danger); border-color: var
 .foreshadow-abandon-form { margin-top: 8px; display: flex; flex-direction: column; gap: 8px; }
 .foreshadow-abandon { color: var(--muted); }
 .character-editor label span { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+
+/* P1-1 F9 时间线 */
+.manuscript-aside-stack { min-width: 0; min-height: 0; overflow: auto; display: flex; flex-direction: column; border-left: 1px solid var(--line); background: #f7f6f3; }
+.manuscript-aside-stack .chapter-outline-aside { border-left: 0; overflow: visible; }
+.timeline-related { padding: 10px 12px; font-size: 12px; }
+.timeline-related h3 { display: flex; align-items: center; gap: 6px; margin: 0 0 6px; font-size: 13px; }
+.timeline-related ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+button.link { border: 0; background: none; padding: 0; color: var(--accent, #2f6f5e); cursor: pointer; text-align: left; font-size: 12px; }
+.timeline-mode { display: flex; gap: 6px; flex-wrap: wrap; }
+.timeline-mode button.active { font-weight: 600; border-color: var(--ink); }
+.timeline-grid { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 18px; min-height: 0; }
+.timeline-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.timeline-item { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; background: #fff; }
+.timeline-item.active { border-color: var(--ink); }
+.timeline-item-main { display: flex; align-items: center; gap: 8px; border: 0; background: none; padding: 0; width: 100%; text-align: left; cursor: pointer; }
+.timeline-item-main small { color: var(--muted); min-width: 72px; }
+.timeline-links { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 4px; padding-left: 23px; }
+.timeline-characters { display: flex; flex-wrap: wrap; gap: 8px; border: 1px solid var(--line); border-radius: 6px; padding: 8px; }
+.timeline-characters label { display: flex; align-items: center; gap: 4px; font-size: 12px; }
+.timeline-empty { color: var(--muted); }

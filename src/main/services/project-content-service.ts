@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import type { Character, ProjectNote } from '../../shared/domain'
 import { mergeCharacterFields, normalizeCharacterFields } from '../../shared/character-fields'
 import type { AppDatabase } from '../database/database'
+import { detachCharacterFromTimeline } from './timeline-service'
 
 export class ProjectContentService {
   constructor(private readonly db: AppDatabase) {}
@@ -49,7 +50,10 @@ export class ProjectContentService {
   }
 
   deleteCharacter(projectId: string, characterId: string): void {
-    const result = this.db.raw.prepare('DELETE FROM characters WHERE id = ? AND project_id = ?').run(characterId, projectId)
-    if (result.changes !== 1) throw new Error('CHARACTER_NOT_FOUND_IN_PROJECT')
+    this.db.transaction(() => {
+      const result = this.db.raw.prepare('DELETE FROM characters WHERE id = ? AND project_id = ?').run(characterId, projectId)
+      if (result.changes !== 1) throw new Error('CHARACTER_NOT_FOUND_IN_PROJECT')
+      detachCharacterFromTimeline(this.db, projectId, characterId)
+    })
   }
 }

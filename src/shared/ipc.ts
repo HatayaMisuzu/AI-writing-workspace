@@ -2,7 +2,7 @@ import type {
   ContextBundle,
   AITaskEnvelope, Character, ChatCursor, ChatMessage, ChatThread, DigestStatus, DocumentContent, DocumentNode, Idea, LocalLintIssue,
   MemoryItem, MemoryProposal, ModelConfig, NodeOutline, Project, ProjectNote, ProjectType, ProofreadIssue, ProviderConfig,
-  ProviderInput, RoutedTask, SearchResult, Snapshot, TaskModelRoute, TextOrigin, TextPatch, WritingDailyRow, WritingGoals, ChapterStatus, SerialProgress, StockpileSummary, ForeshadowEntry, ForeshadowState
+  ProviderInput, RoutedTask, SearchResult, Snapshot, TaskModelRoute, TextOrigin, TextPatch, WritingDailyRow, WritingGoals, ChapterStatus, SerialProgress, StockpileSummary, ForeshadowEntry, ForeshadowState, TimelineEvent, TimelineSortMode
 } from './domain'
 
 export interface WorkspaceApi {
@@ -71,6 +71,13 @@ export interface WorkspaceApi {
       projectId: string; memoryId: string
       plannedChapterId?: string | null; resolvedChapterId?: string | null; characterIds?: string[]
     }): Promise<ForeshadowEntry>
+  }
+  timeline: {
+    list(projectId: string, mode?: TimelineSortMode): Promise<TimelineEvent[]>
+    listForChapter(projectId: string, chapterId: string): Promise<TimelineEvent[]>
+    listForCharacter(projectId: string, characterId: string): Promise<TimelineEvent[]>
+    save(input: { id?: string; projectId: string; storyTimeLabel?: string; sortKey: number; title: string; chapterId?: string | null; characterIds?: string[] }): Promise<TimelineEvent>
+    delete(projectId: string, eventId: string): Promise<void>
   }
   memories: {
     list(projectId: string): Promise<MemoryItem[]>

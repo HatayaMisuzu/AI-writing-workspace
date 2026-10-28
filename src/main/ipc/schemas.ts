@@ -136,3 +136,14 @@ export const foreshadowUpdateMetaSchema = z.object({
   resolvedChapterId: idSchema.nullable().optional(),
   characterIds: z.array(idSchema).max(100).optional()
 }).strict()
+
+export const timelineSortModeSchema = z.enum(['story', 'chapter'])
+export const timelineEventSaveSchema = z.object({
+  id: idSchema.optional(),
+  projectId: idSchema,
+  storyTimeLabel: z.string().max(200).optional(),
+  sortKey: z.number().finite(),
+  title: z.string().max(500),
+  chapterId: idSchema.nullable().optional(),
+  characterIds: z.array(idSchema).max(100).optional()
+}).strict()

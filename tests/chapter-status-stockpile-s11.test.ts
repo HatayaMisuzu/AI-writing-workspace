@@ -21,7 +21,7 @@ async function withTempDb(run: (path: string) => Promise<void> | void): Promise<
 
 describe('S11 migration v8 · §3.3 ④ 状态默认值', () => {
   it('CURRENT is 8', () => {
-    expect(CURRENT_SCHEMA_VERSION).toBe(9)
+    expect(CURRENT_SCHEMA_VERSION).toBe(10)
   })
 
   it('④ upgrades v7→v8: 0字构思、有字草稿、无 final；settings 不预置章数目标/指针', async () => {
@@ -45,7 +45,7 @@ describe('S11 migration v8 · §3.3 ④ 状态默认值', () => {
         seed.raw.prepare("UPDATE app_settings SET value_json = ? WHERE key = 'schema_version'").run(JSON.stringify(7))
         seed.close()
         const db = new AppDatabase(path)
-        expect(db.raw.prepare("SELECT value_json FROM app_settings WHERE key = 'schema_version'").get()).toEqual({ value_json: '9' })
+        expect(db.raw.prepare("SELECT value_json FROM app_settings WHERE key = 'schema_version'").get()).toEqual({ value_json: '10' })
         db.close()
         return
       }
@@ -53,7 +53,7 @@ describe('S11 migration v8 · §3.3 ④ 状态默认值', () => {
       seed.close()
 
       const db = new AppDatabase(path)
-      expect(db.raw.prepare("SELECT value_json FROM app_settings WHERE key = 'schema_version'").get()).toEqual({ value_json: '9' })
+      expect(db.raw.prepare("SELECT value_json FROM app_settings WHERE key = 'schema_version'").get()).toEqual({ value_json: '10' })
       const rows = db.raw.prepare(`
         SELECT n.title, n.status, c.word_count FROM document_nodes n
         LEFT JOIN document_contents c ON c.document_id = n.id
@@ -75,7 +75,7 @@ describe('S11 migration v8 · §3.3 ④ 状态默认值', () => {
 
   it('fresh create: 新章默认构思；settings 无进度指针/章数目标', () => {
     const db = createTestDb()
-    expect(db.raw.prepare("SELECT value_json FROM app_settings WHERE key = 'schema_version'").get()).toEqual({ value_json: '9' })
+    expect(db.raw.prepare("SELECT value_json FROM app_settings WHERE key = 'schema_version'").get()).toEqual({ value_json: '10' })
     const project = new ProjectService(db).create({ title: '新书', projectType: 'novel' })
     const chapter = new DocumentService(db).listOrderedChapters(project.id)[0]
     expect(chapter.status).toBe('outline')

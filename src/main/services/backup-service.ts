@@ -46,6 +46,7 @@ interface BackupPayload {
   outlines?: Array<Record<string, unknown>>
   writingDaily?: Array<Record<string, unknown>>
   foreshadowMeta?: Array<Record<string, unknown>>
+  timelineEvents?: Array<Record<string, unknown>>
   patches: Array<Record<string, unknown>>
 }
 
@@ -61,7 +62,8 @@ const backupPayloadSchema = z.object({
   feedback: z.array(rowSchema), styles: z.array(rowSchema).optional(), patches: z.array(rowSchema),
   outlines: z.array(z.record(z.string(), z.unknown())).optional(),
   writingDaily: z.array(z.record(z.string(), z.unknown())).optional(),
-  foreshadowMeta: z.array(z.record(z.string(), z.unknown())).optional()
+  foreshadowMeta: z.array(z.record(z.string(), z.unknown())).optional(),
+  timelineEvents: z.array(z.record(z.string(), z.unknown())).optional()
 })
 
 async function atomicWriteFile(path: string, data: string | Uint8Array): Promise<void> {
@@ -168,6 +170,11 @@ function validateBackup(payload: BackupPayload): void {
     if (row.state !== undefined) assertEnum(row.state, ['planted', 'hinting', 'resolved', 'abandoned'], 'BACKUP_INVALID_FORESHADOW_STATE')
     try { if (!Array.isArray(JSON.parse(String(row.character_ids_json ?? '[]')))) throw new Error('bad') } catch { throw new Error('BACKUP_INVALID_FORESHADOW_CHARACTERS') }
   })
+  ;(payload.timelineEvents ?? []).forEach((row) => {
+    if (typeof row.id !== 'string' || typeof row.title !== 'string') throw new Error('BACKUP_INVALID_TIMELINE_EVENT')
+    if (row.sort_key !== undefined && (typeof row.sort_key !== 'number' || !Number.isFinite(row.sort_key))) throw new Error('BACKUP_INVALID_TIMELINE_SORT_KEY')
+    try { if (!Array.isArray(JSON.parse(String(row.character_ids_json ?? '[]')))) throw new Error('bad') } catch { throw new Error('BACKUP_INVALID_TIMELINE_CHARACTERS') }
+  })
   payload.messages.forEach((row) => {
     if (!threadIds.has(row.thread_id as string)) throw new Error('BACKUP_INVALID_MESSAGE_THREAD')
     assertEnum(row.role, ['user', 'assistant'], 'BACKUP_INVALID_MESSAGE_ROLE')
@@ -253,7 +260,8 @@ export class BackupService {
       feedback: rows(this.db, 'style_feedback', projectId), styles: rows(this.db, 'style_samples', projectId),
       patches: rows(this.db, 'text_patches', projectId), outlines: rows(this.db, 'node_outlines', projectId),
       writingDaily: rows(this.db, 'writing_daily', projectId),
-      foreshadowMeta: rows(this.db, 'foreshadow_meta', projectId)
+      foreshadowMeta: rows(this.db, 'foreshadow_meta', projectId),
+      timelineEvents: rows(this.db, 'timeline_events', projectId)
     }
     await atomicWriteFile(path, JSON.stringify(payload, (_key, value) => Buffer.isBuffer(value) ? value.toString('base64') : value, 2))
   }
@@ -346,6 +354,17 @@ export class BackupService {
           item.planned_chapter_id ? idMap.get(item.planned_chapter_id as string) ?? null : null,
           item.resolved_chapter_id ? idMap.get(item.resolved_chapter_id as string) ?? null : null,
           state, item.abandon_reason ?? '', JSON.stringify(mappedCharacters)
+        ].map(sqlValue))
+      })
+      const timelineInsert = this.db.raw.prepare(`INSERT INTO timeline_events(id,project_id,story_time_label,sort_key,title,chapter_id,character_ids_json,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)`)
+      payload.timelineEvents?.forEach((item) => {
+        let characterIds: string[] = []
+        try { characterIds = JSON.parse(String(item.character_ids_json ?? '[]')) as string[] } catch { characterIds = [] }
+        const mappedCharacters = characterIds.map((id) => idMap.get(id)).filter((id): id is string => Boolean(id))
+        timelineInsert.run(...[
+          randomUUID(), projectId, item.story_time_label ?? '', typeof item.sort_key === 'number' ? item.sort_key : 0, item.title,
+          item.chapter_id ? idMap.get(item.chapter_id as string) ?? null : null, JSON.stringify(mappedCharacters),
+          item.created_at ?? now, item.updated_at ?? now
         ].map(sqlValue))
       })
       const snapshotInsert = this.db.raw.prepare(`INSERT INTO snapshots(id,project_id,document_id,reason,revision,content,plain_text,metadata_json,created_at) VALUES (?,?,?,?,?,?,?,?,?)`)

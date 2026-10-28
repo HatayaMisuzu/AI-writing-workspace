@@ -45,6 +45,13 @@ const api: WorkspaceApi = {
     setState: (input) => invoke('foreshadows:set-state', input),
     updateMeta: (input) => invoke('foreshadows:update-meta', input)
   },
+  timeline: {
+    list: (projectId, mode) => invoke('timeline:list', projectId, mode),
+    listForChapter: (projectId, chapterId) => invoke('timeline:list-for-chapter', projectId, chapterId),
+    listForCharacter: (projectId, characterId) => invoke('timeline:list-for-character', projectId, characterId),
+    save: (input) => invoke('timeline:save', input),
+    delete: (projectId, eventId) => invoke('timeline:delete', projectId, eventId)
+  },
   memories: { list: (projectId) => invoke('memories:list', projectId), confirm: (projectId, id) => invoke('memories:confirm', projectId, id), reject: (projectId, id) => invoke('memories:reject', projectId, id), retire: (projectId, id) => invoke('memories:retire', projectId, id), replace: (projectId, id, content) => invoke('memories:replace', projectId, id, content), extractIntent: (projectId, sourceId, content) => invoke('memories:extract-intent', projectId, sourceId, content) },
   chat: { listThreads: (projectId) => invoke('chat:list-threads', projectId), listMessages: (projectId, threadId, before, limit) => invoke('chat:list-messages', projectId, threadId, before, limit), newThread: (projectId, title) => invoke('chat:new-thread', projectId, title) },
   patches: {

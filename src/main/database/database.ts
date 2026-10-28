@@ -3,7 +3,7 @@ import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { schema } from './schema'
 
-export const CURRENT_SCHEMA_VERSION = 9
+export const CURRENT_SCHEMA_VERSION = 10
 
 export class AppDatabase {
   readonly raw: DatabaseSync
@@ -181,6 +181,28 @@ CREATE INDEX IF NOT EXISTS idx_foreshadow_meta_project ON foreshadow_meta(projec
         this.writeVersion(9)
       })
       version = 9
+    }
+
+    if (version < 10) {
+      // v10（P1-1 F9）：timeline_events 时间线，纯作者手动录入，不进 AI 上下文。
+      this.transaction(() => {
+        this.raw.exec(`
+CREATE TABLE IF NOT EXISTS timeline_events (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  story_time_label TEXT NOT NULL DEFAULT '',
+  sort_key REAL NOT NULL DEFAULT 0,
+  title TEXT NOT NULL,
+  chapter_id TEXT REFERENCES document_nodes(id) ON DELETE SET NULL,
+  character_ids_json TEXT NOT NULL DEFAULT '[]',
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_timeline_events_project ON timeline_events(project_id, sort_key);
+`)
+        this.writeVersion(10)
+      })
+      version = 10
     }
 
     this.raw.prepare("UPDATE chat_messages SET status = 'error' WHERE status = 'streaming'").run()
