@@ -102,3 +102,9 @@ export const writingGoalsInputSchema = z.object({
   dailyChapterGoalEnabled: z.boolean().optional(),
   dailyChapterGoal: z.number().int().nullable().optional()
 }).strict()
+
+// S11：章节状态与连载进度指针
+export const chapterStatusSchema = z.enum(['outline', 'draft', 'final'])
+export const serialProgressSchema = z.object({
+  progressChapterId: idSchema.nullable()
+}).strict()

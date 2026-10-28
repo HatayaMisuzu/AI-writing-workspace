@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS document_nodes (
   type TEXT NOT NULL CHECK(type IN ('volume','chapter','scene','note')),
   title TEXT NOT NULL,
   order_index INTEGER NOT NULL,
+  status TEXT NOT NULL DEFAULT 'outline' CHECK(status IN ('outline','draft','final')),
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
   UNIQUE(project_id, parent_id, order_index)

@@ -57,12 +57,12 @@ export class ProjectService {
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
         .run(projectId, title, input.projectType, input.description ?? '', projectId.slice(0, 8), now, now, now)
       this.db.raw.prepare(`INSERT INTO document_nodes
-        (id, project_id, parent_id, type, title, order_index, created_at, updated_at)
-        VALUES (?, ?, NULL, 'volume', '第一卷', 0, ?, ?)`)
+        (id, project_id, parent_id, type, title, order_index, status, created_at, updated_at)
+        VALUES (?, ?, NULL, 'volume', '第一卷', 0, 'outline', ?, ?)`)
         .run(volumeId, projectId, now, now)
       this.db.raw.prepare(`INSERT INTO document_nodes
-        (id, project_id, parent_id, type, title, order_index, created_at, updated_at)
-        VALUES (?, ?, ?, 'chapter', '第一章', 0, ?, ?)`)
+        (id, project_id, parent_id, type, title, order_index, status, created_at, updated_at)
+        VALUES (?, ?, ?, 'chapter', '第一章', 0, 'outline', ?, ?)`)
         .run(chapterId, projectId, volumeId, now, now)
       const empty = JSON.stringify({ type: 'doc', content: [{ type: 'paragraph' }] })
       this.db.raw.prepare(`INSERT INTO document_contents

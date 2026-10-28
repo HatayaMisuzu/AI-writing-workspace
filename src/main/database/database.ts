@@ -3,7 +3,7 @@ import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { schema } from './schema'
 
-export const CURRENT_SCHEMA_VERSION = 7
+export const CURRENT_SCHEMA_VERSION = 8
 
 export class AppDatabase {
   readonly raw: DatabaseSync
@@ -139,6 +139,28 @@ CREATE INDEX IF NOT EXISTS idx_writing_daily_project_date ON writing_daily(proje
         this.writeVersion(7)
       })
       version = 7
+    }
+    if (version < 8) {
+      // v8（S11）：章节 status。0 字→构思(outline)，有字→草稿(draft)；绝不自动定稿。进度指针/章数目标不在迁移中预置。
+      this.transaction(() => {
+        if (!this.hasColumn('document_nodes', 'status')) {
+          this.raw.exec(`ALTER TABLE document_nodes ADD COLUMN status TEXT NOT NULL DEFAULT 'draft'`)
+        }
+        // 0 字（含无 contents 行）→ 构思；有字 → 草稿；绝不写入 final
+        this.raw.exec(`
+UPDATE document_nodes
+SET status = 'outline'
+WHERE type = 'chapter'
+`)
+        this.raw.exec(`
+UPDATE document_nodes
+SET status = 'draft'
+WHERE type = 'chapter'
+  AND id IN (SELECT document_id FROM document_contents WHERE word_count > 0)
+`)
+        this.writeVersion(8)
+      })
+      version = 8
     }
     this.raw.prepare("UPDATE chat_messages SET status = 'error' WHERE status = 'streaming'").run()
     if (version !== CURRENT_SCHEMA_VERSION) throw new Error(`DATABASE_SCHEMA_MIGRATION_INCOMPLETE:${version}`)

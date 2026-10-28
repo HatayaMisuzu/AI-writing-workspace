@@ -415,3 +415,54 @@ button.danger-button { color: #fff; background: var(--danger); border-color: var
 .daily-goal-row input[type="text"]:disabled { background: #f5f3ee; color: var(--muted); }
 .daily-goals-actions { margin-top: 8px; }
 .daily-goals-saved { color: #3d6b5a; font-size: 12px; }
+
+/* S11 章树状态 + 存稿面板 */
+.chapter-status-badge {
+  border: 1px solid var(--line);
+  background: #f7f6f3;
+  color: var(--muted);
+  border-radius: 999px;
+  font-size: 10px;
+  padding: 0 7px;
+  min-height: 20px;
+  line-height: 20px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.chapter-status-badge.status-outline { color: #6b6570; }
+.chapter-status-badge.status-draft { color: #3d5a80; background: #e8eef6; border-color: #c5d3e6; }
+.chapter-status-badge.status-final { color: #1f4d3c; background: #e8f3ee; border-color: #b7d4c6; }
+.stockpile-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 12px;
+  margin: 22px 0 18px;
+}
+.stockpile-progress-block, .stockpile-list-block {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+  padding: 16px 18px 18px;
+  margin-bottom: 18px;
+}
+.stockpile-progress-block h2, .stockpile-list-block h2 { margin: 0 0 8px; font-size: 15px; }
+.stockpile-progress-row {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 10px;
+  align-items: center;
+  font-size: 13px;
+}
+.stockpile-progress-row select {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 13px;
+  background: #fff;
+}
+.stockpile-chapter-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.stockpile-chapter-list li {
+  display: flex; justify-content: space-between; gap: 12px;
+  padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px;
+}
+.stockpile-chapter-list small { color: var(--muted); }

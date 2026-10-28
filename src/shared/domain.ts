@@ -1,5 +1,7 @@
 export type ProjectType = 'novel' | 'webnovel' | 'screenplay' | 'other'
 export type DocumentType = 'volume' | 'chapter' | 'scene' | 'note'
+/** S11：本地章节状态（与平台无关）。 */
+export type ChapterStatus = 'outline' | 'draft' | 'final'
 export type AIMode =
   | 'discussion'
   | 'brainstorm'
@@ -52,6 +54,21 @@ export interface WritingGoals {
   dailyChapterGoal: number | null
 }
 
+/** S11：连载进度指针（可空）；存稿可撑天数见 StockpileSummary.daysRemaining */
+export interface SerialProgress {
+  /** 已更新到的章节 id；null = 未设置，存稿从第 1 章起算 */
+  progressChapterId: string | null
+}
+
+export interface StockpileSummary {
+  chapterCount: number
+  wordCount: number
+  /** 未开启日更章数目标时为 null，UI 不渲染天数、不提示「存稿不足」 */
+  daysRemaining: number | null
+  chapters: Array<{ id: string; title: string; wordCount: number }>
+  progress: SerialProgress
+}
+
 export interface DocumentNode {
   id: string
   projectId: string
@@ -59,6 +76,8 @@ export interface DocumentNode {
   type: DocumentType
   title: string
   orderIndex: number
+  /** S11：卷可忽略；章为构思/草稿/定稿 */
+  status: ChapterStatus
   wordCount: number
   revision: number
   createdAt: number

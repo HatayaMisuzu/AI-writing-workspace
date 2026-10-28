@@ -17,7 +17,7 @@ describe('S9 writing_daily migration (v6 → v7)', () => {
   afterEach(async () => { await Promise.all(dirs.splice(0).map((path) => rm(path, { recursive: true, force: true }))) })
 
   it('⑤ upgrades a v6 database, creates writing_daily, does not preset any goals', async () => {
-    expect(CURRENT_SCHEMA_VERSION).toBe(7)
+    expect(CURRENT_SCHEMA_VERSION).toBe(8)
     const dir = await mkdtemp(join(tmpdir(), 'inkstone-v6-s9-')); dirs.push(dir)
     const path = join(dir, 'v6.sqlite')
 
@@ -32,7 +32,7 @@ describe('S9 writing_daily migration (v6 → v7)', () => {
     seed.close()
 
     const db = new AppDatabase(path)
-    expect(db.raw.prepare("SELECT value_json FROM app_settings WHERE key = 'schema_version'").get()).toEqual({ value_json: '7' })
+    expect(db.raw.prepare("SELECT value_json FROM app_settings WHERE key = 'schema_version'").get()).toEqual({ value_json: '8' })
     expect(db.raw.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='writing_daily'").get()).toBeTruthy()
     expect(db.raw.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_writing_daily_project_date'").get()).toBeTruthy()
 
@@ -53,7 +53,7 @@ describe('S9 writing_daily migration (v6 → v7)', () => {
 
   it('fresh database is at v7 with writing_daily and empty goals on create', () => {
     const db = createTestDb()
-    expect(db.raw.prepare("SELECT value_json FROM app_settings WHERE key = 'schema_version'").get()).toEqual({ value_json: '7' })
+    expect(db.raw.prepare("SELECT value_json FROM app_settings WHERE key = 'schema_version'").get()).toEqual({ value_json: '8' })
     expect(db.raw.prepare("SELECT sql FROM sqlite_master WHERE name = 'writing_daily'").get()).toBeTruthy()
     const project = new ProjectService(db).create({ title: '新书', projectType: 'novel' })
     const raw = db.raw.prepare('SELECT settings_json FROM projects WHERE id = ?').get(project.id) as { settings_json: string }

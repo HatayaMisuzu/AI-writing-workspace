@@ -8,7 +8,7 @@ const relative = (time: number): string => new Intl.DateTimeFormat('zh-CN', { mo
 
 export function LibraryScreen({ projects, onOpen, onCreate, onImport, onImportManuscript, onArchive, onBackup, onExport }: {
   projects: Project[]; onOpen(project: Project): void; onCreate(): void; onImport(): void; onImportManuscript(): void; onArchive(project: Project): void; onBackup(project: Project): void
-  onExport(project: Project, format: 'txt' | 'md' | 'docx'): void
+  onExport(project: Project, format: 'txt' | 'md' | 'docx', onlyFinal?: boolean): void
 }): React.JSX.Element {
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState<'all' | 'recent' | 'archived'>('all')
@@ -47,7 +47,7 @@ export function LibraryScreen({ projects, onOpen, onCreate, onImport, onImportMa
             <span>{typeName[project.projectType]}</span><span>{relative(project.updatedAt)}</span><span>{formatCount(project.totalWordCount)}</span>
             <span className="local-status"><ShieldCheck size={15} />本地保存</span>
             <div className="row-actions"><button className="text-action" onClick={() => onOpen(project)}>继续写作</button><button className="icon-button" onClick={() => setMenuId(menuId === project.id ? undefined : project.id)}><MoreHorizontal size={18} /></button>
-              {menuId === project.id && <div className="context-menu"><button onClick={() => onBackup(project)}><Download size={15} />创建项目备份</button><button onClick={() => onExport(project, 'txt')}><FileText size={15} />导出 TXT</button><button onClick={() => onExport(project, 'md')}><FileText size={15} />导出 Markdown</button><button onClick={() => onExport(project, 'docx')}><FileText size={15} />导出 DOCX</button><button onClick={() => onArchive(project)}><Archive size={15} />{project.archived ? '取消归档' : '归档作品'}</button></div>}
+              {menuId === project.id && <div className="context-menu"><button onClick={() => onBackup(project)}><Download size={15} />创建项目备份</button><button onClick={() => onExport(project, 'txt')}><FileText size={15} />导出 TXT</button><button onClick={() => onExport(project, 'md')}><FileText size={15} />导出 Markdown</button><button onClick={() => onExport(project, 'docx')}><FileText size={15} />导出 DOCX</button><button onClick={() => onExport(project, 'txt', true)}><FileText size={15} />导出仅定稿 TXT</button><button onClick={() => onExport(project, 'md', true)}><FileText size={15} />导出仅定稿 Markdown</button><button onClick={() => onArchive(project)}><Archive size={15} />{project.archived ? '取消归档' : '归档作品'}</button></div>}
             </div>
           </div>)}
         </div>

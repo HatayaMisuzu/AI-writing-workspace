@@ -1,14 +1,21 @@
 import { ChevronDown, FileText, Lightbulb, Pencil, Plus, Trash2 } from 'lucide-react'
-import type { DocumentNode, Project } from '../../../shared/domain'
+import type { ChapterStatus, DocumentNode, Project } from '../../../shared/domain'
+import { CHAPTER_STATUS_LABEL, CHAPTER_STATUSES } from '../../../shared/stockpile'
 
-export type ProjectSection = 'manuscript' | 'outline' | 'ideas' | 'story' | 'characters' | 'references' | 'ai-data' | 'history' | 'daily'
-const sections: Array<[ProjectSection, string]> = [['manuscript','正文'],['outline','大纲'],['ideas','灵感'],['story','故事'],['characters','人物'],['references','资料'],['daily','日更'],['ai-data','AI 数据'],['history','历史']]
+export type ProjectSection = 'manuscript' | 'outline' | 'ideas' | 'story' | 'characters' | 'references' | 'ai-data' | 'history' | 'daily' | 'stockpile'
+const sections: Array<[ProjectSection, string]> = [['manuscript','正文'],['outline','大纲'],['ideas','灵感'],['story','故事'],['characters','人物'],['references','资料'],['daily','日更'],['stockpile','存稿'],['ai-data','AI 数据'],['history','历史']]
 
-export function ProjectSidebar({ project, tree, selectedId, section, onSection, onSelect, onNewVolume, onNewChapter, onRename, onDelete, onReorder }: {
+const nextStatus = (status: ChapterStatus): ChapterStatus => {
+  const index = CHAPTER_STATUSES.indexOf(status)
+  return CHAPTER_STATUSES[(index + 1) % CHAPTER_STATUSES.length]
+}
+
+export function ProjectSidebar({ project, tree, selectedId, section, onSection, onSelect, onNewVolume, onNewChapter, onRename, onDelete, onReorder, onSetStatus }: {
   project: Project; tree: DocumentNode[]; selectedId?: string; section: ProjectSection; onSection(value: ProjectSection): void
   onSelect(node: DocumentNode): void; onNewVolume(): void; onNewChapter(parentId?: string): void
   onRename(node: DocumentNode): void; onDelete(node: DocumentNode): void
   onReorder(documentId: string, parentId: string, orderIndex: number): void
+  onSetStatus?(node: DocumentNode, status: ChapterStatus): void
 }): React.JSX.Element {
   const volumes = tree.filter((node) => node.type === 'volume')
   return <aside className="project-sidebar">
@@ -25,6 +32,11 @@ export function ProjectSidebar({ project, tree, selectedId, section, onSection, 
           onDragOver={(event) => event.preventDefault()}
           onDrop={(event) => { event.preventDefault(); event.stopPropagation(); const draggedId = event.dataTransfer.getData('text/inkstone-document'); if (draggedId && draggedId !== node.id) onReorder(draggedId, volume.id, index) }}>
           <button className="chapter-open" onClick={() => onSelect(node)} title={node.title}><FileText size={14} /><span className="chapter-title">{node.title}</span><small>{node.wordCount.toLocaleString()}</small></button>
+          <button type="button" className={`chapter-status-badge status-${node.status}`}
+            title={`状态：${CHAPTER_STATUS_LABEL[node.status]}（点击切换）`}
+            aria-label={`${node.title}状态${CHAPTER_STATUS_LABEL[node.status]}`}
+            onClick={(event) => { event.stopPropagation(); onSetStatus?.(node, nextStatus(node.status)) }}
+          >{CHAPTER_STATUS_LABEL[node.status]}</button>
           <button className="icon-button tree-node-action" onClick={() => onRename(node)} title="重命名章节" aria-label={`重命名${node.title}`}><Pencil size={13} /></button>
           <button className="icon-button tree-node-action danger" onClick={() => onDelete(node)} title="删除章节" aria-label={`删除${node.title}`}><Trash2 size={13} /></button>
         </div>)}

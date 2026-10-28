@@ -11,11 +11,15 @@ import { ProjectContentService } from '../src/main/services/project-content-serv
 import { BackupService } from '../src/main/services/backup-service'
 import { createTestDb } from './helpers'
 
-/** 还原 v4 schema：project_notes 的 CHECK 不含 'outline'，且没有 node_outlines 表。 */
+/** 还原 v4 schema：无 node_outlines、无 status 列、无 writing_daily；project_notes CHECK 不含 outline。 */
 const v4Schema = (): string => {
-  const withoutOutlines = schema.replace(/CREATE TABLE IF NOT EXISTS node_outlines \([\s\S]*?\);\nCREATE INDEX IF NOT EXISTS idx_node_outlines_project ON node_outlines\(project_id\);\n/, '')
-  const result = withoutOutlines.replace("CHECK(section IN ('story','reference','outline'))", "CHECK(section IN ('story','reference'))")
-  if (result.includes('node_outlines') || result.includes("'outline'")) throw new Error('v4 schema fixture out of date')
+  let result = schema.replace(/CREATE TABLE IF NOT EXISTS node_outlines \([\s\S]*?\);\nCREATE INDEX IF NOT EXISTS idx_node_outlines_project ON node_outlines\(project_id\);\n/, '')
+  result = result.replace("CHECK(section IN ('story','reference','outline'))", "CHECK(section IN ('story','reference'))")
+  result = result.replace(/\n {2}status TEXT NOT NULL DEFAULT 'outline' CHECK\(status IN \('outline','draft','final'\)\),/, '')
+  result = result.replace(/CREATE TABLE IF NOT EXISTS writing_daily \([\s\S]*?\);\nCREATE INDEX IF NOT EXISTS idx_writing_daily_project_date ON writing_daily\(project_id, date\);\n/, '')
+  if (result.includes('node_outlines') || result.includes("'outline'") || result.includes('writing_daily') || /status TEXT NOT NULL DEFAULT 'outline'/.test(result)) {
+    throw new Error('v4 schema fixture out of date')
+  }
   return result
 }
 
@@ -24,7 +28,7 @@ describe('S3 node_outlines migration (v4 → v5)', () => {
   afterEach(async () => { await Promise.all(dirs.splice(0).map((path) => rm(path, { recursive: true, force: true }))) })
 
   it('upgrades a v4 database, preserves old data and accepts outline notes', async () => {
-    expect(CURRENT_SCHEMA_VERSION).toBe(7)
+    expect(CURRENT_SCHEMA_VERSION).toBe(8)
     const dir = await mkdtemp(join(tmpdir(), 'inkstone-v4-outline-')); dirs.push(dir); const path = join(dir, 'v4.sqlite')
     const old = new DatabaseSync(path)
     old.exec(v4Schema())
@@ -39,7 +43,7 @@ describe('S3 node_outlines migration (v4 → v5)', () => {
     old.close()
 
     const db = new AppDatabase(path)
-    expect(db.raw.prepare("SELECT value_json FROM app_settings WHERE key = 'schema_version'").get()).toEqual({ value_json: '7' })
+    expect(db.raw.prepare("SELECT value_json FROM app_settings WHERE key = 'schema_version'").get()).toEqual({ value_json: '8' })
     const content = new ProjectContentService(db)
     expect(content.listNotes('p1', 'story')).toMatchObject([{ id: 'n1', title: '旧笔记', content: '旧内容', createdAt: 1, updatedAt: 2 }])
     expect(content.listNotes('p1', 'reference')).toMatchObject([{ id: 'n2', title: '旧资料' }])
@@ -58,7 +62,7 @@ describe('S3 node_outlines migration (v4 → v5)', () => {
     db.close()
 
     const reopened = new AppDatabase(path)
-    expect(reopened.raw.prepare("SELECT value_json FROM app_settings WHERE key = 'schema_version'").get()).toEqual({ value_json: '7' })
+    expect(reopened.raw.prepare("SELECT value_json FROM app_settings WHERE key = 'schema_version'").get()).toEqual({ value_json: '8' })
     reopened.close()
   })
 
@@ -66,7 +70,7 @@ describe('S3 node_outlines migration (v4 → v5)', () => {
     const db = createTestDb()
     const sql = (db.raw.prepare("SELECT sql FROM sqlite_master WHERE name = 'project_notes'").get() as { sql: string }).sql
     expect(sql).toContain("'outline'")
-    expect(db.raw.prepare("SELECT value_json FROM app_settings WHERE key = 'schema_version'").get()).toEqual({ value_json: '7' })
+    expect(db.raw.prepare("SELECT value_json FROM app_settings WHERE key = 'schema_version'").get()).toEqual({ value_json: '8' })
     db.close()
   })
 })

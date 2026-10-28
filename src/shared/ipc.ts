@@ -2,7 +2,7 @@ import type {
   ContextBundle,
   AITaskEnvelope, Character, ChatCursor, ChatMessage, ChatThread, DigestStatus, DocumentContent, DocumentNode, Idea, LocalLintIssue,
   MemoryItem, MemoryProposal, ModelConfig, NodeOutline, Project, ProjectNote, ProjectType, ProofreadIssue, ProviderConfig,
-  ProviderInput, RoutedTask, SearchResult, Snapshot, TaskModelRoute, TextOrigin, TextPatch, WritingDailyRow, WritingGoals
+  ProviderInput, RoutedTask, SearchResult, Snapshot, TaskModelRoute, TextOrigin, TextPatch, WritingDailyRow, WritingGoals, ChapterStatus, SerialProgress, StockpileSummary
 } from './domain'
 
 export interface WorkspaceApi {
@@ -29,6 +29,10 @@ export interface WorkspaceApi {
     search(projectId: string, query: string): Promise<SearchResult[]>
     /** S4：按细纲行批量建空章（构思） */
     batchCreateChapters(input: { projectId: string; volumeId: string; lines: string[] }): Promise<DocumentNode[]>
+    setStatus(projectId: string, documentId: string, status: ChapterStatus): Promise<DocumentNode>
+    getStockpile(projectId: string): Promise<StockpileSummary>
+    getSerialProgress(projectId: string): Promise<SerialProgress>
+    setSerialProgress(projectId: string, progressChapterId: string | null): Promise<SerialProgress>
   }
   snapshots: {
     create(projectId: string, documentId: string, reason: Snapshot['reason']): Promise<Snapshot>
@@ -107,7 +111,7 @@ export interface WorkspaceApi {
     exportProject(projectId: string): Promise<string | null>
     importProject(): Promise<Project | null>
     importManuscript(): Promise<Project | null>
-    exportManuscript(projectId: string, format: 'txt' | 'md' | 'docx'): Promise<string | null>
+    exportManuscript(projectId: string, format: 'txt' | 'md' | 'docx', onlyFinal?: boolean): Promise<string | null>
   }
   ai: {
     start(request: AIStartRequest, onEvent: (event: AIStreamEvent) => void): () => void
