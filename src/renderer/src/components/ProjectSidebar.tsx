@@ -1,8 +1,8 @@
 import { ChevronDown, FileText, Lightbulb, Pencil, Plus, Trash2 } from 'lucide-react'
 import type { DocumentNode, Project } from '../../../shared/domain'
 
-export type ProjectSection = 'manuscript' | 'outline' | 'ideas' | 'story' | 'characters' | 'references' | 'ai-data' | 'history'
-const sections: Array<[ProjectSection, string]> = [['manuscript','正文'],['outline','大纲'],['ideas','灵感'],['story','故事'],['characters','人物'],['references','资料'],['ai-data','AI 数据'],['history','历史']]
+export type ProjectSection = 'manuscript' | 'outline' | 'ideas' | 'story' | 'characters' | 'references' | 'ai-data' | 'history' | 'daily'
+const sections: Array<[ProjectSection, string]> = [['manuscript','正文'],['outline','大纲'],['ideas','灵感'],['story','故事'],['characters','人物'],['references','资料'],['daily','日更'],['ai-data','AI 数据'],['history','历史']]
 
 export function ProjectSidebar({ project, tree, selectedId, section, onSection, onSelect, onNewVolume, onNewChapter, onRename, onDelete, onReorder }: {
   project: Project; tree: DocumentNode[]; selectedId?: string; section: ProjectSection; onSection(value: ProjectSection): void

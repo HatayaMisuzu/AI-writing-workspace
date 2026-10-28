@@ -327,3 +327,91 @@ button.danger-button { color: #fff; background: var(--danger); border-color: var
 .provider-presets button { font-size: 13px; padding: 6px 10px; border-radius: 8px; border: 1px solid var(--line); background: #fff; cursor: pointer; }
 .provider-presets button:hover { border-color: var(--accent, #3b82f6); }
 .model-head, .model-row { grid-template-columns: 1.2fr 1fr 0.7fr 0.7fr 0.9fr 0.8fr 0.6fr; }
+
+
+/* S10 日更面板 */
+.daily-stats-view .daily-stats-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 12px;
+  margin: 22px 0 18px;
+}
+.daily-stat-card {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+  padding: 14px 16px;
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+}
+.daily-stat-label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+.daily-stat-value { font-size: 22px; font-weight: 600; letter-spacing: .02em; }
+.daily-goal-suffix { font-size: 14px; font-weight: 500; color: var(--muted); }
+.daily-stat-meta { display: block; margin-top: 4px; color: var(--muted); font-size: 11px; }
+.daily-word-progress {
+  height: 8px;
+  border-radius: 999px;
+  background: #ebe7df;
+  overflow: hidden;
+  margin: 0 0 22px;
+}
+.daily-word-progress-bar {
+  height: 100%;
+  background: #3d6b5a;
+  border-radius: 999px;
+  transition: width .2s ease;
+}
+.daily-calendar-block, .daily-goals-block {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+  padding: 16px 18px 18px;
+  margin-bottom: 18px;
+}
+.daily-calendar-block > header, .daily-goals-block > header {
+  display: flex; align-items: center; gap: 8px; margin-bottom: 10px;
+}
+.daily-calendar-block h2, .daily-goals-block h2 { margin: 0; font-size: 15px; }
+.daily-calendar {
+  display: grid;
+  grid-template-columns: repeat(15, 1fr);
+  gap: 4px;
+}
+.daily-calendar-cell {
+  aspect-ratio: 1;
+  border-radius: 3px;
+  background: #efece6;
+  display: inline-block;
+  min-width: 10px;
+  min-height: 10px;
+}
+.daily-calendar-cell.level-0 { background: #efece6; }
+.daily-calendar-cell.level-1 { background: #c7ddd2; }
+.daily-calendar-cell.level-2 { background: #8fbfa8; }
+.daily-calendar-cell.level-3 { background: #5a947a; }
+.daily-calendar-cell.level-4 { background: #2f5f4a; }
+.daily-calendar-legend {
+  display: flex; align-items: center; gap: 4px; margin-top: 10px;
+  font-size: 11px; color: var(--muted);
+}
+.daily-calendar-legend .daily-calendar-cell { width: 10px; height: 10px; min-width: 10px; min-height: 10px; }
+.daily-goals-hint { margin: 0 0 12px; color: var(--muted); font-size: 13px; }
+.daily-goal-row {
+  display: grid;
+  grid-template-columns: auto 1fr minmax(120px, 160px);
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 10px;
+  font-size: 13px;
+}
+.daily-goal-row input[type="text"] {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 13px;
+  background: #fff;
+}
+.daily-goal-row input[type="text"]:disabled { background: #f5f3ee; color: var(--muted); }
+.daily-goals-actions { margin-top: 8px; }
+.daily-goals-saved { color: #3d6b5a; font-size: 12px; }
