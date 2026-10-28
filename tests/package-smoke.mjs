@@ -6,9 +6,9 @@ import { join, resolve } from 'node:path'
 import { _electron as electron } from 'playwright'
 
 const requestedPath = process.env.INKSTONE_PACKAGED_EXE ?? process.argv[2]
-assert(requestedPath, 'INKSTONE_PACKAGED_EXE must point to the packaged Windows executable')
+assert(requestedPath, 'INKSTONE_PACKAGED_EXE must point to the packaged app executable (Windows .exe or Linux binary)')
 const executablePath = resolve(requestedPath)
-assert(existsSync(executablePath), 'INKSTONE_PACKAGED_EXE must point to the packaged Windows executable')
+assert(existsSync(executablePath), 'INKSTONE_PACKAGED_EXE must point to the packaged app executable (Windows .exe or Linux binary)')
 const expectedElectronVersion = JSON.parse(
   await readFile(resolve('node_modules/electron/package.json'), 'utf8')
 ).version

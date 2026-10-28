@@ -19,6 +19,7 @@
     "verify": "npm run lint && npm run typecheck && npm run test && npm run build",
     "release:preflight": "node scripts/release-preflight.mjs",
     "dist": "npm run release:preflight && npm run build && electron-builder --publish never",
+    "dist:linux-dir": "npm run release:preflight && npm run build && electron-builder --linux dir --publish never",
     "postinstall": "node node_modules/electron/install.js"
   },
   "dependencies": {
@@ -33,7 +34,7 @@
     "lucide-react": "^0.539.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
-    "zod": "^4.0.17"
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@electron-toolkit/utils": "^4.0.0",
@@ -73,6 +74,11 @@
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true
+    },
+    "linux": {
+      "target": "dir",
+      "executableName": "inkstone",
+      "category": "Office"
     }
   }
 }

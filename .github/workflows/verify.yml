@@ -3,6 +3,7 @@ name: Verify
 on:
   push:
   pull_request:
+  workflow_dispatch:
 
 jobs:
   verify-windows:
@@ -40,4 +41,44 @@ jobs:
         with:
           name: inkstone-windows
           path: release/*
+          if-no-files-found: error
+
+  verify-linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run release:preflight
+      - run: npm run verify
+      # 注：Linux e2e 暂不在 CI 运行。Playwright 的 Electron loader 强制追加 --password-store=basic，
+      # safeStorage 落到 basic_text 后应用按设计抛 SECURE_STORAGE_UNAVAILABLE（不降级明文），e2e 的 providers:save 步骤必然失败。
+      - run: npm audit --omit=dev
+
+  package-linux:
+    runs-on: ubuntu-24.04
+    needs: verify-linux
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      # 仅构建目录产物（linux-unpacked），不出 AppImage
+      - run: npm run dist:linux-dir
+      # Ubuntu 24.04 默认限制非特权 user namespace，Chromium 沙箱需要放开；应用本身保持 sandbox 开启
+      - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - run: |
+          export INKSTONE_PACKAGED_EXE="$PWD/release/linux-unpacked/inkstone"
+          xvfb-run -a npm run test:package-smoke
+      - uses: actions/upload-artifact@v7
+        with:
+          name: inkstone-linux-dir
+          path: release/linux-unpacked
           if-no-files-found: error
