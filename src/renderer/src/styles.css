@@ -290,3 +290,4 @@ button.danger-button { color: #fff; background: var(--danger); border-color: var
   .recent-row { grid-template-columns: 1fr 1fr; }.recent-work:nth-child(3) { display: none; }
 }
 @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; transition: none !important; animation: none !important; } }
+.provider-warning { margin-left: auto; color: #b3261e; font-size: 10px; }

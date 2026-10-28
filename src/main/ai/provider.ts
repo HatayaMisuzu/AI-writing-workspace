@@ -1,4 +1,5 @@
 import type { AppErrorShape, ModelConfig, ProviderCapabilities, ProviderConfig, ProviderInput, RoutedTask } from '../../shared/domain'
+import { checkBaseUrl } from '../../shared/base-url'
 import type { AppDatabase } from '../database/database'
 import { randomUUID } from 'node:crypto'
 
@@ -9,7 +10,14 @@ export interface SecretCodec {
 
 type ProviderRow = { id: string; provider_type: 'openai-compatible'; display_name: string; base_url: string; encrypted_api_key: Buffer | null; created_at: number; updated_at: number }
 
+const baseUrlIssue = (url: string): { baseUrlError?: string } => { const check = checkBaseUrl(url); return check.ok ? {} : { baseUrlError: check.message } }
 const normalizeBaseUrl = (url: string): string => url.trim().replace(/\/+$/, '')
+/** S1c：任何请求前都校验 Base URL；不合法则抛错且不调用 fetch、不解密密钥。 */
+const requireValidBaseUrl = (url: string): string => {
+  const check = checkBaseUrl(url)
+  if (!check.ok) throw Object.assign(new Error(`服务地址需要修正：${check.message}`), { code: 'PROVIDER_BASE_URL_INVALID' })
+  return check.url
+}
 export const adapterCapabilities: ProviderCapabilities = { streaming: true, tools: false, structuredOutput: false, cancellation: true }
 const truthfulCapabilities = (capabilities: ProviderCapabilities): ProviderCapabilities => ({ ...capabilities, tools: false, structuredOutput: false, streaming: true, cancellation: true })
 export const routedTasks: RoutedTask[] = ['discussion', 'brainstorm', 'generation', 'editing', 'organization', 'chapter_digest', 'proofreading']
@@ -20,7 +28,7 @@ export class ProviderService {
   list(): ProviderConfig[] {
     const rows = this.db.raw.prepare('SELECT * FROM provider_configs ORDER BY updated_at DESC').all() as ProviderRow[]
     return rows.map((row) => ({ id: row.id, providerType: row.provider_type, displayName: row.display_name,
-      baseUrl: row.base_url, hasApiKey: Boolean(row.encrypted_api_key), createdAt: row.created_at, updatedAt: row.updated_at }))
+      baseUrl: row.base_url, ...baseUrlIssue(row.base_url), hasApiKey: Boolean(row.encrypted_api_key), createdAt: row.created_at, updatedAt: row.updated_at }))
   }
 
   save(input: ProviderInput): ProviderConfig {
@@ -32,7 +40,7 @@ export class ProviderService {
       VALUES (?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET provider_type=excluded.provider_type, display_name=excluded.display_name,
       base_url=excluded.base_url, encrypted_api_key=excluded.encrypted_api_key, updated_at=excluded.updated_at`)
-      .run(input.id || randomUUID(), input.providerType, input.displayName.trim(), normalizeBaseUrl(input.baseUrl), encrypted, existing?.created_at ?? now, now)
+      .run(input.id || randomUUID(), input.providerType, input.displayName.trim(), requireValidBaseUrl(input.baseUrl), encrypted, existing?.created_at ?? now, now)
     return this.list().find((item) => item.id === input.id) ?? this.list()[0]
   }
 
@@ -40,6 +48,7 @@ export class ProviderService {
     const row = this.db.raw.prepare('SELECT * FROM provider_configs WHERE id = ?').get(providerId) as ProviderRow | undefined
     if (!row) throw new Error('PROVIDER_NOT_FOUND')
     if (!row.encrypted_api_key) throw new Error('PROVIDER_KEY_MISSING')
+    requireValidBaseUrl(row.base_url)
     return {
       config: { id: row.id, providerType: row.provider_type, displayName: row.display_name, baseUrl: row.base_url,
         hasApiKey: true, createdAt: row.created_at, updatedAt: row.updated_at },
@@ -120,7 +129,8 @@ function deadlineSignal(external?: AbortSignal, timeoutMs = 60_000): { signal: A
 }
 
 export class OpenAICompatibleAdapter {
-  constructor(private readonly baseUrl: string, private readonly apiKey: string, private readonly fetcher: typeof fetch = fetch) {}
+  private readonly baseUrl: string
+  constructor(baseUrl: string, private readonly apiKey: string, private readonly fetcher: typeof fetch = fetch) { this.baseUrl = requireValidBaseUrl(baseUrl) }
 
   async *chat(input: { model: string; messages: ProviderMessage[]; signal?: AbortSignal; timeoutMs?: number }): AsyncIterable<string> {
     const request = deadlineSignal(input.signal, input.timeoutMs)
