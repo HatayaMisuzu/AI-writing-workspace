@@ -47,7 +47,9 @@ export const providerInputSchema = z.object({
   baseUrl: z.string().superRefine((value, ctx) => {
     const check = checkBaseUrl(value)
     if (!check.ok) ctx.addIssue({ code: 'custom', message: check.message })
-  }), apiKey: z.string().max(20_000).optional()
+  }), apiKey: z.string().max(20_000).optional(),
+  firstTokenTimeoutMs: z.number().int().positive().max(3_600_000).optional(),
+  totalTimeoutMs: z.number().int().positive().max(3_600_000).optional()
 })
 export const capabilitiesSchema = z.object({
   streaming: z.boolean(), tools: z.boolean(), structuredOutput: z.boolean(), cancellation: z.boolean(),
@@ -56,7 +58,9 @@ export const capabilitiesSchema = z.object({
 export const modelSchema = z.object({
   id: idSchema, providerId: idSchema, modelId: z.string().trim().min(1).max(500),
   displayName: z.string().trim().min(1).max(500), capabilities: capabilitiesSchema,
-  enabled: z.boolean(), isDefault: z.boolean()
+  enabled: z.boolean(), isDefault: z.boolean(),
+  contextWindow: z.number().int().positive().max(10_000_000).optional(),
+  maxOutput: z.number().int().positive().max(10_000_000).optional()
 })
 export const routeSchema = z.object({
   taskType: z.enum(['discussion', 'brainstorm', 'generation', 'editing', 'organization', 'chapter_digest', 'proofreading']),

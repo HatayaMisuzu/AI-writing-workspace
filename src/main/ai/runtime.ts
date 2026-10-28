@@ -4,6 +4,7 @@ import { ContextEngine } from './context-engine'
 import { historyPolicy } from './history-policy'
 import { composeProviderMessages } from './prompt-composer'
 import { OpenAICompatibleAdapter, ProviderService, type ProviderMessage } from './provider'
+import { computeContextInputBudget, DEFAULT_CONTEXT_WINDOW, DEFAULT_MAX_OUTPUT } from '../../shared/provider-presets'
 import { ChatService } from '../services/chat-service'
 import { DocumentService } from '../services/document-service'
 
@@ -35,12 +36,16 @@ export class AICreativeRuntime {
       }
       const model = this.providers.route(task.mode)
       const { config, apiKey } = this.providers.getWithSecret(model.providerId)
-      const { messages, context } = this.plan(task, threadId, model.capabilities.maxContextTokens)
+      const timeouts = this.providers.resolveTimeouts(model.providerId)
+      const { messages, context } = this.plan(task, threadId, model)
       this.chat.startTurn({ projectId: task.projectId, threadId, userMessageId, assistantMessageId, content: task.userIntent, mode: task.mode, target: task.target, contextSnapshot: this.contextSnapshot(context) })
       started = true
       const adapter = this.adapterFactory(config.baseUrl, apiKey)
       let first = true
-      for await (const chunk of adapter.chat({ model: model.modelId, messages, signal: controller.signal })) {
+      for await (const chunk of adapter.chat({
+        model: model.modelId, messages, signal: controller.signal,
+        timeoutMs: timeouts.totalTimeoutMs, firstTokenTimeoutMs: timeouts.firstTokenTimeoutMs
+      })) {
         assistant += chunk
         this.chat.updateAssistant(task.projectId, threadId, assistantMessageId, assistant, 'streaming')
         yield { requestId, chunk, context: first ? context : undefined }
@@ -66,15 +71,15 @@ export class AICreativeRuntime {
    * 不解密 API Key、不发起网络请求；未配置模型时按默认窗口估算。
    */
   previewContext(task: AITaskEnvelope, threadId: string): ContextBundle {
-    let maxContextTokens: number | undefined
-    try { maxContextTokens = this.providers.route(task.mode).capabilities.maxContextTokens } catch { maxContextTokens = undefined }
-    return this.plan(task, threadId, maxContextTokens).context
+    try { return this.plan(task, threadId, this.providers.route(task.mode)).context }
+    catch { return this.plan(task, threadId, undefined).context }
   }
 
-  private plan(task: AITaskEnvelope, threadId: string, modelMaxContext: number | undefined): { messages: ProviderMessage[]; context: ContextBundle } {
-    const maxContextTokens = Math.max(512, modelMaxContext ?? 16_000)
-    const responseReserve = Math.min(4_096, Math.max(256, Math.floor(maxContextTokens * 0.2)), maxContextTokens - 256)
-    const inputLimit = maxContextTokens - responseReserve
+  private plan(task: AITaskEnvelope, threadId: string, model: { contextWindow?: number; maxOutput?: number; capabilities?: { maxContextTokens?: number } } | undefined): { messages: ProviderMessage[]; context: ContextBundle } {
+    const contextWindow = Math.max(512, model?.contextWindow ?? model?.capabilities?.maxContextTokens ?? DEFAULT_CONTEXT_WINDOW)
+    const maxOutput = Math.max(1, model?.maxOutput ?? Math.min(DEFAULT_MAX_OUTPUT, Math.floor(contextWindow * 0.2)))
+    // S7：预算 = 窗口 − 最大输出 − 余量
+    const inputLimit = Math.max(256, computeContextInputBudget(contextWindow, maxOutput))
     const systemOnly = this.messageTokens(composeProviderMessages({ task: { ...task, userIntent: '' }, context: {
       projectId: task.projectId, policy: task.mode === 'reader_review' ? 'reader' : 'creative', items: [],
       metadata: { estimatedTokens: 0, sourceIds: [], excludedKinds: [] }

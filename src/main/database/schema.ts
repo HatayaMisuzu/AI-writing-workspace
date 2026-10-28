@@ -195,7 +195,9 @@ CREATE TABLE IF NOT EXISTS provider_configs (
   base_url TEXT NOT NULL,
   encrypted_api_key BLOB,
   created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL
+  updated_at INTEGER NOT NULL,
+  first_token_timeout_ms INTEGER,
+  total_timeout_ms INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS model_configs (
@@ -206,6 +208,8 @@ CREATE TABLE IF NOT EXISTS model_configs (
   capabilities_json TEXT NOT NULL,
   enabled INTEGER NOT NULL DEFAULT 1,
   is_default INTEGER NOT NULL DEFAULT 0,
+  context_window INTEGER,
+  max_output INTEGER,
   UNIQUE(provider_id, model_id)
 );
 

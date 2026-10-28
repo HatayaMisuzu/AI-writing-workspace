@@ -3,7 +3,7 @@ import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { schema } from './schema'
 
-export const CURRENT_SCHEMA_VERSION = 5
+export const CURRENT_SCHEMA_VERSION = 6
 
 export class AppDatabase {
   readonly raw: DatabaseSync
@@ -109,6 +109,17 @@ export class AppDatabase {
         this.transaction(() => this.writeVersion(5))
       }
       version = 5
+    }
+    if (version < 6) {
+      // v6（S7）：model_configs 上下文窗口/最大输出；provider_configs 可选超时。
+      this.transaction(() => {
+        if (!this.hasColumn('model_configs', 'context_window')) this.raw.exec('ALTER TABLE model_configs ADD COLUMN context_window INTEGER')
+        if (!this.hasColumn('model_configs', 'max_output')) this.raw.exec('ALTER TABLE model_configs ADD COLUMN max_output INTEGER')
+        if (!this.hasColumn('provider_configs', 'first_token_timeout_ms')) this.raw.exec('ALTER TABLE provider_configs ADD COLUMN first_token_timeout_ms INTEGER')
+        if (!this.hasColumn('provider_configs', 'total_timeout_ms')) this.raw.exec('ALTER TABLE provider_configs ADD COLUMN total_timeout_ms INTEGER')
+        this.writeVersion(6)
+      })
+      version = 6
     }
     this.raw.prepare("UPDATE chat_messages SET status = 'error' WHERE status = 'streaming'").run()
     if (version !== CURRENT_SCHEMA_VERSION) throw new Error(`DATABASE_SCHEMA_MIGRATION_INCOMPLETE:${version}`)

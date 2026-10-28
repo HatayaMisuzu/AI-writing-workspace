@@ -256,7 +256,7 @@ button.danger-button { color: #fff; background: var(--danger); border-color: var
 .model-head, .model-row { display: grid; grid-template-columns: 1fr 1.1fr 1.2fr 100px 74px; gap: 12px; min-height: 45px; align-items: center; border-bottom: 1px solid #ecece8; font-size: 12px; }
 .model-head { color: var(--muted); min-height: 34px; }.model-row small { color: var(--muted); }
 .default-model { font-size: 11px; }.default-model.active { color: var(--accent); background: var(--accent-soft); border-color: transparent; }
-.model-add { display: grid; grid-template-columns: 1fr 1.2fr auto; gap: 10px; margin-top: 13px; }
+.model-add { display: grid; grid-template-columns: 1.2fr 1fr 0.7fr 0.7fr auto; gap: 10px; margin-top: 13px; }
 .routing-section { padding: 20px 0; }.routing-section summary { cursor: pointer; font-weight: 600; }.routing-section summary span { font-size: 11px; color: var(--muted); margin-left: 16px; font-weight: 400; }
 .route-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px 28px; margin-top: 18px; }.route-grid label { display: grid; grid-template-columns: 1fr 160px; align-items: center; font-size: 12px; }
 .settings-notice { margin-top: 15px; border: 1px solid; border-radius: 7px; padding: 13px; display: flex; align-items: center; gap: 8px; font-size: 12px; }.settings-notice.ok { color: #2d7f5e; background: #eef8f2; }.settings-notice.error { color: var(--danger); background: #fff4f2; }
@@ -315,3 +315,10 @@ button.danger-button { color: #fff; background: var(--danger); border-color: var
 .book-outline-slot .project-view > header { padding-bottom: 14px; }
 .book-outline-slot .project-view h1 { font-size: 22px; margin-bottom: 4px; }
 .outline-layer-heading { font-size: 15px; margin: 28px 0 8px; color: var(--muted); font-weight: 600; }
+
+.privacy-note { margin-top: 8px; color: var(--muted); font-size: 13px; }
+.provider-presets { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 12px 0 18px; }
+.provider-presets .presets-label { font-size: 13px; color: var(--muted); margin-right: 4px; }
+.provider-presets button { font-size: 13px; padding: 6px 10px; border-radius: 8px; border: 1px solid var(--line); background: #fff; cursor: pointer; }
+.provider-presets button:hover { border-color: var(--accent, #3b82f6); }
+.model-head, .model-row { grid-template-columns: 1.2fr 1fr 0.7fr 0.7fr 0.9fr 0.8fr 0.6fr; }

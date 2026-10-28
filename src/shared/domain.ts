@@ -120,6 +120,10 @@ export interface ProviderConfig {
   /** S1c：存量配置的地址不合法时给出原因；此时不会发起任何请求，需作者修正。 */
   baseUrlError?: string
   hasApiKey: boolean
+  /** S7：首 token 超时（ms）；未设则按本地/远端默认。 */
+  firstTokenTimeoutMs?: number
+  /** S7：整次请求总超时（ms）。 */
+  totalTimeoutMs?: number
   createdAt: number
   updatedAt: number
 }
@@ -144,6 +148,10 @@ export interface ModelConfig {
   capabilities: ProviderCapabilities
   enabled: boolean
   isDefault: boolean
+  /** S7：上下文窗口（tokens）；预算 = 窗口 − 最大输出 − 余量。 */
+  contextWindow?: number
+  /** S7：最大输出（tokens）。 */
+  maxOutput?: number
 }
 
 export interface TaskModelRoute {
