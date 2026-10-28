@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { checkBaseUrl } from '../../shared/base-url'
 
 /** IPC 入参 zod 校验（从 register.ts 抽出以便单测，行为不变）。 */
 export const idSchema = z.string().min(1).max(200)
@@ -31,7 +32,10 @@ export const characterSaveSchema = z.object({
 })
 export const providerInputSchema = z.object({
   id: idSchema, providerType: z.literal('openai-compatible'), displayName: z.string().trim().min(1).max(500),
-  baseUrl: z.string().url().max(2_000), apiKey: z.string().max(20_000).optional()
+  baseUrl: z.string().superRefine((value, ctx) => {
+    const check = checkBaseUrl(value)
+    if (!check.ok) ctx.addIssue({ code: 'custom', message: check.message })
+  }), apiKey: z.string().max(20_000).optional()
 })
 export const capabilitiesSchema = z.object({
   streaming: z.boolean(), tools: z.boolean(), structuredOutput: z.boolean(), cancellation: z.boolean(),

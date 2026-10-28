@@ -1,6 +1,7 @@
 import { Check, Plus, Save, Server, TestTube2, XCircle } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import type { ModelConfig, ProviderConfig, RoutedTask } from '../../../shared/domain'
+import { checkBaseUrl } from '../../../shared/base-url'
 
 const defaultCapabilities = { streaming: true, tools: false, structuredOutput: false, cancellation: true }
 const routedTasks: Array<[RoutedTask, string]> = [
@@ -41,6 +42,8 @@ export function SettingsScreen(): React.JSX.Element {
   }
   const saveProvider = (): Promise<void> => run(async () => {
     if (!form.displayName.trim() || !form.baseUrl.trim()) throw new Error('请填写服务名称和 Base URL。')
+    const urlCheck = checkBaseUrl(form.baseUrl)
+    if (!urlCheck.ok) throw new Error(urlCheck.message)
     const id = selectedId ?? crypto.randomUUID()
     await window.workspace.providers.save({ id, providerType: 'openai-compatible', displayName: form.displayName, baseUrl: form.baseUrl, apiKey: form.apiKey || undefined })
     setSelectedId(id); setNotice({ ok: true, text: '服务配置已安全保存到本机。' }); await reload()
@@ -74,12 +77,14 @@ export function SettingsScreen(): React.JSX.Element {
     <section className="settings-content">
       <header><h1>模型与服务</h1><p>模型是可选能力。未配置时，写作、保存、检索、历史恢复与导出仍可正常使用。</p></header>
       <div className="provider-layout">
-        <aside className="provider-list"><h2>服务提供者</h2>{providers.map((provider) => <button key={provider.id} className={selectedId === provider.id ? 'active' : ''} onClick={() => setSelectedId(provider.id)}><Server size={16} /><span>{provider.displayName}</span></button>)}
+        <aside className="provider-list"><h2>服务提供者</h2>{providers.map((provider) => <button key={provider.id} className={selectedId === provider.id ? 'active' : ''} onClick={() => setSelectedId(provider.id)}><Server size={16} /><span>{provider.displayName}</span>{provider.baseUrlError && <small className="provider-warning" title={provider.baseUrlError}>需修正地址</small>}</button>)}
           <button className="add-provider" onClick={() => { setSelectedId(undefined); setForm({ displayName: 'OpenAI-compatible', baseUrl: '', apiKey: '' }) }}><Plus size={16} />添加服务</button></aside>
         <div className="provider-form"><h2>{selected ? selected.displayName : '添加 API 服务'}</h2>
           <label><span>API 格式</span><input value="OpenAI-compatible" disabled /></label>
           <label><span>显示名称</span><input value={form.displayName} onChange={(event) => setForm({ ...form, displayName: event.target.value })} /></label>
           <label><span>API Base URL</span><input value={form.baseUrl} onChange={(event) => setForm({ ...form, baseUrl: event.target.value })} placeholder="https://api.example.com/v1" /></label>
+          {form.baseUrl.trim() && !checkBaseUrl(form.baseUrl).ok ? <div className="inline-error" role="alert">{(checkBaseUrl(form.baseUrl) as { message: string }).message}</div>
+            : selected?.baseUrlError && form.baseUrl === selected.baseUrl ? <div className="inline-error" role="alert">需修正地址：{selected.baseUrlError} 原地址已隐藏，请重新填写后保存；在此之前不会发送任何请求。</div> : null}
           <label><span>API Key</span><input type="password" value={form.apiKey} onChange={(event) => setForm({ ...form, apiKey: event.target.value })} placeholder={selected?.hasApiKey ? '已安全保存；留空保持不变' : '仅在本机加密保存'} /></label>
           <div className="secure-note"><Check size={15} />密钥由操作系统安全存储，界面与日志无法读取明文。</div>
           <div className="form-actions"><button disabled={busy} onClick={() => void test()}><TestTube2 size={16} />测试连接</button><button className="primary" disabled={busy} onClick={() => void saveProvider()}><Save size={16} />保存服务</button></div>
