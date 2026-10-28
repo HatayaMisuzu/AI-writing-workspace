@@ -41,3 +41,40 @@ jobs:
           name: inkstone-windows
           path: release/*
           if-no-files-found: error
+
+  verify-linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run release:preflight
+      - run: npm run verify
+
+  package-linux:
+    runs-on: ubuntu-latest
+    needs: verify-linux
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      # 仅构建目录产物（linux-unpacked），不出 AppImage
+      - run: npm run dist:linux-dir
+      # Ubuntu 24.04 默认限制非特权 user namespace，Chromium 沙箱需要放开；应用本身保持 sandbox 开启
+      - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - run: |
+          export INKSTONE_PACKAGED_EXE="$PWD/release/linux-unpacked/inkstone"
+          xvfb-run -a npm run test:package-smoke
+      - uses: actions/upload-artifact@v7
+        with:
+          name: inkstone-linux-dir
+          path: release/linux-unpacked
+          if-no-files-found: error
