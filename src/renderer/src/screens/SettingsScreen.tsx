@@ -1,6 +1,7 @@
 import { Check, Plus, Save, Server, TestTube2, XCircle } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import type { ModelConfig, ProviderConfig, RoutedTask } from '../../../shared/domain'
+import { userErrorMessage } from '../../../shared/user-error'
 import { BASE_URL_QUERY_SECRET_HINT, checkBaseUrl, hasSecretQuery } from '../../../shared/base-url'
 
 const defaultCapabilities = { streaming: true, tools: false, structuredOutput: false, cancellation: true }
@@ -37,7 +38,7 @@ export function SettingsScreen(): React.JSX.Element {
   const run = async (action: () => Promise<void>): Promise<void> => {
     setBusy(true)
     try { await action() }
-    catch (error) { setNotice({ ok: false, text: `操作失败：${error instanceof Error ? error.message : String(error)}` }) }
+    catch (error) { setNotice({ ok: false, text: `操作失败：${userErrorMessage(error)}` }) }
     finally { setBusy(false) }
   }
   const saveProvider = (): Promise<void> => run(async () => {

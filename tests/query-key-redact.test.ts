@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createTestDb, testCodec } from './helpers'
-import { OpenAICompatibleAdapter, ProviderService } from '../src/main/ai/provider'
+import { ADDRESS_CHANGED_KEY, ADDRESS_CHANGED_QUERY_SECRET, OpenAICompatibleAdapter, ProviderService } from '../src/main/ai/provider'
+import { userErrorMessage } from '../src/shared/user-error'
 import { providerInputSchema } from '../src/main/ipc/schemas'
 import { displayBaseUrl, hasSecretQuery, redactBaseUrl, redactQuerySecrets, redactSecretsInText, restoreRedactedSecrets } from '../src/shared/base-url'
 
@@ -87,8 +88,8 @@ describe('S1d query 中的密钥脱敏', () => {
       const fetcher = okFetch()
       for (const evil of [shown.replace('h.example', 'evil.example'), shown.replace('https://h.example', 'http://h.example'),
         shown.replace('h.example', 'h.example:8443'), shown.replace('/v1', '/steal')]) {
-        expect(() => save(providers, evil)).toThrow('请重新填写密钥')
-        expect(() => save(providers, evil, 'new-bearer')).toThrow('请重新填写密钥')
+        expect(() => save(providers, evil)).toThrow(ADDRESS_CHANGED_QUERY_SECRET)
+        expect(() => save(providers, evil, 'new-bearer')).toThrow(ADDRESS_CHANGED_QUERY_SECRET)
       }
       expect(rows(db)).toEqual(before)
       expect(fetcher).not.toHaveBeenCalled()
@@ -109,7 +110,7 @@ describe('S1d query 中的密钥脱敏', () => {
       const before = rows(db)
       const fetcher = okFetch()
       for (const url of ['https://evil.example/v1', 'http://h.example/v1', 'https://h.example:8443/v1'])
-        expect(() => save(providers, url)).toThrow(expect.objectContaining({ code: 'PROVIDER_KEY_REENTRY_REQUIRED' }))
+        expect(() => save(providers, url)).toThrow(expect.objectContaining({ code: 'PROVIDER_KEY_REENTRY_REQUIRED', message: ADDRESS_CHANGED_KEY }))
       expect(rows(db)).toEqual(before)
       expect(fetcher).not.toHaveBeenCalled()
       // 之后按已存配置真实发起请求：只会发往原 host，evil.example 从未收到请求
@@ -131,5 +132,18 @@ describe('S1d query 中的密钥脱敏', () => {
       expect(shown).toBe('https://h/v1?api-key=***&client_secret=***&refresh_token=***&signature=***&AUTH=***&keyword=kw&key=')
       expect(redactSecretsInText(`GET /x?signature=${S}&auth=${S}&key= ok`)).toBe('GET /x?signature=***&auth=*** &key= ok'.replace('*** &', '***&'))
     })
+  })
+
+  it('设置页显示的是作者能看懂的文案，而非错误码或 IPC 包装', () => {
+    const db = createTestDb(); const providers = new ProviderService(db, testCodec)
+    save(providers, 'https://h.example/v1', 'old')
+    let caught: unknown
+    try { save(providers, 'https://evil.example/v1') } catch (error) { caught = error }
+    // 模拟 Electron ipcRenderer.invoke 抛到渲染进程的格式
+    const ipcError = new Error(`Error invoking remote method 'providers:save': Error: ${(caught as Error).message}`)
+    const shown = `操作失败：${userErrorMessage(ipcError)}`
+    expect(shown).toBe('操作失败：地址已变更，为防止密钥发往新地址，请重新填写 Key。')
+    expect(shown).not.toMatch(/PROVIDER_|Error|invoking/)
+    expect(userErrorMessage(new Error('普通错误'))).toBe('普通错误')
   })
 })

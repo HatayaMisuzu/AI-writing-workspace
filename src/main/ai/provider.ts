@@ -8,6 +8,8 @@ export interface SecretCodec {
   decrypt(value: Buffer): string
 }
 
+export const ADDRESS_CHANGED_KEY = '地址已变更，为防止密钥发往新地址，请重新填写 Key。'
+export const ADDRESS_CHANGED_QUERY_SECRET = '地址已变更，为防止密钥发往新地址，请重新填写地址中的密钥。'
 type ProviderRow = { id: string; provider_type: 'openai-compatible'; display_name: string; base_url: string; encrypted_api_key: Buffer | null; created_at: number; updated_at: number }
 
 const baseUrlIssue = (url: string): { baseUrlError?: string } => { const check = checkBaseUrl(url); return check.ok ? {} : { baseUrlError: check.message } }
@@ -41,10 +43,14 @@ export class ProviderService {
     const existing = this.db.raw.prepare('SELECT * FROM provider_configs WHERE id = ?').get(input.id) as ProviderRow | undefined
     // S1d：界面拿到的是脱敏地址，*** 按参数名还原为已保存的原值；还原不了则拒绝，绝不把 *** 写入
     const baseUrl = restoreRedactedSecrets(input.baseUrl, existing?.base_url)
-    if (baseUrl === undefined) throw Object.assign(new Error(`服务地址需要修正：地址中的 *** 是已隐藏的密钥，找不到原值或服务地址已更换，请重新填写密钥。`), { code: 'PROVIDER_BASE_URL_INVALID' })
+    if (baseUrl === undefined) {
+      const moved = existing !== undefined && !sameEndpoint(input.baseUrl, existing.base_url, true)
+      throw Object.assign(new Error(moved ? ADDRESS_CHANGED_QUERY_SECRET : '地址中的 *** 是已隐藏的密钥，找不到原值，请重新填写地址中的密钥。'),
+        { code: moved ? 'PROVIDER_ADDRESS_CHANGED' : 'PROVIDER_BASE_URL_INVALID' })
+    }
     // S1d-A2：已存 Key 只能沿用在同一 scheme/host/port 上；地址换了且没填新 Key 则拒绝，避免把旧 Key 发给新地址
     if (!input.apiKey && existing?.encrypted_api_key && !sameEndpoint(baseUrl, existing.base_url))
-      throw Object.assign(new Error('服务地址已更换：为防止旧 Key 被发往新地址，请在 Key 栏重新填写 Key 后再保存。'), { code: 'PROVIDER_KEY_REENTRY_REQUIRED' })
+      throw Object.assign(new Error(ADDRESS_CHANGED_KEY), { code: 'PROVIDER_KEY_REENTRY_REQUIRED' })
     const now = Date.now()
     const encrypted = input.apiKey ? this.codec.encrypt(input.apiKey) : existing?.encrypted_api_key ?? null
     this.db.raw.prepare(`INSERT INTO provider_configs

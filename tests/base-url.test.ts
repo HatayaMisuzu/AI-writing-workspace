@@ -53,7 +53,7 @@ describe('S1c Base URL 只允许 http/https', () => {
     // 数据未被静默删除，密钥保留；修正地址属于更换地址，S1d-A2 要求重填 Key 才能保存
     expect(db.raw.prepare('SELECT COUNT(*) AS n FROM provider_configs').get()).toEqual({ n: 1 })
     expect(() => providers.save({ id: 'legacy', providerType: 'openai-compatible', displayName: '旧配置', baseUrl: 'http://localhost:11434/v1' }))
-      .toThrow(expect.objectContaining({ code: 'PROVIDER_KEY_REENTRY_REQUIRED' }))
+      .toThrow(expect.objectContaining({ code: 'PROVIDER_KEY_REENTRY_REQUIRED', message: '地址已变更，为防止密钥发往新地址，请重新填写 Key。' }))
     expect(providers.list()[0].hasApiKey).toBe(true)
     providers.save({ id: 'legacy', providerType: 'openai-compatible', displayName: '旧配置', baseUrl: 'http://localhost:11434/v1', apiKey: 'new-key' })
     expect(providers.list()[0].baseUrlError).toBeUndefined()
