@@ -36,7 +36,7 @@ export class AICreativeRuntime {
       const model = this.providers.route(task.mode)
       const { config, apiKey } = this.providers.getWithSecret(model.providerId)
       const { messages, context } = this.plan(task, threadId, model.capabilities.maxContextTokens)
-      this.chat.startTurn({ projectId: task.projectId, threadId, userMessageId, assistantMessageId, content: task.userIntent, mode: task.mode, target: task.target })
+      this.chat.startTurn({ projectId: task.projectId, threadId, userMessageId, assistantMessageId, content: task.userIntent, mode: task.mode, target: task.target, contextSnapshot: this.contextSnapshot(context) })
       started = true
       const adapter = this.adapterFactory(config.baseUrl, apiKey)
       let first = true
@@ -88,6 +88,14 @@ export class AICreativeRuntime {
     const fixedTokens = this.messageTokens(composeProviderMessages({ task: providerTask, context: emptyContext, history }))
     const builtContext = this.context.build(providerTask, Math.max(0, inputLimit - fixedTokens))
     return this.fitFinalMessages(providerTask, builtContext, history, inputLimit)
+  }
+
+
+  private contextSnapshot(context: ContextBundle): { sources: Array<{ id: string; kind: string }>; omitted: Array<{ id: string; kind: string; reason: string }> } {
+    return {
+      sources: context.items.map((item) => ({ id: item.id, kind: item.kind })),
+      omitted: (context.metadata.omitted ?? []).map((item) => ({ id: item.id, kind: item.kind, reason: item.reason }))
+    }
   }
 
   cancel(requestId: string): void { this.controllers.get(requestId)?.abort() }

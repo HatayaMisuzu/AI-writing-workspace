@@ -8,7 +8,7 @@ import { ContextEngine } from '../src/main/ai/context-engine'
 import { ProviderService, type ProviderMessage } from '../src/main/ai/provider'
 import { AICreativeRuntime } from '../src/main/ai/runtime'
 import { aiPreviewContextSchema, aiStartSchema } from '../src/main/ipc/schemas'
-import { toContextSourceRows, toggleExcludedId } from '../src/renderer/src/services/context-sources'
+import { isRowChecked, toContextSourceRows, toggleExcludedId } from '../src/renderer/src/services/context-sources'
 import type { AITaskEnvelope, ContextBundle } from '../src/shared/domain'
 
 const setup = (maxContextTokens = 16_000) => {
@@ -108,4 +108,43 @@ describe('S6 上下文来源清单与逐条排除（R4）', () => {
     expect(aiPreviewContextSchema.safeParse({ threadId: 't', task: { ...base.task, userIntent: '' } }).success).toBe(true)
     expect(aiPreviewContextSchema.safeParse({ threadId: '', task: base.task }).success).toBe(false)
   })
+
+  it('大纲进清单且默认不发送；勾选 includedIds 后发送且无正文进 snapshot', async () => {
+    const { db, project, runtime, captured, task, thread } = setup()
+    const docs = new DocumentService(db)
+    const volume = docs.listTree(project.id).find((node) => node.type === 'volume')!
+    docs.saveOutline({ projectId: project.id, nodeId: volume.id, summary: '卷一主线：旧书店的秘密', beats: ['开场雨夜'], hook: '舅舅现身' })
+    const outlineId = `outline:${volume.id}`
+    const preview = runtime.previewContext(task, thread.id)
+    expect(preview.metadata.omitted).toContainEqual(expect.objectContaining({ id: outlineId, kind: 'outline', reason: 'default_excluded' }))
+    expect(preview.items.some((item) => item.id === outlineId)).toBe(false)
+    expect(JSON.stringify(preview.items)).not.toContain('旧书店的秘密')
+    const withOutline = { ...task, includedIds: [outlineId] }
+    const sent = await runOnce(runtime, withOutline, thread.id, 'outline')
+    expect(sent.items.some((item) => item.id === outlineId)).toBe(true)
+    expect(JSON.stringify(captured[0])).toContain('旧书店的秘密')
+    const row = db.raw.prepare('SELECT context_snapshot_json AS j FROM chat_messages WHERE role = ? ORDER BY created_at DESC LIMIT 1').get('assistant') as { j: string }
+    const snap = JSON.parse(row.j) as { sources: Array<{ id: string; kind: string }>; omitted: Array<{ id: string; kind: string; reason: string }> }
+    expect(snap.sources.some((item) => item.id === outlineId && item.kind === 'outline')).toBe(true)
+    expect(JSON.stringify(snap)).not.toContain('旧书店的秘密')
+    expect(JSON.stringify(snap)).not.toContain('雨夜里林舟')
+  })
+
+  it('snapshot 只含 id/类型/排除原因，不含正文', async () => {
+    const { db, runtime, task, thread, memory } = setup()
+    await runOnce(runtime, { ...task, excludedIds: [memory.id] }, thread.id, 'snap')
+    const row = db.raw.prepare('SELECT context_snapshot_json AS j FROM chat_messages WHERE role = ? ORDER BY created_at DESC LIMIT 1').get('user') as { j: string }
+    const snap = JSON.parse(row.j) as { sources: Array<{ id: string; kind: string; content?: string }>; omitted: Array<{ id: string; kind: string; reason: string }> }
+    expect(snap.omitted).toContainEqual(expect.objectContaining({ id: memory.id, reason: 'user_excluded' }))
+    expect(snap.sources.every((item) => item.id && item.kind && !('content' in item))).toBe(true)
+    expect(JSON.stringify(snap)).not.toContain('旧书店老板其实是林舟的舅舅')
+    expect(JSON.stringify(snap)).not.toContain('雨夜里林舟')
+  })
+
+  it('isRowChecked：大纲默认未勾选，勾选后靠 includedIds', () => {
+    const row = { id: 'outline:v', kind: 'outline' as const, title: '大纲', reason: '', preview: '', included: false, truncated: false, omittedReason: 'default_excluded' as const }
+    expect(isRowChecked(row, [], [])).toBe(false)
+    expect(isRowChecked(row, [], ['outline:v'])).toBe(true)
+  })
+
 })

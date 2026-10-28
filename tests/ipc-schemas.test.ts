@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   aiStartSchema, characterSaveSchema, documentCreateSchema, documentSaveSchema, idSchema, modelSchema, noteSaveSchema,
-  patchProposalSchema, projectCreateSchema, providerInputSchema, routeSchema, snapshotReasonSchema, noteSectionSchema, outlineSaveSchema, aiPreviewContextSchema, aiTaskSchema
+  patchProposalSchema, projectCreateSchema, providerInputSchema, routeSchema, snapshotReasonSchema, noteSectionSchema, outlineSaveSchema
 } from '../src/main/ipc/schemas'
 
 const rejects = (schema: { safeParse(value: unknown): { success: boolean } }, value: unknown): boolean => !schema.safeParse(value).success

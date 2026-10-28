@@ -2,7 +2,7 @@ import { Bot, Check, ChevronRight, Copy, FileSearch, MessageSquarePlus, PenLine,
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { AIMode, ChatThread, ContextBundle, DigestStatus, DocumentTaskTarget, MemoryProposal, ModelConfig, Project, RoutedTask } from '../../../shared/domain'
 import type { EditorSelection } from './EditorSurface'
-import { omittedLabel, toContextSourceRows, toggleExcludedId, type ContextSourceRow } from '../services/context-sources'
+import { isRowChecked, omittedLabel, toContextSourceRows, toggleExcludedId, toggleIncludedId, type ContextSourceRow } from '../services/context-sources'
 import { canInsertCandidate, mapChatHistory, resolveDisplayedModelMode, resolveModelDisplayName, retryInputForMessage, type AssistantHistoryMessage } from '../services/assistant-history'
 
 type ContextSummary = { count: number; tokens: number; items: ContextSourceRow[] }
@@ -16,10 +16,12 @@ const inferMode = (text: string, explicit: AIMode): AIMode => {
 }
 const digestLabel = (status?: DigestStatus): string => !status || status.state === 'missing' ? 'AI理解：未更新'
   : status.state === 'fresh' ? 'AI理解：已更新' : 'AI理解：正文已变化'
-export function AssistantPanel({ project, documentId, documentRevision, selection, collapsed, onCollapse, onInsertCandidate, onCreatePatch, onBeforeAI, onOpenDocument, onOpenSettings }: {
+export function AssistantPanel({ project, documentId, documentRevision, selection, collapsed, onCollapse, onInsertCandidate, onCreatePatch, onBeforeAI, onEnsureSaved, onOpenDocument, onOpenSettings }: {
   project: Project; documentId?: string; documentRevision?: number; selection?: EditorSelection; collapsed: boolean; onCollapse(): void
   onInsertCandidate(target: DocumentTaskTarget, text: string): Promise<void>; onCreatePatch(target: DocumentTaskTarget, replacement: string): Promise<void>
   onBeforeAI(requestId: string, documentId?: string, selection?: EditorSelection): Promise<DocumentTaskTarget | undefined>
+  /** S6：预览前先自动保存，保证预览=发送。 */
+  onEnsureSaved(): Promise<void>
   onOpenDocument(documentId: string): Promise<void>; onOpenSettings(): void
 }): React.JSX.Element {
   const [input, setInput] = useState('')
@@ -35,6 +37,7 @@ export function AssistantPanel({ project, documentId, documentRevision, selectio
   const [digestBusy, setDigestBusy] = useState(false)
   const [modelRouting, setModelRouting] = useState<{ models: ModelConfig[]; routes: Record<RoutedTask, string | 'default'> }>()
   const [excludedIds, setExcludedIds] = useState<string[]>([])
+  const [includedIds, setIncludedIds] = useState<string[]>([])
   const [sourcesOpen, setSourcesOpen] = useState(false)
   const [sourcePreview, setSourcePreview] = useState<{ rows: ContextSourceRow[]; tokens: number; error?: string }>()
   const cleanups = useRef(new Map<string, () => void>())
@@ -56,6 +59,7 @@ export function AssistantPanel({ project, documentId, documentRevision, selectio
     const history = await window.workspace.chat.listMessages(project.id, thread.id, undefined, 50)
     followLatest.current = true
     setThreads(available); setThreadId(thread.id); setMessages(mapChatHistory(history)); setHasEarlier(history.length === 50); setLoadingHistory(false)
+    setExcludedIds([]); setIncludedIds([]) // 排除项不持久化，只作用于单次请求
   }, [project.id])
 
   useEffect(() => { void loadThread().catch((error) => { setLoadingHistory(false); setMessages([{ id: crypto.randomUUID(), role: 'assistant',
@@ -78,20 +82,23 @@ export function AssistantPanel({ project, documentId, documentRevision, selectio
   }, [messages])
 
   // R4/S6：发送前列出将要发送的上下文来源，可逐条排除；与发送使用同一后端规划逻辑。
+  // 预览前先自动保存，保证预览正文与实际发送一致。
   useEffect(() => {
     if (!sourcesOpen || !threadId) return
     let active = true
     const requestedMode = inferMode(input.trim(), mode)
     const timer = setTimeout(() => {
-      void window.workspace.ai.previewContext({ threadId, task: { mode: requestedMode,
-        writePermission: requestedMode === 'editing' || requestedMode === 'generation' ? 'proposal' : 'none', userIntent: input.trim(),
-        projectId: project.id, documentId, selection: selection ? { from: selection.fromPm, to: selection.toPm, text: selection.text } : undefined,
-        excludedIds } })
+      void onEnsureSaved()
+        .then(() => window.workspace.ai.previewContext({ threadId, task: { mode: requestedMode,
+          writePermission: requestedMode === 'editing' || requestedMode === 'generation' ? 'proposal' : 'none', userIntent: input.trim(),
+          projectId: project.id, documentId, selection: selection ? { from: selection.fromPm, to: selection.toPm, text: selection.text } : undefined,
+          excludedIds: excludedIds.length ? excludedIds : undefined,
+          includedIds: includedIds.length ? includedIds : undefined } }))
         .then((bundle) => { if (active) setSourcePreview({ rows: toContextSourceRows(bundle), tokens: bundle.metadata.estimatedTokens }) })
         .catch((error) => { if (active) setSourcePreview({ rows: [], tokens: 0, error: error instanceof Error ? error.message : String(error) }) })
     }, 250)
     return () => { active = false; clearTimeout(timer) }
-  }, [sourcesOpen, threadId, input, mode, project.id, documentId, documentRevision, selection, excludedIds])
+  }, [sourcesOpen, threadId, input, mode, project.id, documentId, documentRevision, selection, excludedIds, includedIds, onEnsureSaved])
 
   const loadEarlier = async (): Promise<void> => {
     if (!threadId || !messages[0]) return
@@ -135,7 +142,8 @@ export function AssistantPanel({ project, documentId, documentRevision, selectio
       mode: requestedMode, writePermission: requestedMode === 'editing' || requestedMode === 'generation' ? 'proposal' : 'none', userIntent: text,
       projectId: project.id, documentId: target?.documentId, target,
       selection: target?.selection ? { from: target.selection.fromPm, to: target.selection.toPm, text: target.selection.text } : undefined,
-      excludedIds: excludedIds.length ? excludedIds : undefined
+      excludedIds: excludedIds.length ? excludedIds : undefined,
+      includedIds: includedIds.length ? includedIds : undefined
     } }, (event) => {
       if (event.requestId !== requestId) return
       if (event.type === 'chunk') {
@@ -148,6 +156,7 @@ export function AssistantPanel({ project, documentId, documentRevision, selectio
         const finalText = streamed.current.get(requestId) ?? ''
         setRunningId(undefined)
         setActiveRequestMode(undefined)
+        setExcludedIds([]); setIncludedIds([]) // 排除只作用于本次请求
         setMessages((current) => current.map((item) => item.id === assistantId ? { ...item, content: finalText, status: undefined } : item))
         if (requestedMode === 'editing' && target?.selection && finalText) void onCreatePatch(target, finalText).catch((error) => {
           setMessages((current) => current.map((item) => item.id === assistantId ? { ...item, content: `${finalText}\n\n提案创建失败：${error instanceof Error ? error.message : String(error)}`, status: 'error' } : item))
@@ -233,7 +242,10 @@ export function AssistantPanel({ project, documentId, documentRevision, selectio
           : !sourcePreview ? <div className="context-note">正在整理上下文…</div>
           : <><div className="context-note">将发送 {sourcePreview.rows.filter((row) => row.included).length} 条 · 约 {sourcePreview.tokens} tokens（取消勾选即不发送）</div>
             <ul>{sourcePreview.rows.map((row) => <li key={`${row.kind}:${row.id}`} className={row.included ? '' : 'omitted'}>
-              <label><input type="checkbox" checked={!excludedIds.includes(row.id)} disabled={row.omittedReason === 'budget'} onChange={() => setExcludedIds((current) => toggleExcludedId(current, row.id))} />
+              <label><input type="checkbox" checked={isRowChecked(row, excludedIds, includedIds)} disabled={row.omittedReason === 'budget'} onChange={() => {
+                if (row.kind === 'outline' || row.omittedReason === 'default_excluded') setIncludedIds((current) => toggleIncludedId(current, row.id))
+                else setExcludedIds((current) => toggleExcludedId(current, row.id))
+              }} />
                 <strong>{row.title}</strong>{row.included ? <span>{row.preview}{row.truncated ? '…（已截断）' : ''}</span> : <small>{omittedLabel(row.omittedReason)}</small>}</label></li>)}</ul></>}
       </div>}
       {selection && <div className="selection-chip">已选择 {selection.text.length} 字</div>}
@@ -242,7 +254,7 @@ export function AssistantPanel({ project, documentId, documentRevision, selectio
         <button className={mode === 'discussion' ? 'active' : ''} onClick={() => setQuickMode('discussion')}>问 AI</button>
         <button className={mode === 'editing' ? 'active' : ''} disabled={!selection} onClick={() => setQuickMode('editing')}>修改</button>
         <button className={mode === 'generation' ? 'active' : ''} onClick={() => setQuickMode('generation')}>续写</button>
-        <button className={sourcesOpen ? 'active' : ''} aria-expanded={sourcesOpen} onClick={() => setSourcesOpen((open) => !open)}>上下文{excludedIds.length ? `（排除 ${excludedIds.length}）` : ''}</button>
+        <button className={sourcesOpen ? 'active' : ''} aria-expanded={sourcesOpen} onClick={() => setSourcesOpen((open) => !open)}>上下文{(excludedIds.length || includedIds.length) ? `（排除 ${excludedIds.length}·勾选大纲 ${includedIds.length}）` : ''}</button>
       </div>{runningId ? <button className="send-button" title="取消请求" onClick={() => void window.workspace.ai.cancel(runningId)}><Square size={14} /></button> : <button className="send-button" disabled={!input.trim() || !threadId} aria-label="发送" onClick={() => void submit()}><Send size={15} /></button>}</div>
     </div>
   </aside>
