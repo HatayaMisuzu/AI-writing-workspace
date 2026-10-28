@@ -117,6 +117,8 @@ export interface ProviderConfig {
   providerType: 'openai-compatible'
   displayName: string
   baseUrl: string
+  /** S1c：存量配置的地址不合法时给出原因；此时不会发起任何请求，需作者修正。 */
+  baseUrlError?: string
   hasApiKey: boolean
   createdAt: number
   updatedAt: number

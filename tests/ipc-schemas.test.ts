@@ -41,7 +41,7 @@ describe('IPC zod schemas — rejection paths', () => {
     expect(noteSectionSchema.safeParse('outline').success).toBe(true)
     expect(rejects(noteSectionSchema, 'secret')).toBe(true)
     expect(outlineSaveSchema.safeParse({ projectId: 'p', nodeId: 'n', summary: 's', beats: ['a'], hook: 'h' }).success).toBe(true)
-    expect(rejects(outlineSaveSchema, { projectId: 'p', nodeId: 'n', extra: 1 })).toBe(true)
+    expect(outlineSaveSchema.safeParse({ projectId: 'p', nodeId: 'n', extra: 1 }).success).toBe(true) // P4：与其他 schema 一致，多余字段静默去掉，不用 .strict()
     expect(rejects(outlineSaveSchema, { projectId: 'p', nodeId: '' })).toBe(true)
     expect(rejects(outlineSaveSchema, { projectId: 'p', nodeId: 'n', beats: Array.from({ length: 1_001 }, () => 'b') })).toBe(true)
     expect(rejects(outlineSaveSchema, { projectId: 'p', nodeId: 'n', hook: 'h'.repeat(2_001) })).toBe(true)
@@ -66,9 +66,12 @@ describe('IPC zod schemas — rejection paths', () => {
     expect(rejects(providerInputSchema, { ...base, apiKey: 'k'.repeat(20_001) })).toBe(true)
   })
 
-  it('documents current z.string().url() leniency (protocol is NOT restricted; see PR #2)', () => {
+  it('providerInputSchema only accepts http/https base URLs (S1c)', () => {
     const base = { id: 'prov', providerType: 'openai-compatible', displayName: 'x' }
-    for (const baseUrl of ['file:///etc/passwd', 'javascript:alert(1)', 'ftp://example.com', 'localhost:11434']) {
+    for (const baseUrl of ['file:///etc/passwd', 'javascript:alert(1)', 'data:text/plain,hi', 'ftp://example.com', 'mailto:a@b.com', 'ws://localhost:1', 'vbscript:x', 'localhost:11434', 'api.example.com/v1']) {
+      expect(rejects(providerInputSchema, { ...base, baseUrl }), baseUrl).toBe(true)
+    }
+    for (const baseUrl of ['http://localhost', 'http://localhost:11434/v1', 'http://127.0.0.1:8080', 'https://api.example.com/v1/', 'HTTPS://API.EXAMPLE.COM']) {
       expect(providerInputSchema.safeParse({ ...base, baseUrl }).success, baseUrl).toBe(true)
     }
   })

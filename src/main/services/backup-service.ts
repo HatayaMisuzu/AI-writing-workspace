@@ -82,6 +82,30 @@ async function atomicWriteFile(path: string, data: string | Uint8Array): Promise
   }
 }
 
+/**
+ * S1e：把节点排成"父节点在前"（按层级，同层保持 order_index 与原顺序），导入时逐行插入不会触发外键失败。
+ * 兼容旧备份（乱序）；父节点缺失抛 BACKUP_INVALID_NODE_PARENT，存在环（含自指）抛 BACKUP_INVALID_NODE_CYCLE。
+ */
+export function orderNodesParentFirst<T extends Record<string, unknown>>(nodes: T[]): T[] {
+  const ids = new Set(nodes.map((node) => node.id as string))
+  const children = new Map<string | null, T[]>()
+  for (const node of nodes) {
+    const parent = (node.parent_id as string | null | undefined) || null
+    if (parent !== null && !ids.has(parent)) throw new Error('BACKUP_INVALID_NODE_PARENT')
+    children.set(parent, [...(children.get(parent) ?? []), node])
+  }
+  const byOrder = (a: T, b: T): number => Number(a.order_index ?? 0) - Number(b.order_index ?? 0)
+  const ordered: T[] = []
+  let level = [...(children.get(null) ?? [])].sort(byOrder)
+  while (level.length) {
+    ordered.push(...level)
+    level = level.flatMap((node) => [...(children.get(node.id as string) ?? [])].sort(byOrder))
+  }
+  // 从根可达的节点都已输出；剩下的只能处在环上（或挂在环下）
+  if (ordered.length !== nodes.length) throw new Error('BACKUP_INVALID_NODE_CYCLE')
+  return ordered
+}
+
 function validateBackup(payload: BackupPayload): void {
   const assertEnum = (value: unknown, allowed: readonly string[], code: string): void => {
     if (typeof value !== 'string' || !allowed.includes(value)) throw new Error(code)
@@ -179,6 +203,7 @@ function validateBackup(payload: BackupPayload): void {
     assertEnum(row.status, ['proposed', 'accepted', 'rejected', 'stale'], 'BACKUP_INVALID_PATCH_STATUS')
     assertInteger(row.from_pos, 0, 'BACKUP_INVALID_PATCH_RANGE'); assertInteger(row.to_pos, row.from_pos as number, 'BACKUP_INVALID_PATCH_RANGE')
   })
+  payload.nodes = orderNodesParentFirst(payload.nodes)
   for (const memory of payload.memories) {
     const visited = new Set<string>([memory.id as string])
     let cursor = memory.supersedes as string | undefined
@@ -201,7 +226,7 @@ export class BackupService {
     if (!project) throw new Error('PROJECT_NOT_FOUND')
     const payload: BackupPayload = {
       format: 'inkstone-project', version: 1, exportedAt: Date.now(), project,
-      nodes: rows(this.db, 'document_nodes', projectId), contents: rows(this.db, 'document_contents', projectId),
+      nodes: orderNodesParentFirst(rows(this.db, 'document_nodes', projectId)), contents: rows(this.db, 'document_contents', projectId),
       snapshots: rows(this.db, 'snapshots', projectId), ideas: rows(this.db, 'ideas', projectId), notes: rows(this.db, 'project_notes', projectId),
       characters: rows(this.db, 'characters', projectId), memories: rows(this.db, 'memories', projectId),
       threads: rows(this.db, 'chat_threads', projectId), messages: rows(this.db, 'chat_messages', projectId),
