@@ -5,7 +5,8 @@ import { existsSync } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { _electron as electron } from 'playwright'
+import { spawn } from 'node:child_process'
+import { _electron as electron, chromium } from 'playwright'
 
 const root = resolve(import.meta.dirname, '..')
 const bundledElectron = join(root, 'node_modules/electron/dist/electron.exe')
@@ -55,14 +56,54 @@ const record = async (name, operation) => {
   process.stdout.write(`✓ ${name}\n`)
 }
 
+// Linux：Playwright 的 Electron loader 会强制追加 --password-store=basic，safeStorage 因此不可用，
+// 应用按设计拒绝保存（不降级明文）。所以 Linux 不经 loader，直接启动 Electron 并通过 CDP 连接，
+// 使用 CI 中真实解锁的 gnome-keyring（libsecret）。应用代码不含任何测试后门。
+const launchViaCdp = async () => {
+  const exe = executablePath ?? (await import('electron')).default
+  const args = [
+    join(root, 'out/main/index.js'), `--user-data-dir=${userData}`,
+    '--remote-debugging-port=0', '--password-store=gnome-libsecret',
+    ...(process.env.INKSTONE_E2E_NO_SANDBOX === '1' ? ['--no-sandbox'] : [])
+  ]
+  const child = spawn(exe, args, { cwd: root, env: { ...process.env, NODE_ENV: 'production', ELECTRON_DISABLE_SECURITY_WARNINGS: 'true' }, stdio: ['ignore', 'inherit', 'pipe'] })
+  const exited = new Promise((done) => child.once('exit', done))
+  const wsEndpoint = await new Promise((done, fail) => {
+    let buffer = ''
+    const timer = setTimeout(() => fail(new Error('Electron 未输出 DevTools 地址')), 30_000)
+    child.stderr.on('data', (chunk) => {
+      process.stderr.write(chunk)
+      buffer += chunk
+      const match = buffer.match(/DevTools listening on (ws:\/\/\S+)/)
+      if (match) { clearTimeout(timer); done(match[1]) }
+    })
+    child.once('exit', (code) => { clearTimeout(timer); fail(new Error(`Electron 提前退出：${code}`)) })
+  })
+  const browser = await chromium.connectOverCDP(wsEndpoint)
+  const context = browser.contexts()[0]
+  const page = context.pages().find((item) => !item.url().startsWith('devtools://')) ?? await context.waitForEvent('page')
+  const app = {
+    waitForEvent: async (name) => { assert.equal(name, 'close'); await exited },
+    close: async () => { await browser.close().catch(() => {}); if (child.exitCode === null) child.kill(); await exited }
+  }
+  return { app, page }
+}
+
 const launch = async () => {
+  if (process.platform === 'linux') {
+    const { app, page } = await launchViaCdp()
+    return finishLaunch(app, page)
+  }
   const app = await electron.launch({
     ...(executablePath ? { executablePath } : {}),
     args: [join(root, 'out/main/index.js'), `--user-data-dir=${userData}`],
     cwd: root,
     env: { ...process.env, NODE_ENV: 'production', ELECTRON_DISABLE_SECURITY_WARNINGS: 'true' }
   })
-  const page = await app.firstWindow()
+  return finishLaunch(app, await app.firstWindow())
+}
+
+const finishLaunch = async (app, page) => {
   page.setDefaultTimeout(10_000)
   page.on('pageerror', (error) => process.stderr.write(`renderer error: ${error.stack ?? error.message}\n`))
   page.on('console', (message) => { if (message.type() === 'error') process.stderr.write(`renderer console: ${message.text()}\n`) })
