@@ -193,6 +193,8 @@ export interface AITaskEnvelope {
   target?: DocumentTaskTarget
   selection?: { from: number; to: number; text: string }
   throughChapterId?: string
+  /** R4：作者在上下文清单中排除的来源 id（ContextItem.id）；同 id 的所有条目都不会发送。 */
+  excludedIds?: string[]
 }
 
 export interface ContextItem {
@@ -202,13 +204,23 @@ export interface ContextItem {
   content: string
   projectId: string
   reason: string
+  /** 因预算被截断（只发送了部分内容）。 */
+  truncated?: boolean
+}
+
+/** 未发送的候选来源。reason：作者排除 / 超出预算被省略（S7 的“已省略”标注复用此结构）。 */
+export interface ContextOmission {
+  id: string
+  kind: ContextItem['kind']
+  title: string
+  reason: 'user_excluded' | 'budget'
 }
 
 export interface ContextBundle {
   projectId: string
   policy: 'creative' | 'reader'
   items: ContextItem[]
-  metadata: { estimatedTokens: number; sourceIds: string[]; excludedKinds: string[] }
+  metadata: { estimatedTokens: number; sourceIds: string[]; excludedKinds: string[]; omitted?: ContextOmission[] }
 }
 
 export interface SearchResult {

@@ -58,7 +58,8 @@ const api: WorkspaceApi = {
       ipcRenderer.send('ai:start', request)
       return cleanup
     },
-    cancel: (requestId) => invoke('ai:cancel', requestId)
+    cancel: (requestId) => invoke('ai:cancel', requestId),
+    previewContext: (request) => invoke('ai:preview-context', request)
   }
 }
 

@@ -1,4 +1,5 @@
 import type {
+  ContextBundle,
   AITaskEnvelope, Character, ChatCursor, ChatMessage, ChatThread, DigestStatus, DocumentContent, DocumentNode, Idea, LocalLintIssue,
   MemoryItem, MemoryProposal, ModelConfig, Project, ProjectNote, ProjectType, ProofreadIssue, ProviderConfig,
   ProviderInput, RoutedTask, SearchResult, Snapshot, TaskModelRoute, TextOrigin, TextPatch
@@ -88,7 +89,14 @@ export interface WorkspaceApi {
   ai: {
     start(request: AIStartRequest, onEvent: (event: AIStreamEvent) => void): () => void
     cancel(requestId: string): Promise<void>
+    /** R4：发送前预览上下文清单（与实际发送同一规划逻辑）。 */
+    previewContext(request: AIPreviewContextRequest): Promise<ContextBundle>
   }
+}
+
+export interface AIPreviewContextRequest {
+  task: AITaskEnvelope
+  threadId: string
 }
 
 export interface AIStartRequest {

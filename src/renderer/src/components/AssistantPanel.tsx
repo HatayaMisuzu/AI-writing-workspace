@@ -2,9 +2,10 @@ import { Bot, Check, ChevronRight, Copy, FileSearch, MessageSquarePlus, PenLine,
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { AIMode, ChatThread, ContextBundle, DigestStatus, DocumentTaskTarget, MemoryProposal, ModelConfig, Project, RoutedTask } from '../../../shared/domain'
 import type { EditorSelection } from './EditorSurface'
+import { omittedLabel, toContextSourceRows, toggleExcludedId, type ContextSourceRow } from '../services/context-sources'
 import { canInsertCandidate, mapChatHistory, resolveDisplayedModelMode, resolveModelDisplayName, retryInputForMessage, type AssistantHistoryMessage } from '../services/assistant-history'
 
-type ContextSummary = { count: number; tokens: number; items: Array<{ kind: string; title: string; reason: string; preview: string }> }
+type ContextSummary = { count: number; tokens: number; items: ContextSourceRow[] }
 type ViewMessage = AssistantHistoryMessage & { selection?: EditorSelection; proposals?: MemoryProposal[]; proposalError?: string; recorded?: boolean; context?: ContextSummary }
 
 const inferMode = (text: string, explicit: AIMode): AIMode => {
@@ -33,6 +34,9 @@ export function AssistantPanel({ project, documentId, documentRevision, selectio
   const [digestStatus, setDigestStatus] = useState<DigestStatus>()
   const [digestBusy, setDigestBusy] = useState(false)
   const [modelRouting, setModelRouting] = useState<{ models: ModelConfig[]; routes: Record<RoutedTask, string | 'default'> }>()
+  const [excludedIds, setExcludedIds] = useState<string[]>([])
+  const [sourcesOpen, setSourcesOpen] = useState(false)
+  const [sourcePreview, setSourcePreview] = useState<{ rows: ContextSourceRow[]; tokens: number; error?: string }>()
   const cleanups = useRef(new Map<string, () => void>())
   const streamed = useRef(new Map<string, string>())
   const chatScroll = useRef<HTMLDivElement>(null)
@@ -72,6 +76,22 @@ export function AssistantPanel({ project, documentId, documentRevision, selectio
     if (!followLatest.current || !chatScroll.current) return
     chatScroll.current.scrollTop = chatScroll.current.scrollHeight
   }, [messages])
+
+  // R4/S6：发送前列出将要发送的上下文来源，可逐条排除；与发送使用同一后端规划逻辑。
+  useEffect(() => {
+    if (!sourcesOpen || !threadId) return
+    let active = true
+    const requestedMode = inferMode(input.trim(), mode)
+    const timer = setTimeout(() => {
+      void window.workspace.ai.previewContext({ threadId, task: { mode: requestedMode,
+        writePermission: requestedMode === 'editing' || requestedMode === 'generation' ? 'proposal' : 'none', userIntent: input.trim(),
+        projectId: project.id, documentId, selection: selection ? { from: selection.fromPm, to: selection.toPm, text: selection.text } : undefined,
+        excludedIds } })
+        .then((bundle) => { if (active) setSourcePreview({ rows: toContextSourceRows(bundle), tokens: bundle.metadata.estimatedTokens }) })
+        .catch((error) => { if (active) setSourcePreview({ rows: [], tokens: 0, error: error instanceof Error ? error.message : String(error) }) })
+    }, 250)
+    return () => { active = false; clearTimeout(timer) }
+  }, [sourcesOpen, threadId, input, mode, project.id, documentId, documentRevision, selection, excludedIds])
 
   const loadEarlier = async (): Promise<void> => {
     if (!threadId || !messages[0]) return
@@ -114,16 +134,15 @@ export function AssistantPanel({ project, documentId, documentRevision, selectio
     const cleanup = window.workspace.ai.start({ requestId, threadId, userMessageId: messageId, assistantMessageId: assistantId, task: {
       mode: requestedMode, writePermission: requestedMode === 'editing' || requestedMode === 'generation' ? 'proposal' : 'none', userIntent: text,
       projectId: project.id, documentId: target?.documentId, target,
-      selection: target?.selection ? { from: target.selection.fromPm, to: target.selection.toPm, text: target.selection.text } : undefined
+      selection: target?.selection ? { from: target.selection.fromPm, to: target.selection.toPm, text: target.selection.text } : undefined,
+      excludedIds: excludedIds.length ? excludedIds : undefined
     } }, (event) => {
       if (event.requestId !== requestId) return
       if (event.type === 'chunk') {
         const nextText = (streamed.current.get(requestId) ?? '') + event.chunk
         streamed.current.set(requestId, nextText)
         const bundle = event.context as ContextBundle | undefined
-        const context = bundle ? { count: bundle.items.length, tokens: bundle.metadata.estimatedTokens,
-          items: bundle.items.map((item) => ({ kind: item.kind, title: item.title, reason: item.reason,
-            preview: item.content.replace(/\s+/g, ' ').slice(0, 90) })) } : undefined
+        const context = bundle ? { count: bundle.items.length, tokens: bundle.metadata.estimatedTokens, items: toContextSourceRows(bundle) } : undefined
         setMessages((current) => current.map((item) => item.id === assistantId ? { ...item, content: nextText, context: context ?? item.context } : item))
       } else if (event.type === 'done') {
         const finalText = streamed.current.get(requestId) ?? ''
@@ -197,7 +216,7 @@ export function AssistantPanel({ project, documentId, documentRevision, selectio
       {hasEarlier && <button className="load-earlier" onClick={() => void loadEarlier()}>加载更早消息</button>}
       {loadingHistory ? <div className="chat-loading">正在读取这部作品的对话…</div> : messages.length === 0 ? <div className="chat-empty"><Sparkles size={23} /><h3>从这部作品继续聊</h3><p>讨论不会自动改正文；确定的设定会先成为待确认提案。</p>{modelName === '未配置模型' && <button className="text-action" onClick={onOpenSettings}>配置模型与服务</button>}</div> : messages.map((message) => <div key={message.id} className={`message ${message.role} ${message.status ?? ''}`}>
         <div className="message-role">{message.role === 'user' ? '你' : '同行者'}</div><div className="message-content">{message.content || '正在思考…'}</div>
-        {message.context && <details className="context-inspector"><summary>使用 {message.context.count} 条作品上下文 · 约 {message.context.tokens} tokens</summary><ul>{message.context.items.map((item, index) => <li key={`${item.kind}-${index}`}><strong>{item.title}</strong><span>{item.preview}</span><small>{item.reason}</small></li>)}</ul></details>}
+        {message.context && <details className="context-inspector"><summary>使用 {message.context.count} 条作品上下文 · 约 {message.context.tokens} tokens</summary><ul>{message.context.items.map((item, index) => <li key={`${item.kind}-${index}`} className={item.included ? '' : 'omitted'}><strong>{item.title}</strong>{item.included ? <><span>{item.preview}{item.truncated ? '…（已截断）' : ''}</span><small>{item.reason}</small></> : <small>{omittedLabel(item.omittedReason)}</small>}</li>)}</ul></details>}
         {message.proposals?.map((proposal) => <div className="memory-proposal" key={proposal.id}><strong>记忆提案 · {proposal.type}</strong><p>{proposal.content}</p><span>尚未写入长期设定，需要你确认</span><div><button onClick={() => void resolveProposal(message.id, proposal.id, 'reject')}><Trash2 size={13} />忽略</button><button className="primary" onClick={() => void resolveProposal(message.id, proposal.id, 'confirm')}><Check size={13} />记录这条</button></div></div>)}
         {message.recorded && !message.proposals?.length && <div className="recorded-note"><Check size={13} />已记录到 Story Memory</div>}
         {message.proposalError && <div className="inline-error" role="alert">{message.proposalError}</div>}
@@ -209,12 +228,21 @@ export function AssistantPanel({ project, documentId, documentRevision, selectio
       </div>)}
     </div>
     <div className="chat-compose">
+      {sourcesOpen && <div className="context-sources" aria-label="将发送的上下文">
+        {sourcePreview?.error ? <div className="inline-error" role="alert">上下文预览失败：{sourcePreview.error}</div>
+          : !sourcePreview ? <div className="context-note">正在整理上下文…</div>
+          : <><div className="context-note">将发送 {sourcePreview.rows.filter((row) => row.included).length} 条 · 约 {sourcePreview.tokens} tokens（取消勾选即不发送）</div>
+            <ul>{sourcePreview.rows.map((row) => <li key={`${row.kind}:${row.id}`} className={row.included ? '' : 'omitted'}>
+              <label><input type="checkbox" checked={!excludedIds.includes(row.id)} disabled={row.omittedReason === 'budget'} onChange={() => setExcludedIds((current) => toggleExcludedId(current, row.id))} />
+                <strong>{row.title}</strong>{row.included ? <span>{row.preview}{row.truncated ? '…（已截断）' : ''}</span> : <small>{omittedLabel(row.omittedReason)}</small>}</label></li>)}</ul></>}
+      </div>}
       {selection && <div className="selection-chip">已选择 {selection.text.length} 字</div>}
       <textarea value={input} disabled={loadingHistory} onChange={(event) => setInput(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void submit() } }} placeholder="和同行者聊聊这部作品…" />
       <div className="compose-row"><div className="quick-modes">
         <button className={mode === 'discussion' ? 'active' : ''} onClick={() => setQuickMode('discussion')}>问 AI</button>
         <button className={mode === 'editing' ? 'active' : ''} disabled={!selection} onClick={() => setQuickMode('editing')}>修改</button>
         <button className={mode === 'generation' ? 'active' : ''} onClick={() => setQuickMode('generation')}>续写</button>
+        <button className={sourcesOpen ? 'active' : ''} aria-expanded={sourcesOpen} onClick={() => setSourcesOpen((open) => !open)}>上下文{excludedIds.length ? `（排除 ${excludedIds.length}）` : ''}</button>
       </div>{runningId ? <button className="send-button" title="取消请求" onClick={() => void window.workspace.ai.cancel(runningId)}><Square size={14} /></button> : <button className="send-button" disabled={!input.trim() || !threadId} aria-label="发送" onClick={() => void submit()}><Send size={15} /></button>}</div>
     </div>
   </aside>

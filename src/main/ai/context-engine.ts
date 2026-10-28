@@ -1,4 +1,4 @@
-import type { AITaskEnvelope, Character, ContextBundle, ContextItem, ProjectNote } from '../../shared/domain'
+import type { AITaskEnvelope, Character, ContextBundle, ContextItem, ContextOmission, ProjectNote } from '../../shared/domain'
 import type { AppDatabase } from '../database/database'
 import { DocumentService } from '../services/document-service'
 import { MemoryService } from '../services/memory-service'
@@ -21,7 +21,7 @@ export class ContextEngine {
   build(task: AITaskEnvelope, budget = 12_000): ContextBundle {
     if (task.mode === 'reader_review') {
       if (!task.throughChapterId) throw new Error('READER_CHAPTER_REQUIRED')
-      return this.buildReader(task.projectId, task.throughChapterId, budget)
+      return this.buildReader(task.projectId, task.throughChapterId, budget, task.excludedIds)
     }
     return this.buildCreative(task, budget)
   }
@@ -78,7 +78,7 @@ export class ContextEngine {
         content: sample.text, projectId: task.projectId, reason: '生成或编辑任务的人类优先风格样本', priority: 50 + Math.round(sample.score / 10) }))
     }
 
-    return this.budget(task.projectId, 'creative', candidates, budget, ['other_projects'])
+    return this.budget(task.projectId, 'creative', candidates, budget, ['other_projects'], task.excludedIds)
   }
 
   private addCharacters(projectId: string, signal: string, candidates: Array<ContextItem & { priority: number }>): void {
@@ -115,7 +115,7 @@ export class ContextEngine {
         kind: 'digest', title: '前文章节理解', content: row.summary, projectId, reason: '非陈旧的前章摘要', priority: 57 + score }))
   }
 
-  buildReader(projectId: string, throughChapterId: string, budget = 12_000): ContextBundle {
+  buildReader(projectId: string, throughChapterId: string, budget = 12_000, excludedIds: string[] = []): ContextBundle {
     const ordered = this.db.raw.prepare(`
       SELECT c.id, c.title, dc.plain_text
       FROM document_nodes c JOIN document_nodes v ON v.id = c.parent_id AND v.project_id = c.project_id
@@ -135,26 +135,30 @@ export class ContextEngine {
     `).all(projectId, throughIndex + 1) as Array<Record<string, unknown>>
     visibleMemories.forEach((memory) => candidates.push({ id: memory.id as string, kind: 'memory', title: '读者可见信息',
       content: memory.content as string, projectId, reason: `readerVisibleFrom=${memory.reader_visible_from as number}`, priority: 75 }))
-    return this.budget(projectId, 'reader', candidates, budget, ['future_chapters', 'private_memory', 'creative_chat', 'ideas', 'future_plan', 'story_notes', 'references', 'digests'])
+    return this.budget(projectId, 'reader', candidates, budget, ['future_chapters', 'private_memory', 'creative_chat', 'ideas', 'future_plan', 'story_notes', 'references', 'digests'], excludedIds)
   }
 
-  private budget(projectId: string, policy: ContextBundle['policy'], candidates: Array<ContextItem & { priority: number }>, maxTokens: number, excludedKinds: string[]): ContextBundle {
+  private budget(projectId: string, policy: ContextBundle['policy'], candidates: Array<ContextItem & { priority: number }>, maxTokens: number, excludedKinds: string[], excludedIds: string[] = []): ContextBundle {
     const sorted = candidates.toSorted((a, b) => b.priority - a.priority)
+    const excluded = new Set(excludedIds)
     const items: ContextItem[] = []
+    const omitted: ContextOmission[] = []
     let estimatedTokens = 0
     const seen = new Set<string>()
     for (const { priority, ...item } of sorted) {
       void priority
       const key = `${item.kind}:${item.id}`
       if (seen.has(key) || item.projectId !== projectId) continue
+      if (excluded.has(item.id)) { seen.add(key); omitted.push({ id: item.id, kind: item.kind, title: item.title, reason: 'user_excluded' }); continue }
+      if (!item.content.trim()) continue
       const remaining = maxTokens - estimatedTokens
-      if (remaining <= 0) break
+      if (remaining <= 0) { seen.add(key); omitted.push({ id: item.id, kind: item.kind, title: item.title, reason: 'budget' }); continue }
       const itemTokens = estimateTokens(item.content)
-      const fitted = itemTokens <= remaining ? item : { ...item, content: item.content.slice(0, Math.max(1, Math.floor(remaining * 2.2))) }
+      const fitted = itemTokens <= remaining ? item : { ...item, content: item.content.slice(0, Math.max(1, Math.floor(remaining * 2.2))), truncated: true }
       const fittedTokens = estimateTokens(fitted.content)
       if (!fitted.content.trim()) continue
       items.push(fitted); seen.add(key); estimatedTokens += fittedTokens
     }
-    return { projectId, policy, items, metadata: { estimatedTokens, sourceIds: items.map((item) => item.id), excludedKinds } }
+    return { projectId, policy, items, metadata: { estimatedTokens, sourceIds: items.map((item) => item.id), excludedKinds, omitted } }
   }
 }
