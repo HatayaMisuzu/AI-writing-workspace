@@ -53,8 +53,13 @@ const documentSaveSchema = z.object({
   expectedRevision: nonNegativeIntSchema.optional(),
   styleSample: z.object({ origin: z.enum(['human', 'ai', 'ai_edited_by_human', 'mixed']), text: contentSchema }).optional()
 })
+const noteSectionSchema = z.enum(['story', 'reference', 'outline'])
+const outlineSaveSchema = z.object({
+  projectId: idSchema, nodeId: idSchema, summary: contentSchema.optional(),
+  beats: z.array(shortTextSchema).max(1_000).optional(), hook: shortTextSchema.optional()
+}).strict()
 const noteSaveSchema = z.object({
-  id: idSchema.optional(), projectId: idSchema, section: z.enum(['story', 'reference']),
+  id: idSchema.optional(), projectId: idSchema, section: noteSectionSchema,
   title: shortTextSchema, content: contentSchema
 })
 const characterSaveSchema = z.object({
@@ -145,7 +150,10 @@ export function registerIpc(db: AppDatabase, codec: SecretCodec): void {
   handle('snapshots:restore', (projectId: string, snapshotId: string) => documents.restoreSnapshot(parse(idSchema, projectId), parse(idSchema, snapshotId)))
   handle('ideas:list', (projectId: string) => ideas.list(projectId))
   handle('ideas:create', (projectId: string, content: string, tags?: string[]) => ideas.create(parse(idSchema, projectId), parse(contentSchema, content), parse(z.array(shortTextSchema).max(1_000).optional(), tags)))
-  handle('notes:list', (projectId: string, section: 'story' | 'reference') => projectContent.listNotes(projectId, section))
+  handle('notes:list', (projectId: string, section: unknown) => projectContent.listNotes(parse(idSchema, projectId), parse(noteSectionSchema, section)))
+  handle('outlines:get', (projectId: string, nodeId: string) => documents.getOutline(parse(idSchema, projectId), parse(idSchema, nodeId)))
+  handle('outlines:list', (projectId: string) => documents.listOutlines(parse(idSchema, projectId)))
+  handle('outlines:save', (input: unknown) => documents.saveOutline(parse(outlineSaveSchema, input)))
   handle('notes:save', (input: unknown) => projectContent.saveNote(parse(noteSaveSchema, input)))
   handle('notes:delete', (projectId: string, noteId: string) => projectContent.deleteNote(parse(idSchema, projectId), parse(idSchema, noteId)))
   handle('characters:list', (projectId: string) => projectContent.listCharacters(projectId))
