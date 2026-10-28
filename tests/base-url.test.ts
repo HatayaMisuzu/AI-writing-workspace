@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createTestDb, testCodec } from './helpers'
-import { BASE_URL_HAS_CREDENTIALS, BASE_URL_MISSING_SCHEME, redactBaseUrl, BASE_URL_UNSUPPORTED_SCHEME, checkBaseUrl } from '../src/shared/base-url'
+import { BASE_URL_TOO_LONG, displayBaseUrl, BASE_URL_HAS_CREDENTIALS, BASE_URL_MISSING_SCHEME, redactBaseUrl, BASE_URL_UNSUPPORTED_SCHEME, checkBaseUrl } from '../src/shared/base-url'
 import { OpenAICompatibleAdapter, ProviderService } from '../src/main/ai/provider'
 import { providerInputSchema } from '../src/main/ipc/schemas'
 
@@ -44,7 +44,7 @@ describe('S1c Base URL 只允许 http/https', () => {
     const providers = new ProviderService(db, testCodec)
     const listed = providers.list()
     expect(listed).toHaveLength(1)
-    expect(listed[0]).toMatchObject({ id: 'legacy', baseUrl: 'javascript:alert(1)', baseUrlError: BASE_URL_UNSUPPORTED_SCHEME, hasApiKey: true })
+    expect(listed[0]).toMatchObject({ id: 'legacy', baseUrl: '', baseUrlError: BASE_URL_UNSUPPORTED_SCHEME, hasApiKey: true })
     expect(() => providers.getWithSecret('legacy')).toThrow(expect.objectContaining({ code: 'PROVIDER_BASE_URL_INVALID' }))
     expect(decrypt).not.toHaveBeenCalled(); decrypt.mockRestore()
     const fetcher = vi.fn()
@@ -85,7 +85,7 @@ describe('S1c Base URL 只允许 http/https', () => {
     const [item] = providers.list()
     expect(item.baseUrlError).toBe(BASE_URL_HAS_CREDENTIALS)
     expect(JSON.stringify(item)).not.toContain('p4ssw0rd')
-    expect(item.baseUrl).toBe('http://***@localhost:11434/v1')
+    expect(item.baseUrl).toBe('')
     let thrown: unknown
     try { providers.getWithSecret('cred') } catch (error) { thrown = error }
     expect(thrown).toMatchObject({ code: 'PROVIDER_BASE_URL_INVALID' })
@@ -98,5 +98,44 @@ describe('S1c Base URL 只允许 http/https', () => {
     for (const value of ['http://192.168.1.10:8000/v1', 'http://10.0.0.2', 'http://172.16.5.4:11434', 'http://[::1]:8080', 'http://ollama.lan:11434/v1', 'http://localhost']) {
       expect(checkBaseUrl(value).ok, value).toBe(true)
     }
+  })
+
+  // review-PR4 F1：旧版本可存入的非标准写法
+  const legacyVariants = ['http:\\\\u:SECRETPW@h', 'https:\\\\u:SECRETPW@api.openai.com/v1', 'http:/u:SECRETPW@h', 'http:u:SECRETPW@h', 'user:SECRETPW@host:11434']
+
+  it('F1：非标准写法的存量带密码地址，providers:list 不回显原文/密码，标记需修正', () => {
+    const db = createTestDb()
+    legacyVariants.forEach((value, index) => insertLegacy(db, `v${index}`, value))
+    insertLegacy(db, 'std', 'http://user:SECRETPW@h/v1')
+    const listed = new ProviderService(db, testCodec).list()
+    expect(listed).toHaveLength(6)
+    expect(JSON.stringify(listed)).not.toContain('SECRETPW')
+    for (const item of listed) { expect(item.baseUrl, item.id).toBe(''); expect(item.baseUrlError, item.id).toBeTruthy() }
+  })
+
+  it('F1：redact 不论写法都隐去最后一个 @ 之前的内容', () => {
+    for (const value of [...legacyVariants, 'http://user:SECRETPW@h/v1', 'http://u:p@h@SECRETPW@x']) {
+      expect(redactBaseUrl(value), value).not.toContain('SECRETPW')
+      expect(displayBaseUrl(value)).toBe('')
+    }
+    expect(redactBaseUrl('http:\\\\u:SECRETPW@h')).toBe('http:\\\\***@h')
+    expect(redactBaseUrl('user:SECRETPW@host:11434')).toBe('user:***@host:11434')
+    expect(displayBaseUrl('http://localhost:11434/v1')).toBe('http://localhost:11434/v1')
+  })
+
+  it('F3：2000 字符上限在 checkBaseUrl 内', () => {
+    expect(checkBaseUrl(`http://a.com/${'x'.repeat(2_000)}`)).toEqual({ ok: false, message: BASE_URL_TOO_LONG })
+    expect(checkBaseUrl(`http://a.com/${'x'.repeat(1_900)}`).ok).toBe(true)
+  })
+
+  it('F2：保存规范化地址；零宽字符与空主机拒绝；数字形式本机地址放行', () => {
+    expect(checkBaseUrl('HTTPS://API.OPENAI.COM/v1/')).toEqual({ ok: true, url: 'https://api.openai.com/v1' })
+    expect(checkBaseUrl('http://evil。com/v1')).toEqual({ ok: true, url: 'http://evil.com/v1' })
+    expect(checkBaseUrl('http://ⓛⓞⓒⓐⓛⓗⓞⓢⓣ:11434')).toEqual({ ok: true, url: 'http://localhost:11434' })
+    for (const value of ['http://local\u200bhost', 'http://localhost\u200b', 'http://a\ufeff.com', 'http://.', 'http://..']) expect(checkBaseUrl(value).ok, JSON.stringify(value)).toBe(false)
+    expect(checkBaseUrl('http://2130706433')).toEqual({ ok: true, url: 'http://127.0.0.1' })
+    expect(checkBaseUrl('http://127.1:11434').ok).toBe(true)
+    const db = createTestDb(); const providers = new ProviderService(db, testCodec)
+    expect(providers.save({ id: 'n', providerType: 'openai-compatible', displayName: 'x', baseUrl: 'HTTP://LocalHost:11434/v1/', apiKey: 'k' }).baseUrl).toBe('http://localhost:11434/v1')
   })
 })

@@ -1,5 +1,5 @@
 import type { AppErrorShape, ModelConfig, ProviderCapabilities, ProviderConfig, ProviderInput, RoutedTask } from '../../shared/domain'
-import { checkBaseUrl, redactBaseUrl } from '../../shared/base-url'
+import { checkBaseUrl, displayBaseUrl } from '../../shared/base-url'
 import type { AppDatabase } from '../database/database'
 import { randomUUID } from 'node:crypto'
 
@@ -28,7 +28,7 @@ export class ProviderService {
   list(): ProviderConfig[] {
     const rows = this.db.raw.prepare('SELECT * FROM provider_configs ORDER BY updated_at DESC').all() as ProviderRow[]
     return rows.map((row) => ({ id: row.id, providerType: row.provider_type, displayName: row.display_name,
-      baseUrl: redactBaseUrl(row.base_url), ...baseUrlIssue(row.base_url), hasApiKey: Boolean(row.encrypted_api_key), createdAt: row.created_at, updatedAt: row.updated_at }))
+      baseUrl: displayBaseUrl(row.base_url), ...baseUrlIssue(row.base_url), hasApiKey: Boolean(row.encrypted_api_key), createdAt: row.created_at, updatedAt: row.updated_at }))
   }
 
   save(input: ProviderInput): ProviderConfig {

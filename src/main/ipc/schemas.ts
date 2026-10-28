@@ -32,7 +32,7 @@ export const characterSaveSchema = z.object({
 })
 export const providerInputSchema = z.object({
   id: idSchema, providerType: z.literal('openai-compatible'), displayName: z.string().trim().min(1).max(500),
-  baseUrl: z.string().max(2_000).superRefine((value, ctx) => {
+  baseUrl: z.string().superRefine((value, ctx) => {
     const check = checkBaseUrl(value)
     if (!check.ok) ctx.addIssue({ code: 'custom', message: check.message })
   }), apiKey: z.string().max(20_000).optional()
