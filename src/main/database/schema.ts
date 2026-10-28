@@ -75,13 +75,23 @@ CREATE INDEX IF NOT EXISTS idx_ideas_project ON ideas(project_id, updated_at DES
 CREATE TABLE IF NOT EXISTS project_notes (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-  section TEXT NOT NULL CHECK(section IN ('story','reference')),
+  section TEXT NOT NULL CHECK(section IN ('story','reference','outline')),
   title TEXT NOT NULL,
   content TEXT NOT NULL DEFAULT '',
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_notes_project_section ON project_notes(project_id, section, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS node_outlines (
+  node_id TEXT PRIMARY KEY REFERENCES document_nodes(id) ON DELETE CASCADE,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  summary TEXT NOT NULL DEFAULT '',
+  beats_json TEXT NOT NULL DEFAULT '[]',
+  hook TEXT NOT NULL DEFAULT '',
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_node_outlines_project ON node_outlines(project_id);
 
 CREATE TABLE IF NOT EXISTS characters (
   id TEXT PRIMARY KEY,

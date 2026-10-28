@@ -95,7 +95,7 @@ export class ContextEngine {
   }
 
   private addNotes(projectId: string, signal: string, mode: AITaskEnvelope['mode'], candidates: Array<ContextItem & { priority: number }>): void {
-    const rows = this.db.raw.prepare('SELECT * FROM project_notes WHERE project_id = ? ORDER BY updated_at DESC').all(projectId) as Array<Record<string, unknown>>
+    const rows = this.db.raw.prepare("SELECT * FROM project_notes WHERE project_id = ? AND section IN ('story','reference') ORDER BY updated_at DESC").all(projectId) as Array<Record<string, unknown>>
     rows.map((row) => ({ note: { id: row.id as string, projectId, section: row.section as ProjectNote['section'], title: row.title as string,
       content: row.content as string, createdAt: row.created_at as number, updatedAt: row.updated_at as number }, score: relevanceScore(`${row.title as string}\n${row.content as string}`, signal) }))
       .filter(({ note, score }) => score > 0 && (note.section === 'story' || /参考|资料|来源|背景/.test(signal) || mode === 'discussion'))

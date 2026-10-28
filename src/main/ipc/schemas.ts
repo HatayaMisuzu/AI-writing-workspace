@@ -21,8 +21,14 @@ export const documentSaveSchema = z.object({
   expectedRevision: nonNegativeIntSchema.optional(),
   styleSample: z.object({ origin: z.enum(['human', 'ai', 'ai_edited_by_human', 'mixed']), text: contentSchema }).optional()
 })
+// S3：大纲作为 project_notes 的一个 section；节点大纲（summary/beats/hook）走 outlineSaveSchema
+export const noteSectionSchema = z.enum(['story', 'reference', 'outline'])
+export const outlineSaveSchema = z.object({
+  projectId: idSchema, nodeId: idSchema, summary: contentSchema.optional(),
+  beats: z.array(shortTextSchema).max(1_000).optional(), hook: shortTextSchema.optional()
+})
 export const noteSaveSchema = z.object({
-  id: idSchema.optional(), projectId: idSchema, section: z.enum(['story', 'reference']),
+  id: idSchema.optional(), projectId: idSchema, section: noteSectionSchema,
   title: shortTextSchema, content: contentSchema
 })
 export const characterSaveSchema = z.object({

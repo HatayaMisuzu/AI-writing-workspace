@@ -51,7 +51,7 @@ describe('database migrations', () => {
     const migratedProviders = new ProviderService(migrated, testCodec)
     expect(migratedProviders.list()[0].displayName).toBe('旧服务')
     expect(migratedProviders.listRoutes().proofreading).toBe('old-model')
-    expect(migrated.raw.prepare("SELECT value_json FROM app_settings WHERE key = 'schema_version'").get()).toEqual({ value_json: '4' })
+    expect(migrated.raw.prepare("SELECT value_json FROM app_settings WHERE key = 'schema_version'").get()).toEqual({ value_json: '5' })
     migrated.close()
   })
 })

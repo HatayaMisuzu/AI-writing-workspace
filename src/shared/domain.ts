@@ -64,7 +64,7 @@ export interface Idea {
 export interface ProjectNote {
   id: string
   projectId: string
-  section: 'story' | 'reference'
+  section: 'story' | 'reference' | 'outline'
   title: string
   content: string
   createdAt: number
@@ -306,4 +306,14 @@ export interface AppErrorShape {
   message: string
   recoverable: boolean
   details?: string
+}
+
+/** 卷梗概 / 章细纲（node_outlines，S3）。beats 为细纲要点列表，hook 为章末钩子。 */
+export interface NodeOutline {
+  nodeId: string
+  projectId: string
+  summary: string
+  beats: string[]
+  hook: string
+  updatedAt: number
 }

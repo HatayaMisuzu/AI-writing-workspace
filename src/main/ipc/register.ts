@@ -35,7 +35,7 @@ const handle = <T extends unknown[], R>(channel: string, fn: (...args: T) => R |
 }
 
 import {
-  idSchema, shortTextSchema, contentSchema, nonNegativeIntSchema, projectCreateSchema, documentCreateSchema, documentSaveSchema, noteSaveSchema, characterSaveSchema, providerInputSchema, modelSchema, routeSchema, patchProposalSchema, snapshotReasonSchema, aiStartSchema
+  idSchema, shortTextSchema, contentSchema, nonNegativeIntSchema, projectCreateSchema, documentCreateSchema, documentSaveSchema, noteSaveSchema, characterSaveSchema, providerInputSchema, modelSchema, routeSchema, patchProposalSchema, snapshotReasonSchema, aiStartSchema, noteSectionSchema, outlineSaveSchema
 } from './schemas'
 const parse = <T>(schema: z.ZodType<T>, value: unknown): T => schema.parse(value)
 
@@ -87,7 +87,10 @@ export function registerIpc(db: AppDatabase, codec: SecretCodec): void {
   handle('snapshots:restore', (projectId: string, snapshotId: string) => documents.restoreSnapshot(parse(idSchema, projectId), parse(idSchema, snapshotId)))
   handle('ideas:list', (projectId: string) => ideas.list(projectId))
   handle('ideas:create', (projectId: string, content: string, tags?: string[]) => ideas.create(parse(idSchema, projectId), parse(contentSchema, content), parse(z.array(shortTextSchema).max(1_000).optional(), tags)))
-  handle('notes:list', (projectId: string, section: 'story' | 'reference') => projectContent.listNotes(projectId, section))
+  handle('notes:list', (projectId: string, section: unknown) => projectContent.listNotes(parse(idSchema, projectId), parse(noteSectionSchema, section)))
+  handle('outlines:get', (projectId: string, nodeId: string) => documents.getOutline(parse(idSchema, projectId), parse(idSchema, nodeId)))
+  handle('outlines:list', (projectId: string) => documents.listOutlines(parse(idSchema, projectId)))
+  handle('outlines:save', (input: unknown) => documents.saveOutline(parse(outlineSaveSchema, input)))
   handle('notes:save', (input: unknown) => projectContent.saveNote(parse(noteSaveSchema, input)))
   handle('notes:delete', (projectId: string, noteId: string) => projectContent.deleteNote(parse(idSchema, projectId), parse(idSchema, noteId)))
   handle('characters:list', (projectId: string) => projectContent.listCharacters(projectId))

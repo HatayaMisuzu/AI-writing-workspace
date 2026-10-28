@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   aiStartSchema, characterSaveSchema, documentCreateSchema, documentSaveSchema, idSchema, modelSchema, noteSaveSchema,
-  patchProposalSchema, projectCreateSchema, providerInputSchema, routeSchema, snapshotReasonSchema
+  patchProposalSchema, projectCreateSchema, providerInputSchema, routeSchema, snapshotReasonSchema, noteSectionSchema, outlineSaveSchema
 } from '../src/main/ipc/schemas'
 
 const rejects = (schema: { safeParse(value: unknown): { success: boolean } }, value: unknown): boolean => !schema.safeParse(value).success
@@ -35,6 +35,16 @@ describe('IPC zod schemas — rejection paths', () => {
     expect(rejects(documentSaveSchema, { ...base, expectedRevision: 1.5 })).toBe(true)
     expect(rejects(documentSaveSchema, { ...base, styleSample: { origin: 'robot', text: '' } })).toBe(true)
     expect(documentSaveSchema.safeParse(base).success).toBe(true)
+  })
+
+  it('S3 noteSectionSchema / outlineSaveSchema', () => {
+    expect(noteSectionSchema.safeParse('outline').success).toBe(true)
+    expect(rejects(noteSectionSchema, 'secret')).toBe(true)
+    expect(outlineSaveSchema.safeParse({ projectId: 'p', nodeId: 'n', summary: 's', beats: ['a'], hook: 'h' }).success).toBe(true)
+    expect(outlineSaveSchema.safeParse({ projectId: 'p', nodeId: 'n', extra: 1 }).success).toBe(true) // P4：与其他 schema 一致，多余字段静默去掉，不用 .strict()
+    expect(rejects(outlineSaveSchema, { projectId: 'p', nodeId: '' })).toBe(true)
+    expect(rejects(outlineSaveSchema, { projectId: 'p', nodeId: 'n', beats: Array.from({ length: 1_001 }, () => 'b') })).toBe(true)
+    expect(rejects(outlineSaveSchema, { projectId: 'p', nodeId: 'n', hook: 'h'.repeat(2_001) })).toBe(true)
   })
 
   it('noteSaveSchema / characterSaveSchema reject invalid sections and names', () => {
