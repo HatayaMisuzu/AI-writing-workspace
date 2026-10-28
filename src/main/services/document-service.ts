@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
-import type { DocumentContent, DocumentNode, DocumentType, SearchResult, Snapshot, TextOrigin } from '../../shared/domain'
+import type { DocumentContent, DocumentNode, DocumentType, SearchResult, Snapshot, TextOrigin, NodeOutline } from '../../shared/domain'
 import type { AppDatabase } from '../database/database'
 import { StyleSampleService } from './style-sample-service'
 
@@ -248,7 +248,37 @@ export class DocumentService {
     return rows.map((row) => ({ projectId: row.project_id, documentId: row.document_id, title: row.title, snippet: row.snippet, rank: row.rank }))
   }
 
+  getOutline(projectId: string, nodeId: string): NodeOutline | null {
+    const row = this.db.raw.prepare('SELECT * FROM node_outlines WHERE project_id = ? AND node_id = ?').get(projectId, nodeId) as Record<string, unknown> | undefined
+    return row ? mapOutline(row) : null
+  }
+
+  listOutlines(projectId: string): NodeOutline[] {
+    const rows = this.db.raw.prepare('SELECT * FROM node_outlines WHERE project_id = ?').all(projectId) as Array<Record<string, unknown>>
+    return rows.map(mapOutline)
+  }
+
+  saveOutline(input: { projectId: string; nodeId: string; summary?: string; beats?: string[]; hook?: string }): NodeOutline {
+    const node = this.db.raw.prepare("SELECT type FROM document_nodes WHERE id = ? AND project_id = ?").get(input.nodeId, input.projectId) as { type: string } | undefined
+    if (!node) throw new Error('DOCUMENT_NOT_FOUND_IN_PROJECT')
+    if (node.type !== 'volume' && node.type !== 'chapter') throw new Error('OUTLINE_NODE_TYPE_INVALID')
+    const existing = this.getOutline(input.projectId, input.nodeId)
+    this.db.raw.prepare(`INSERT INTO node_outlines(node_id,project_id,summary,beats_json,hook,updated_at) VALUES (?,?,?,?,?,?)
+      ON CONFLICT(node_id) DO UPDATE SET summary=excluded.summary,beats_json=excluded.beats_json,hook=excluded.hook,updated_at=excluded.updated_at
+      WHERE project_id=excluded.project_id`)
+      .run(input.nodeId, input.projectId, input.summary ?? existing?.summary ?? '', JSON.stringify(input.beats ?? existing?.beats ?? []),
+        input.hook ?? existing?.hook ?? '', Date.now())
+    const saved = this.getOutline(input.projectId, input.nodeId)
+    if (!saved) throw new Error('DOCUMENT_NOT_FOUND_IN_PROJECT')
+    return saved
+  }
+
   hashRange(text: string): string {
     return createHash('sha256').update(text).digest('hex')
   }
+}
+
+function mapOutline(row: Record<string, unknown>): NodeOutline {
+  return { nodeId: row.node_id as string, projectId: row.project_id as string, summary: row.summary as string,
+    beats: JSON.parse(row.beats_json as string) as string[], hook: row.hook as string, updatedAt: row.updated_at as number }
 }

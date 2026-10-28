@@ -3,7 +3,7 @@ import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { schema } from './schema'
 
-export const CURRENT_SCHEMA_VERSION = 4
+export const CURRENT_SCHEMA_VERSION = 5
 
 export class AppDatabase {
   readonly raw: DatabaseSync
@@ -79,6 +79,36 @@ export class AppDatabase {
         this.writeVersion(4)
       })
       version = 4
+    }
+    if (version < 5) {
+      // v5（S3 细纲）：node_outlines 表由 schema 以 IF NOT EXISTS 创建；project_notes.section 的 CHECK 约束需重建表才能接受 'outline'。
+      const notesSql = (this.raw.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'project_notes'").get() as { sql: string } | undefined)?.sql ?? ''
+      if (!notesSql.includes("'outline'")) {
+        this.raw.exec('PRAGMA foreign_keys = OFF')
+        try {
+          this.transaction(() => {
+            this.raw.exec(`CREATE TABLE project_notes_v5 (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  section TEXT NOT NULL CHECK(section IN ('story','reference','outline')),
+  title TEXT NOT NULL,
+  content TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+)`)
+            this.raw.exec('INSERT INTO project_notes_v5(id,project_id,section,title,content,created_at,updated_at) SELECT id,project_id,section,title,content,created_at,updated_at FROM project_notes')
+            this.raw.exec('DROP TABLE project_notes')
+            this.raw.exec('ALTER TABLE project_notes_v5 RENAME TO project_notes')
+            this.raw.exec('CREATE INDEX IF NOT EXISTS idx_notes_project_section ON project_notes(project_id, section, updated_at DESC)')
+            this.writeVersion(5)
+          })
+        } finally {
+          this.raw.exec('PRAGMA foreign_keys = ON')
+        }
+      } else {
+        this.transaction(() => this.writeVersion(5))
+      }
+      version = 5
     }
     this.raw.prepare("UPDATE chat_messages SET status = 'error' WHERE status = 'streaming'").run()
     if (version !== CURRENT_SCHEMA_VERSION) throw new Error(`DATABASE_SCHEMA_MIGRATION_INCOMPLETE:${version}`)

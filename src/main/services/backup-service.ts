@@ -43,6 +43,7 @@ interface BackupPayload {
   origins: Array<Record<string, unknown>>
   feedback: Array<Record<string, unknown>>
   styles?: Array<Record<string, unknown>>
+  outlines?: Array<Record<string, unknown>>
   patches: Array<Record<string, unknown>>
 }
 
@@ -55,7 +56,8 @@ const backupPayloadSchema = z.object({
   nodes: z.array(rowSchema), contents: z.array(z.record(z.string(), z.unknown())), snapshots: z.array(rowSchema),
   ideas: z.array(rowSchema), notes: z.array(rowSchema), characters: z.array(rowSchema), memories: z.array(rowSchema),
   threads: z.array(rowSchema), messages: z.array(rowSchema), digests: z.array(rowSchema), origins: z.array(rowSchema),
-  feedback: z.array(rowSchema), styles: z.array(rowSchema).optional(), patches: z.array(rowSchema)
+  feedback: z.array(rowSchema), styles: z.array(rowSchema).optional(), patches: z.array(rowSchema),
+  outlines: z.array(z.record(z.string(), z.unknown())).optional()
 })
 
 async function atomicWriteFile(path: string, data: string | Uint8Array): Promise<void> {
@@ -78,6 +80,30 @@ async function atomicWriteFile(path: string, data: string | Uint8Array): Promise
     }
     await unlink(previous).catch(() => undefined)
   }
+}
+
+/**
+ * S1e：把节点排成"父节点在前"（按层级，同层保持 order_index 与原顺序），导入时逐行插入不会触发外键失败。
+ * 兼容旧备份（乱序）；父节点缺失抛 BACKUP_INVALID_NODE_PARENT，存在环（含自指）抛 BACKUP_INVALID_NODE_CYCLE。
+ */
+export function orderNodesParentFirst<T extends Record<string, unknown>>(nodes: T[]): T[] {
+  const ids = new Set(nodes.map((node) => node.id as string))
+  const children = new Map<string | null, T[]>()
+  for (const node of nodes) {
+    const parent = (node.parent_id as string | null | undefined) || null
+    if (parent !== null && !ids.has(parent)) throw new Error('BACKUP_INVALID_NODE_PARENT')
+    children.set(parent, [...(children.get(parent) ?? []), node])
+  }
+  const byOrder = (a: T, b: T): number => Number(a.order_index ?? 0) - Number(b.order_index ?? 0)
+  const ordered: T[] = []
+  let level = [...(children.get(null) ?? [])].sort(byOrder)
+  while (level.length) {
+    ordered.push(...level)
+    level = level.flatMap((node) => [...(children.get(node.id as string) ?? [])].sort(byOrder))
+  }
+  // 从根可达的节点都已输出；剩下的只能处在环上（或挂在环下）
+  if (ordered.length !== nodes.length) throw new Error('BACKUP_INVALID_NODE_CYCLE')
+  return ordered
 }
 
 function validateBackup(payload: BackupPayload): void {
@@ -127,7 +153,7 @@ function validateBackup(payload: BackupPayload): void {
     assertInteger(row.revision, 0, 'BACKUP_INVALID_SNAPSHOT_REVISION')
   })
   payload.ideas.forEach((row) => assertEnum(row.status, ['active', 'used', 'archived'], 'BACKUP_INVALID_IDEA_STATUS'))
-  payload.notes.forEach((row) => assertEnum(row.section, ['story', 'reference'], 'BACKUP_INVALID_NOTE_SECTION'))
+  payload.notes.forEach((row) => assertEnum(row.section, ['story', 'reference', 'outline'], 'BACKUP_INVALID_NOTE_SECTION'))
   payload.characters.forEach((row) => {
     if (!Array.isArray(JSON.parse(String(row.aliases_json))) || typeof JSON.parse(String(row.fields_json)) !== 'object') throw new Error('BACKUP_INVALID_CHARACTER_JSON')
   })
@@ -161,11 +187,23 @@ function validateBackup(payload: BackupPayload): void {
     if (row.document_id && !nodeIds.has(row.document_id as string)) throw new Error('BACKUP_INVALID_STYLE_DOCUMENT')
     assertEnum(row.origin, ['human', 'ai', 'ai_edited_by_human', 'mixed'], 'BACKUP_INVALID_TEXT_ORIGIN')
   })
+  const outlineNodeIds = new Set<string>()
+  ;(payload.outlines ?? []).forEach((row) => {
+    if (row.project_id !== projectId || !nodeIds.has(row.node_id as string)) throw new Error('BACKUP_INVALID_OUTLINE_REFERENCE')
+    if (outlineNodeIds.has(row.node_id as string)) throw new Error('BACKUP_INVALID_DUPLICATE_OUTLINE')
+    outlineNodeIds.add(row.node_id as string)
+    const node = payload.nodes.find((item) => item.id === row.node_id)
+    assertEnum(node?.type, ['volume', 'chapter'], 'BACKUP_INVALID_OUTLINE_NODE_TYPE')
+    if (typeof row.summary !== 'string' || typeof row.hook !== 'string') throw new Error('BACKUP_INVALID_OUTLINE')
+    const beats = JSON.parse(String(row.beats_json)) as unknown
+    if (!Array.isArray(beats) || !beats.every((beat) => typeof beat === 'string')) throw new Error('BACKUP_INVALID_OUTLINE')
+  })
   payload.patches.forEach((row) => {
     if (!nodeIds.has(row.document_id as string)) throw new Error('BACKUP_INVALID_PATCH_DOCUMENT')
     assertEnum(row.status, ['proposed', 'accepted', 'rejected', 'stale'], 'BACKUP_INVALID_PATCH_STATUS')
     assertInteger(row.from_pos, 0, 'BACKUP_INVALID_PATCH_RANGE'); assertInteger(row.to_pos, row.from_pos as number, 'BACKUP_INVALID_PATCH_RANGE')
   })
+  payload.nodes = orderNodesParentFirst(payload.nodes)
   for (const memory of payload.memories) {
     const visited = new Set<string>([memory.id as string])
     let cursor = memory.supersedes as string | undefined
@@ -188,13 +226,13 @@ export class BackupService {
     if (!project) throw new Error('PROJECT_NOT_FOUND')
     const payload: BackupPayload = {
       format: 'inkstone-project', version: 1, exportedAt: Date.now(), project,
-      nodes: rows(this.db, 'document_nodes', projectId), contents: rows(this.db, 'document_contents', projectId),
+      nodes: orderNodesParentFirst(rows(this.db, 'document_nodes', projectId)), contents: rows(this.db, 'document_contents', projectId),
       snapshots: rows(this.db, 'snapshots', projectId), ideas: rows(this.db, 'ideas', projectId), notes: rows(this.db, 'project_notes', projectId),
       characters: rows(this.db, 'characters', projectId), memories: rows(this.db, 'memories', projectId),
       threads: rows(this.db, 'chat_threads', projectId), messages: rows(this.db, 'chat_messages', projectId),
       digests: rows(this.db, 'chapter_digests', projectId), origins: rows(this.db, 'text_origins', projectId),
       feedback: rows(this.db, 'style_feedback', projectId), styles: rows(this.db, 'style_samples', projectId),
-      patches: rows(this.db, 'text_patches', projectId)
+      patches: rows(this.db, 'text_patches', projectId), outlines: rows(this.db, 'node_outlines', projectId)
     }
     await atomicWriteFile(path, JSON.stringify(payload, (_key, value) => Buffer.isBuffer(value) ? value.toString('base64') : value, 2))
   }
@@ -242,6 +280,8 @@ export class BackupService {
         const node = payload.nodes.find((item) => item.id === content.document_id)
         ftsInsert.run(...[projectId, newDocumentId, node?.title ?? '未命名', content.plain_text].map(sqlValue))
       })
+      const outlineInsert = this.db.raw.prepare(`INSERT INTO node_outlines(node_id,project_id,summary,beats_json,hook,updated_at) VALUES (?,?,?,?,?,?)`)
+      payload.outlines?.forEach((item) => outlineInsert.run(...[idMap.get(item.node_id as string), projectId, item.summary, item.beats_json, item.hook, item.updated_at ?? now].map(sqlValue)))
       const ideaInsert = this.db.raw.prepare(`INSERT INTO ideas(id,project_id,content,status,tags_json,created_at,updated_at) VALUES (?,?,?,?,?,?,?)`)
       payload.ideas.forEach((idea) => ideaInsert.run(...[idMap.get(idea.id as string), projectId, idea.content, idea.status, idea.tags_json, now, now].map(sqlValue)))
       const noteInsert = this.db.raw.prepare(`INSERT INTO project_notes(id,project_id,section,title,content,created_at,updated_at) VALUES (?,?,?,?,?,?,?)`)

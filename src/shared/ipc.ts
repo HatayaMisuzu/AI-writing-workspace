@@ -1,7 +1,7 @@
 import type {
   ContextBundle,
   AITaskEnvelope, Character, ChatCursor, ChatMessage, ChatThread, DigestStatus, DocumentContent, DocumentNode, Idea, LocalLintIssue,
-  MemoryItem, MemoryProposal, ModelConfig, Project, ProjectNote, ProjectType, ProofreadIssue, ProviderConfig,
+  MemoryItem, MemoryProposal, ModelConfig, NodeOutline, Project, ProjectNote, ProjectType, ProofreadIssue, ProviderConfig,
   ProviderInput, RoutedTask, SearchResult, Snapshot, TaskModelRoute, TextOrigin, TextPatch
 } from './domain'
 
@@ -34,6 +34,11 @@ export interface WorkspaceApi {
     restore(projectId: string, snapshotId: string): Promise<DocumentContent>
   }
   ideas: { list(projectId: string): Promise<Idea[]>; create(projectId: string, content: string, tags?: string[]): Promise<Idea> }
+  outlines: {
+    get(projectId: string, nodeId: string): Promise<NodeOutline | null>
+    list(projectId: string): Promise<NodeOutline[]>
+    save(input: { projectId: string; nodeId: string; summary?: string; beats?: string[]; hook?: string }): Promise<NodeOutline>
+  }
   notes: {
     list(projectId: string, section: ProjectNote['section']): Promise<ProjectNote[]>
     save(input: { id?: string; projectId: string; section: ProjectNote['section']; title: string; content: string }): Promise<ProjectNote>

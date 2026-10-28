@@ -20,6 +20,8 @@ jobs:
       - run: npm run verify
       - run: npm run test:e2e
       - run: npm audit --omit=dev
+      # S0b：electron 等运行时在 devDependencies，--omit=dev 看不到；含 dev 依赖的高危门禁
+      - run: npm audit --audit-level=high
 
   package-windows:
     runs-on: windows-latest
@@ -55,9 +57,15 @@ jobs:
       - run: npm ci
       - run: npm run release:preflight
       - run: npm run verify
-      # 注：Linux e2e 暂不在 CI 运行。Playwright 的 Electron loader 强制追加 --password-store=basic，
-      # safeStorage 落到 basic_text 后应用按设计抛 SECURE_STORAGE_UNAVAILABLE（不降级明文），e2e 的 providers:save 步骤必然失败。
+      # Linux e2e：Playwright 的 Electron loader 会强制 --password-store=basic（应用按设计拒绝明文回退），
+      # 因此 e2e 在 Linux 上绕开 loader，直接启动 Electron 并经 CDP 连接，配合真实解锁的 gnome-keyring。
+      - run: sudo apt-get update && sudo apt-get install -y gnome-keyring dbus-x11
+      # Ubuntu 24.04 默认限制非特权 user namespace，Chromium 沙箱需要放开；应用本身保持 sandbox 开启
+      - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - run: xvfb-run -a dbus-run-session -- bash scripts/ci/linux-e2e.sh
       - run: npm audit --omit=dev
+      # S0b：electron 等运行时在 devDependencies，--omit=dev 看不到；含 dev 依赖的高危门禁
+      - run: npm audit --audit-level=high
 
   package-linux:
     runs-on: ubuntu-24.04

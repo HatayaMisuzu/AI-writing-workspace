@@ -64,7 +64,7 @@ export interface Idea {
 export interface ProjectNote {
   id: string
   projectId: string
-  section: 'story' | 'reference'
+  section: 'story' | 'reference' | 'outline'
   title: string
   content: string
   createdAt: number
@@ -117,6 +117,8 @@ export interface ProviderConfig {
   providerType: 'openai-compatible'
   displayName: string
   baseUrl: string
+  /** S1c：存量配置的地址不合法时给出原因；此时不会发起任何请求，需作者修正。 */
+  baseUrlError?: string
   hasApiKey: boolean
   createdAt: number
   updatedAt: number
@@ -316,4 +318,14 @@ export interface AppErrorShape {
   message: string
   recoverable: boolean
   details?: string
+}
+
+/** 卷梗概 / 章细纲（node_outlines，S3）。beats 为细纲要点列表，hook 为章末钩子。 */
+export interface NodeOutline {
+  nodeId: string
+  projectId: string
+  summary: string
+  beats: string[]
+  hook: string
+  updatedAt: number
 }

@@ -1,4 +1,5 @@
 import type { AppErrorShape, ModelConfig, ProviderCapabilities, ProviderConfig, ProviderInput, RoutedTask } from '../../shared/domain'
+import { checkBaseUrl, displayBaseUrl, sameEndpoint, redactSecretsInText, restoreRedactedSecrets } from '../../shared/base-url'
 import type { AppDatabase } from '../database/database'
 import { randomUUID } from 'node:crypto'
 
@@ -7,9 +8,24 @@ export interface SecretCodec {
   decrypt(value: Buffer): string
 }
 
+export const ADDRESS_CHANGED_KEY = '地址已变更，为防止密钥发往新地址，请重新填写 Key。'
+export const ADDRESS_CHANGED_QUERY_SECRET = '地址已变更，为防止密钥发往新地址，请重新填写地址中的密钥。'
 type ProviderRow = { id: string; provider_type: 'openai-compatible'; display_name: string; base_url: string; encrypted_api_key: Buffer | null; created_at: number; updated_at: number }
 
+const baseUrlIssue = (url: string): { baseUrlError?: string } => { const check = checkBaseUrl(url); return check.ok ? {} : { baseUrlError: check.message } }
+/** 在 path 上追加端点，query（含作者放在地址里的密钥参数）原样保留在末尾。 */
+const endpointUrl = (base: string, endpoint: string): string => {
+  const q = base.indexOf('?')
+  const path = q < 0 ? base : base.slice(0, q); const query = q < 0 ? '' : base.slice(q)
+  return `${normalizeBaseUrl(path)}/${endpoint}${query}`
+}
 const normalizeBaseUrl = (url: string): string => url.trim().replace(/\/+$/, '')
+/** S1c：任何请求前都校验 Base URL；不合法则抛错且不调用 fetch、不解密密钥。 */
+const requireValidBaseUrl = (url: string): string => {
+  const check = checkBaseUrl(url)
+  if (!check.ok) throw Object.assign(new Error(`服务地址需要修正：${check.message}`), { code: 'PROVIDER_BASE_URL_INVALID' })
+  return check.url
+}
 export const adapterCapabilities: ProviderCapabilities = { streaming: true, tools: false, structuredOutput: false, cancellation: true }
 const truthfulCapabilities = (capabilities: ProviderCapabilities): ProviderCapabilities => ({ ...capabilities, tools: false, structuredOutput: false, streaming: true, cancellation: true })
 export const routedTasks: RoutedTask[] = ['discussion', 'brainstorm', 'generation', 'editing', 'organization', 'chapter_digest', 'proofreading']
@@ -20,11 +36,21 @@ export class ProviderService {
   list(): ProviderConfig[] {
     const rows = this.db.raw.prepare('SELECT * FROM provider_configs ORDER BY updated_at DESC').all() as ProviderRow[]
     return rows.map((row) => ({ id: row.id, providerType: row.provider_type, displayName: row.display_name,
-      baseUrl: row.base_url, hasApiKey: Boolean(row.encrypted_api_key), createdAt: row.created_at, updatedAt: row.updated_at }))
+      baseUrl: displayBaseUrl(row.base_url), ...baseUrlIssue(row.base_url), hasApiKey: Boolean(row.encrypted_api_key), createdAt: row.created_at, updatedAt: row.updated_at }))
   }
 
   save(input: ProviderInput): ProviderConfig {
     const existing = this.db.raw.prepare('SELECT * FROM provider_configs WHERE id = ?').get(input.id) as ProviderRow | undefined
+    // S1d：界面拿到的是脱敏地址，*** 按参数名还原为已保存的原值；还原不了则拒绝，绝不把 *** 写入
+    const baseUrl = restoreRedactedSecrets(input.baseUrl, existing?.base_url)
+    if (baseUrl === undefined) {
+      const moved = existing !== undefined && !sameEndpoint(input.baseUrl, existing.base_url, true)
+      throw Object.assign(new Error(moved ? ADDRESS_CHANGED_QUERY_SECRET : '地址中的 *** 是已隐藏的密钥，找不到原值，请重新填写地址中的密钥。'),
+        { code: moved ? 'PROVIDER_ADDRESS_CHANGED' : 'PROVIDER_BASE_URL_INVALID' })
+    }
+    // S1d-A2：已存 Key 只能沿用在同一 scheme/host/port 上；地址换了且没填新 Key 则拒绝，避免把旧 Key 发给新地址
+    if (!input.apiKey && existing?.encrypted_api_key && !sameEndpoint(baseUrl, existing.base_url))
+      throw Object.assign(new Error(ADDRESS_CHANGED_KEY), { code: 'PROVIDER_KEY_REENTRY_REQUIRED' })
     const now = Date.now()
     const encrypted = input.apiKey ? this.codec.encrypt(input.apiKey) : existing?.encrypted_api_key ?? null
     this.db.raw.prepare(`INSERT INTO provider_configs
@@ -32,7 +58,7 @@ export class ProviderService {
       VALUES (?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET provider_type=excluded.provider_type, display_name=excluded.display_name,
       base_url=excluded.base_url, encrypted_api_key=excluded.encrypted_api_key, updated_at=excluded.updated_at`)
-      .run(input.id || randomUUID(), input.providerType, input.displayName.trim(), normalizeBaseUrl(input.baseUrl), encrypted, existing?.created_at ?? now, now)
+      .run(input.id || randomUUID(), input.providerType, input.displayName.trim(), requireValidBaseUrl(baseUrl), encrypted, existing?.created_at ?? now, now)
     return this.list().find((item) => item.id === input.id) ?? this.list()[0]
   }
 
@@ -40,8 +66,9 @@ export class ProviderService {
     const row = this.db.raw.prepare('SELECT * FROM provider_configs WHERE id = ?').get(providerId) as ProviderRow | undefined
     if (!row) throw new Error('PROVIDER_NOT_FOUND')
     if (!row.encrypted_api_key) throw new Error('PROVIDER_KEY_MISSING')
+    requireValidBaseUrl(row.base_url)
     return {
-      config: { id: row.id, providerType: row.provider_type, displayName: row.display_name, baseUrl: row.base_url,
+      config: { id: row.id, providerType: row.provider_type, displayName: row.display_name, baseUrl: requireValidBaseUrl(row.base_url),
         hasApiKey: true, createdAt: row.created_at, updatedAt: row.updated_at },
       apiKey: this.codec.decrypt(row.encrypted_api_key)
     }
@@ -120,13 +147,14 @@ function deadlineSignal(external?: AbortSignal, timeoutMs = 60_000): { signal: A
 }
 
 export class OpenAICompatibleAdapter {
-  constructor(private readonly baseUrl: string, private readonly apiKey: string, private readonly fetcher: typeof fetch = fetch) {}
+  private readonly baseUrl: string
+  constructor(baseUrl: string, private readonly apiKey: string, private readonly fetcher: typeof fetch = fetch) { this.baseUrl = requireValidBaseUrl(baseUrl) }
 
   async *chat(input: { model: string; messages: ProviderMessage[]; signal?: AbortSignal; timeoutMs?: number }): AsyncIterable<string> {
     const request = deadlineSignal(input.signal, input.timeoutMs)
     let response: Response
     try {
-      response = await this.fetcher(`${normalizeBaseUrl(this.baseUrl)}/chat/completions`, {
+      response = await this.fetcher(endpointUrl(this.baseUrl, 'chat/completions'), {
         method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${this.apiKey}` },
         body: JSON.stringify({ model: input.model, messages: input.messages, stream: true }), signal: request.signal
       })
@@ -183,7 +211,7 @@ export class OpenAICompatibleAdapter {
     const request = deadlineSignal(input.signal, input.timeoutMs)
     let response: Response
     try {
-      response = await this.fetcher(`${normalizeBaseUrl(this.baseUrl)}/chat/completions`, {
+      response = await this.fetcher(endpointUrl(this.baseUrl, 'chat/completions'), {
         method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${this.apiKey}` },
         body: JSON.stringify({ model: input.model, messages: input.messages, stream: false }), signal: request.signal
       })
@@ -214,7 +242,7 @@ export class OpenAICompatibleAdapter {
     if (signal?.aborted || (error instanceof DOMException && error.name === 'AbortError')) {
       return Object.assign(new Error('请求已取消。'), { code: 'PROVIDER_CANCELLED', recoverable: true })
     }
-    const details = error instanceof Error ? error.message : String(error)
+    const details = redactSecretsInText(error instanceof Error ? error.message : String(error))
     return Object.assign(new Error('无法连接模型服务，请检查网络与 Base URL。'), { code: 'PROVIDER_NETWORK_ERROR', recoverable: true, details })
   }
 

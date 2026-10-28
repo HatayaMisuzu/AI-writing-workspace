@@ -30,6 +30,7 @@ const api: WorkspaceApi = {
     restore: (projectId, snapshotId) => invoke('snapshots:restore', projectId, snapshotId)
   },
   ideas: { list: (projectId) => invoke('ideas:list', projectId), create: (projectId, content, tags) => invoke('ideas:create', projectId, content, tags) },
+  outlines: { get: (projectId, nodeId) => invoke('outlines:get', projectId, nodeId), list: (projectId) => invoke('outlines:list', projectId), save: (input) => invoke('outlines:save', input) },
   notes: { list: (projectId, section) => invoke('notes:list', projectId, section), save: (input) => invoke('notes:save', input), delete: (projectId, id) => invoke('notes:delete', projectId, id) },
   characters: { list: (projectId) => invoke('characters:list', projectId), save: (input) => invoke('characters:save', input), delete: (projectId, id) => invoke('characters:delete', projectId, id) },
   memories: { list: (projectId) => invoke('memories:list', projectId), confirm: (projectId, id) => invoke('memories:confirm', projectId, id), reject: (projectId, id) => invoke('memories:reject', projectId, id), retire: (projectId, id) => invoke('memories:retire', projectId, id), replace: (projectId, id, content) => invoke('memories:replace', projectId, id, content), extractIntent: (projectId, sourceId, content) => invoke('memories:extract-intent', projectId, sourceId, content) },
