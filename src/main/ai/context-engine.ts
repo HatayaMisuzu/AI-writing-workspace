@@ -56,7 +56,7 @@ export class ContextEngine {
 
     this.addCharacters(task.projectId, signal, candidates)
     this.addNotes(task.projectId, signal, task.mode, candidates)
-    this.addOutlines(task.projectId, candidates)
+    this.addOutlines(task.projectId, task.documentId, candidates)
     this.addDigests(task.projectId, task.documentId, signal, candidates)
 
     if (task.userIntent.trim().length >= 2) {
@@ -105,8 +105,11 @@ export class ContextEngine {
         reason: note.section === 'story' ? '相关故事笔记' : '按需召回的相关参考资料', priority: 60 + score }))
   }
 
-  /** S6/P1：大纲进清单可见可勾选，默认不发送（budget 里 default_excluded，除非 includedIds 勾选）。 */
-  private addOutlines(projectId: string, candidates: Array<ContextItem & { priority: number }>): void {
+  /**
+   * S5：细纲进 AI 上下文；优先级在选区之后、当前章之前（PRD §4）。
+   * S6：清单可见可勾选，默认不发送（budget 里 default_excluded，除非 includedIds 勾选）。
+   */
+  private addOutlines(projectId: string, documentId: string | undefined, candidates: Array<ContextItem & { priority: number }>): void {
     const rows = this.db.raw.prepare(`SELECT o.node_id, o.summary, o.beats_json, o.hook, n.title, n.type
       FROM node_outlines o JOIN document_nodes n ON n.id = o.node_id
       WHERE o.project_id = ? AND n.project_id = ?`).all(projectId, projectId) as Array<Record<string, unknown>>
@@ -114,9 +117,11 @@ export class ContextEngine {
       const beats = JSON.parse(String(row.beats_json ?? '[]')) as string[]
       const parts = [row.summary && `梗概：${row.summary}`, beats.length ? `节拍：${beats.join(' / ')}` : '', row.hook && `钩子：${row.hook}`].filter(Boolean)
       if (!parts.length) continue
+      // 选区(100) > 本章细纲(98) > 卷梗概(97) > 当前章(95) > 他章细纲(94)
+      const priority = row.node_id === documentId ? 98 : row.type === 'volume' ? 97 : 94
       candidates.push({
         id: `outline:${row.node_id}`, kind: 'outline', title: `大纲 · ${row.title}`, content: parts.join('\n'),
-        projectId, reason: '卷/章大纲（默认不发送，勾选后带上）', priority: 45
+        projectId, reason: '卷/章细纲（默认不发送，勾选后带上；优先级在选区之后）', priority
       })
     }
     const notes = this.db.raw.prepare("SELECT * FROM project_notes WHERE project_id = ? AND section = 'outline' ORDER BY updated_at DESC")
@@ -126,7 +131,7 @@ export class ContextEngine {
       if (!content.trim() && !String(row.title ?? '').trim()) continue
       candidates.push({
         id: `outline-note:${row.id}`, kind: 'outline', title: `大纲笔记 · ${row.title || '未命名'}`, content: content || String(row.title),
-        projectId, reason: '大纲笔记（默认不发送，勾选后带上）', priority: 44
+        projectId, reason: '全书核心大纲（默认不发送，勾选后带上；优先级在选区之后）', priority: 96
       })
     }
   }
