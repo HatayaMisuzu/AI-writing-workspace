@@ -32,7 +32,7 @@ export const checkBaseUrl = (raw: string): BaseUrlCheck => {
 }
 
 // S1d：query 中视为密钥的参数名（大小写不敏感，按解码后的完整参数名匹配）
-export const SECRET_QUERY_PARAMS = ['key', 'api_key', 'apikey', 'token', 'access_token', 'secret', 'password', 'sig'] as const
+export const SECRET_QUERY_PARAMS = ['key', 'api_key', 'apikey', 'token', 'access_token', 'secret', 'password', 'sig', 'api-key', 'client_secret', 'refresh_token', 'signature', 'auth'] as const
 export const REDACTED = '***'
 export const BASE_URL_QUERY_SECRET_HINT = '地址中含有密钥参数（如 key=、token=），建议把密钥填在 Key 栏；界面与日志中该值会显示为 ***。'
 const secretNames = new Set<string>(SECRET_QUERY_PARAMS)
@@ -62,12 +62,28 @@ export const hasSecretQuery = (raw: string): boolean => {
 export const redactQuerySecrets = (raw: string): string => {
   const { head, query, hash } = splitUrl(raw)
   if (query === undefined) return raw
-  return joinUrl(head, parseQuery(query).map((part) => part.value !== undefined && isSecretName(part.name) ? { ...part, value: REDACTED } : part), hash)
+  return joinUrl(head, parseQuery(query).map((part) => part.value !== undefined && part.value !== '' && isSecretName(part.name) ? { ...part, value: REDACTED } : part), hash)
 }
 
 /** 任意文本（报错详情、日志）中出现的 name=value 密钥参数一律脱敏。 */
 export const redactSecretsInText = (text: string): string =>
-  text.replace(/(^|[?&;\s"'(])((?:key|api_key|apikey|token|access_token|secret|password|sig))=([^&#\s"')]*)/gi, `$1$2=${REDACTED}`)
+  text.replace(/(^|[?&;\s"'(])((?:key|api_key|apikey|api-key|token|access_token|refresh_token|secret|client_secret|password|signature|sig|auth))=([^&#\s"')]+)/gi, `$1$2=${REDACTED}`)
+
+const endpointParts = (raw: string): { protocol: string; host: string; port: string; path: string } | undefined => {
+  const checked = checkBaseUrl(raw.replaceAll(REDACTED, 'x'))
+  if (!checked.ok) return undefined
+  try {
+    const url = new URL(checked.url)
+    return { protocol: url.protocol, host: url.hostname.toLowerCase(), port: url.port, path: url.pathname.replace(/\/+$/, '') }
+  } catch { return undefined }
+}
+
+/** 两个地址的 scheme、host、port（默认端口规范化）是否一致；withPath 时 path 也须一致。任一无法解析视为不一致。 */
+export const sameEndpoint = (a: string, b: string, withPath = false): boolean => {
+  const x = endpointParts(a); const y = endpointParts(b)
+  if (!x || !y) return false
+  return x.protocol === y.protocol && x.host === y.host && x.port === y.port && (!withPath || x.path === y.path)
+}
 
 /**
  * 设置页编辑再保存时，界面拿到的是脱敏后的地址：密钥参数值为 *** 时，按参数名（同名按出现次序）
@@ -78,7 +94,9 @@ export const restoreRedactedSecrets = (input: string, original: string | undefin
   if (query === undefined) return input
   const parts = parseQuery(query)
   if (!parts.some((part) => part.value === REDACTED && isSecretName(part.name))) return input
-  const originals = original === undefined ? [] : parseQuery(splitUrl(original).query ?? '')
+  // S1d-A：只有 scheme/host/port/path 都与已存地址一致才还原，防止把原密钥带到新地址
+  if (original === undefined || !sameEndpoint(input, original, true)) return undefined
+  const originals = parseQuery(splitUrl(original).query ?? '')
   const used = new Map<string, number>()
   let missing = false
   const restored = parts.map((part) => {

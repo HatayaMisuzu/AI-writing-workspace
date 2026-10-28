@@ -38,10 +38,11 @@ describe('S1d query 中的密钥脱敏', () => {
     const db = createTestDb(); const providers = new ProviderService(db, testCodec)
     save(providers, `https://h/v1?key=${S}&sig=${S}B`, 'k')
     const shown = providers.list()[0].baseUrl
-    save(providers, shown.replace('/v1', '/v2'))
-    expect(db.raw.prepare('SELECT base_url FROM provider_configs').get()).toEqual({ base_url: `https://h/v2?key=${S}&sig=${S}B` })
-    save(providers, 'https://h/v2?key=NEWVALUE&sig=***')
-    expect(db.raw.prepare('SELECT base_url FROM provider_configs').get()).toEqual({ base_url: `https://h/v2?key=NEWVALUE&sig=${S}B` })
+    save(providers, shown.replace('model', 'x'))
+    save(providers, shown)
+    expect(db.raw.prepare('SELECT base_url FROM provider_configs').get()).toEqual({ base_url: `https://h/v1?key=${S}&sig=${S}B` })
+    save(providers, 'https://h/v1/?key=NEWVALUE&sig=***')
+    expect(db.raw.prepare('SELECT base_url FROM provider_configs').get()).toEqual({ base_url: `https://h/v1?key=NEWVALUE&sig=${S}B` })
   })
 
   it('没有原值可还原时拒绝保存，绝不写入 ***', () => {
@@ -73,5 +74,62 @@ describe('S1d query 中的密钥脱敏', () => {
     const result = await adapter.testConnection('m')
     expect(JSON.stringify(result)).not.toContain(S)
     expect(redactSecretsInText(`GET http://h/v1?Password=${S} failed; "sig=${S}"`)).not.toContain(S)
+  })
+
+  describe('S1d-A/A2/D/E 还原与沿用绑定地址', () => {
+    const rows = (db: ReturnType<typeof createTestDb>) => db.raw.prepare('SELECT base_url FROM provider_configs').all()
+
+    it('A：host 改成 evil.example 后带 *** 保存被拒绝，原值不变且不发出任何请求', async () => {
+      const db = createTestDb(); const providers = new ProviderService(db, testCodec)
+      save(providers, `https://h.example/v1?model=m&key=${S}&sig=${S}B`, 'k')
+      const before = rows(db)
+      const shown = providers.list()[0].baseUrl
+      const fetcher = okFetch()
+      for (const evil of [shown.replace('h.example', 'evil.example'), shown.replace('https://h.example', 'http://h.example'),
+        shown.replace('h.example', 'h.example:8443'), shown.replace('/v1', '/steal')]) {
+        expect(() => save(providers, evil)).toThrow('请重新填写密钥')
+        expect(() => save(providers, evil, 'new-bearer')).toThrow('请重新填写密钥')
+      }
+      expect(rows(db)).toEqual(before)
+      expect(fetcher).not.toHaveBeenCalled()
+      // 之后按已存配置真实发起请求：只会发往原 host，evil.example 从未收到请求
+      const { config } = providers.getWithSecret('p')
+      await new OpenAICompatibleAdapter(config.baseUrl, 'k', fetcher as unknown as typeof fetch).testConnection('m')
+      expect(fetcher).toHaveBeenCalledTimes(1)
+      expect(String(fetcher.mock.calls[0][0])).toMatch(/^https:\/\/h\.example\/v1\/chat\/completions/)
+      expect(fetcher.mock.calls.some(([url]) => String(url).includes('evil'))).toBe(false)
+      // 默认端口与大小写规范化后视为同一地址，可以还原
+      save(providers, shown.replace('https://h.example', 'HTTPS://H.EXAMPLE:443'))
+      expect(JSON.stringify(rows(db))).toContain(`key=${S}`)
+    })
+
+    it('A2：host 改成 evil.example 且未填新 Key 时拒绝沿用旧 Bearer Key，不发请求；填了新 Key 可保存', async () => {
+      const db = createTestDb(); const providers = new ProviderService(db, testCodec)
+      save(providers, 'https://h.example/v1', 'old-bearer')
+      const before = rows(db)
+      const fetcher = okFetch()
+      for (const url of ['https://evil.example/v1', 'http://h.example/v1', 'https://h.example:8443/v1'])
+        expect(() => save(providers, url)).toThrow(expect.objectContaining({ code: 'PROVIDER_KEY_REENTRY_REQUIRED' }))
+      expect(rows(db)).toEqual(before)
+      expect(fetcher).not.toHaveBeenCalled()
+      // 之后按已存配置真实发起请求：只会发往原 host，evil.example 从未收到请求
+      const { config } = providers.getWithSecret('p')
+      await new OpenAICompatibleAdapter(config.baseUrl, 'k', fetcher as unknown as typeof fetch).testConnection('m')
+      expect(fetcher).toHaveBeenCalledTimes(1)
+      expect(String(fetcher.mock.calls[0][0])).toMatch(/^https:\/\/h\.example\/v1\/chat\/completions/)
+      expect(fetcher.mock.calls.some(([url]) => String(url).includes('evil'))).toBe(false)
+      save(providers, 'https://h.example/v2') // 只改 path 可沿用
+      save(providers, 'https://evil.example/v1', 'new-bearer')
+      expect(rows(db)).toEqual([{ base_url: 'https://evil.example/v1' }])
+    })
+
+    it('D：新增参数名脱敏，相似名不误伤；E：空值不显示为 ***', () => {
+      const db = createTestDb(); const providers = new ProviderService(db, testCodec)
+      save(providers, `https://h/v1?api-key=${S}&client_secret=${S}&refresh_token=${S}&signature=${S}&AUTH=${S}&keyword=kw&key=`, 'k')
+      const shown = providers.list()[0].baseUrl
+      expect(shown).not.toContain(S)
+      expect(shown).toBe('https://h/v1?api-key=***&client_secret=***&refresh_token=***&signature=***&AUTH=***&keyword=kw&key=')
+      expect(redactSecretsInText(`GET /x?signature=${S}&auth=${S}&key= ok`)).toBe('GET /x?signature=***&auth=*** &key= ok'.replace('*** &', '***&'))
+    })
   })
 })
