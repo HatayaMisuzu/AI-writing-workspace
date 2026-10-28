@@ -35,23 +35,8 @@ export class AICreativeRuntime {
       }
       const model = this.providers.route(task.mode)
       const { config, apiKey } = this.providers.getWithSecret(model.providerId)
-      const maxContextTokens = Math.max(512, model.capabilities.maxContextTokens ?? 16_000)
-      const responseReserve = Math.min(4_096, Math.max(256, Math.floor(maxContextTokens * 0.2)), maxContextTokens - 256)
-      const inputLimit = maxContextTokens - responseReserve
-      const systemOnly = this.messageTokens(composeProviderMessages({ task: { ...task, userIntent: '' }, context: {
-        projectId: task.projectId, policy: task.mode === 'reader_review' ? 'reader' : 'creative', items: [],
-        metadata: { estimatedTokens: 0, sourceIds: [], excludedKinds: [] }
-      }, history: [] }))
-      if (systemOnly >= inputLimit) throw Object.assign(new Error('模型上下文窗口过小，无法容纳基础任务指令。'), { code: 'MODEL_CONTEXT_WINDOW_TOO_SMALL' })
-      const userBudget = Math.min(Math.floor(inputLimit * 0.5), inputLimit - systemOnly)
-      const providerTask = { ...task, userIntent: task.userIntent.slice(0, Math.max(1, Math.floor(userBudget * 2.2))) }
-      const history = this.fitHistory(this.loadHistory(providerTask, threadId), Math.floor(inputLimit * 0.25))
-      const emptyContext: ContextBundle = { projectId: task.projectId, policy: task.mode === 'reader_review' ? 'reader' : 'creative',
-        items: [], metadata: { estimatedTokens: 0, sourceIds: [], excludedKinds: [] } }
-      const fixedTokens = this.messageTokens(composeProviderMessages({ task: providerTask, context: emptyContext, history }))
-      const builtContext = this.context.build(providerTask, Math.max(0, inputLimit - fixedTokens))
-      const { messages, context } = this.fitFinalMessages(providerTask, builtContext, history, inputLimit)
-      this.chat.startTurn({ projectId: task.projectId, threadId, userMessageId, assistantMessageId, content: task.userIntent, mode: task.mode, target: task.target })
+      const { messages, context } = this.plan(task, threadId, model.capabilities.maxContextTokens)
+      this.chat.startTurn({ projectId: task.projectId, threadId, userMessageId, assistantMessageId, content: task.userIntent, mode: task.mode, target: task.target, contextSnapshot: this.contextSnapshot(context) })
       started = true
       const adapter = this.adapterFactory(config.baseUrl, apiKey)
       let first = true
@@ -73,6 +58,44 @@ export class AICreativeRuntime {
       this.chat.updateAssistant(task.projectId, threadId, assistantMessageId, assistant || shaped.message, status)
       throw error
     } finally { this.controllers.delete(requestId) }
+  }
+
+  /**
+   * R4：发送前预览将发送的上下文清单。与 run() 走同一 plan()，
+   * 因此在模型/输入/排除项/历史不变时，预览条目 = 实际发送条目。
+   * 不解密 API Key、不发起网络请求；未配置模型时按默认窗口估算。
+   */
+  previewContext(task: AITaskEnvelope, threadId: string): ContextBundle {
+    let maxContextTokens: number | undefined
+    try { maxContextTokens = this.providers.route(task.mode).capabilities.maxContextTokens } catch { maxContextTokens = undefined }
+    return this.plan(task, threadId, maxContextTokens).context
+  }
+
+  private plan(task: AITaskEnvelope, threadId: string, modelMaxContext: number | undefined): { messages: ProviderMessage[]; context: ContextBundle } {
+    const maxContextTokens = Math.max(512, modelMaxContext ?? 16_000)
+    const responseReserve = Math.min(4_096, Math.max(256, Math.floor(maxContextTokens * 0.2)), maxContextTokens - 256)
+    const inputLimit = maxContextTokens - responseReserve
+    const systemOnly = this.messageTokens(composeProviderMessages({ task: { ...task, userIntent: '' }, context: {
+      projectId: task.projectId, policy: task.mode === 'reader_review' ? 'reader' : 'creative', items: [],
+      metadata: { estimatedTokens: 0, sourceIds: [], excludedKinds: [] }
+    }, history: [] }))
+    if (systemOnly >= inputLimit) throw Object.assign(new Error('模型上下文窗口过小，无法容纳基础任务指令。'), { code: 'MODEL_CONTEXT_WINDOW_TOO_SMALL' })
+    const userBudget = Math.min(Math.floor(inputLimit * 0.5), inputLimit - systemOnly)
+    const providerTask = { ...task, userIntent: task.userIntent.slice(0, Math.max(1, Math.floor(userBudget * 2.2))) }
+    const history = this.fitHistory(this.loadHistory(providerTask, threadId), Math.floor(inputLimit * 0.25))
+    const emptyContext: ContextBundle = { projectId: task.projectId, policy: task.mode === 'reader_review' ? 'reader' : 'creative',
+      items: [], metadata: { estimatedTokens: 0, sourceIds: [], excludedKinds: [] } }
+    const fixedTokens = this.messageTokens(composeProviderMessages({ task: providerTask, context: emptyContext, history }))
+    const builtContext = this.context.build(providerTask, Math.max(0, inputLimit - fixedTokens))
+    return this.fitFinalMessages(providerTask, builtContext, history, inputLimit)
+  }
+
+
+  private contextSnapshot(context: ContextBundle): { sources: Array<{ id: string; kind: string }>; omitted: Array<{ id: string; kind: string; reason: string }> } {
+    return {
+      sources: context.items.map((item) => ({ id: item.id, kind: item.kind })),
+      omitted: (context.metadata.omitted ?? []).map((item) => ({ id: item.id, kind: item.kind, reason: item.reason }))
+    }
   }
 
   cancel(requestId: string): void { this.controllers.get(requestId)?.abort() }
@@ -105,7 +128,7 @@ export class AICreativeRuntime {
   }
 
   private fitFinalMessages(task: AITaskEnvelope, source: ContextBundle, history: ProviderMessage[], limit: number): { messages: ProviderMessage[]; context: ContextBundle } {
-    const context: ContextBundle = { ...source, items: source.items.map((item) => ({ ...item })), metadata: { ...source.metadata } }
+    const context: ContextBundle = { ...source, items: source.items.map((item) => ({ ...item })), metadata: { ...source.metadata, omitted: [...(source.metadata.omitted ?? [])] } }
     const fittedHistory = [...history]
     while (context.items.length) {
       const messages = composeProviderMessages({ task, context, history: fittedHistory })
@@ -113,8 +136,8 @@ export class AICreativeRuntime {
       if (overflow <= 0) return { messages, context }
       const last = context.items.at(-1)!
       const keepTokens = estimateTokens(last.content) - overflow - 8
-      if (keepTokens <= 0) context.items.pop()
-      else last.content = last.content.slice(0, Math.floor(keepTokens * 2.2))
+      if (keepTokens <= 0) { context.items.pop(); context.metadata.omitted!.push({ id: last.id, kind: last.kind, title: last.title, reason: 'budget' }) }
+      else { last.content = last.content.slice(0, Math.floor(keepTokens * 2.2)); last.truncated = true }
       context.metadata.estimatedTokens = context.items.reduce((sum, item) => sum + estimateTokens(item.content), 0)
       context.metadata.sourceIds = context.items.map((item) => item.id)
     }

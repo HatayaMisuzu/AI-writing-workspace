@@ -61,14 +61,24 @@ export const patchProposalSchema = z.object({
   fromPm: nonNegativeIntSchema, toPm: nonNegativeIntSchema, originalText: contentSchema, replacement: contentSchema
 }).refine((value) => value.toPm >= value.fromPm, { message: 'PATCH_PM_RANGE_INVALID' })
 export const snapshotReasonSchema = z.enum(['interval', 'large_delete', 'ai_edit', 'manual', 'pre_restore'])
+// R4/S6：上下文来源 id（如 `selection:<docId>`），作者可逐条排除。
+export const contextSourceIdSchema = z.string().min(1).max(300)
+export const aiTaskSchema = z.object({
+  mode: z.enum(['discussion','brainstorm','generation','editing','organization','chapter_digest','proofreading','reader_review']),
+  writePermission: z.enum(['none','proposal','authorized']), userIntent: z.string().min(1).max(200_000),
+  projectId: idSchema, documentId: idSchema.optional(), throughChapterId: idSchema.optional(),
+  selection: z.object({ from: z.number().int().nonnegative(), to: z.number().int().nonnegative(), text: z.string().max(200_000) }).optional(),
+  target: z.object({ requestId: idSchema, projectId: idSchema, documentId: idSchema, sourceRevision: z.number().int().nonnegative(),
+    selection: z.object({ fromPm: z.number().int().nonnegative(), toPm: z.number().int().nonnegative(), text: z.string().max(200_000), originalHash: z.string().min(1).max(200) }).optional() }).optional(),
+  excludedIds: z.array(contextSourceIdSchema).max(500).optional(),
+  includedIds: z.array(contextSourceIdSchema).max(500).optional()
+})
 export const aiStartSchema = z.object({
   requestId: idSchema, threadId: idSchema, userMessageId: idSchema, assistantMessageId: idSchema,
-  task: z.object({
-    mode: z.enum(['discussion','brainstorm','generation','editing','organization','chapter_digest','proofreading','reader_review']),
-    writePermission: z.enum(['none','proposal','authorized']), userIntent: z.string().min(1).max(200_000),
-    projectId: idSchema, documentId: idSchema.optional(), throughChapterId: idSchema.optional(),
-    selection: z.object({ from: z.number().int().nonnegative(), to: z.number().int().nonnegative(), text: z.string().max(200_000) }).optional(),
-    target: z.object({ requestId: idSchema, projectId: idSchema, documentId: idSchema, sourceRevision: z.number().int().nonnegative(),
-      selection: z.object({ fromPm: z.number().int().nonnegative(), toPm: z.number().int().nonnegative(), text: z.string().max(200_000), originalHash: z.string().min(1).max(200) }).optional() }).optional()
-  })
+  task: aiTaskSchema
+})
+// 发送前预览：输入框可能为空，故 userIntent 允许空串；其余字段与发送一致。
+export const aiPreviewContextSchema = z.object({
+  threadId: idSchema,
+  task: aiTaskSchema.extend({ userIntent: z.string().max(200_000) })
 })

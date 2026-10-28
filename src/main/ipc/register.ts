@@ -13,7 +13,7 @@ import { ChapterDigestService } from '../ai/chapter-digest-service'
 import { ChapterDigestRunner } from '../ai/digest-runner'
 import { ProjectContentService } from '../services/project-content-service'
 import type { ChatCursor, ModelConfig, ProviderInput, TaskModelRoute } from '../../shared/domain'
-import type { AIStartRequest } from '../../shared/ipc'
+import type { AIPreviewContextRequest, AIStartRequest } from '../../shared/ipc'
 import { cancelClose, confirmClose } from '../window-close'
 import { ChatService } from '../services/chat-service'
 import { MemoryIntentRunner } from '../ai/memory-intent'
@@ -35,7 +35,7 @@ const handle = <T extends unknown[], R>(channel: string, fn: (...args: T) => R |
 }
 
 import {
-  idSchema, shortTextSchema, contentSchema, nonNegativeIntSchema, projectCreateSchema, documentCreateSchema, documentSaveSchema, noteSaveSchema, characterSaveSchema, providerInputSchema, modelSchema, routeSchema, patchProposalSchema, snapshotReasonSchema, aiStartSchema, noteSectionSchema, outlineSaveSchema
+  idSchema, shortTextSchema, contentSchema, nonNegativeIntSchema, projectCreateSchema, documentCreateSchema, documentSaveSchema, noteSaveSchema, characterSaveSchema, providerInputSchema, modelSchema, routeSchema, patchProposalSchema, snapshotReasonSchema, aiStartSchema, aiPreviewContextSchema, noteSectionSchema, outlineSaveSchema
 } from './schemas'
 const parse = <T>(schema: z.ZodType<T>, value: unknown): T => schema.parse(value)
 
@@ -174,6 +174,10 @@ export function registerIpc(db: AppDatabase, codec: SecretCodec): void {
       const shaped = error as Error & { code?: string }
       if (!event.sender.isDestroyed()) event.sender.send('ai:event', { type: 'error', requestId: request?.requestId ?? 'invalid', message: shaped.message, code: shaped.code })
     }
+  })
+  handle('ai:preview-context', (request: AIPreviewContextRequest) => {
+    const parsed = aiPreviewContextSchema.parse(request) as AIPreviewContextRequest
+    return runtime.previewContext(parsed.task, parsed.threadId)
   })
   handle('ai:cancel', (requestId: string) => runtime.cancel(parse(idSchema, requestId)))
 }
