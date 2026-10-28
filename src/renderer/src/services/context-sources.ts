@@ -37,3 +37,8 @@ export const omittedLabel = (reason?: ContextOmission['reason']): string =>
     : reason === 'budget' ? '已省略（超出预算）'
     : reason === 'default_excluded' ? '默认不发送（勾选后带上）'
     : ''
+
+/** 切换对话 / 新对话时共用：排除态不持久化，一律清空。 */
+export const clearedExclusionState = (): { excludedIds: string[]; includedIds: string[] } =>
+  ({ excludedIds: [], includedIds: [] })
+
