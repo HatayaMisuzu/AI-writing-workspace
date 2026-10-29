@@ -266,7 +266,19 @@ export function AssistantPanel({ project, documentId, documentText, documentRevi
   useEffect(() => {
     if (drawer) {
       drawerRef.current?.focus()
-      const onKey = (event: KeyboardEvent): void => { if (event.key === 'Escape') { event.preventDefault(); onCollapse() } }
+      const onKey = (event: KeyboardEvent): void => {
+        if (event.key === 'Escape') { event.preventDefault(); onCollapse(); return }
+        // 焦点陷阱：Tab / Shift+Tab 只在抽屉内部循环
+        if (event.key !== 'Tab' || !drawerRef.current) return
+        const focusable = [...drawerRef.current.querySelectorAll<HTMLElement>('button, [href], input, select, textarea, summary, [tabindex]:not([tabindex="-1"])')]
+          .filter((node) => !node.hasAttribute('disabled') && node.getClientRects().length > 0)
+        if (!focusable.length) { event.preventDefault(); drawerRef.current.focus(); return }
+        const first = focusable[0]; const last = focusable[focusable.length - 1]
+        const active = document.activeElement
+        const inside = active instanceof Node && drawerRef.current.contains(active)
+        if (event.shiftKey && (!inside || active === first || active === drawerRef.current)) { event.preventDefault(); last.focus() }
+        else if (!event.shiftKey && (!inside || active === last)) { event.preventDefault(); first.focus() }
+      }
       document.addEventListener('keydown', onKey)
       wasDrawer.current = true
       return () => document.removeEventListener('keydown', onKey)

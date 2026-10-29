@@ -504,6 +504,17 @@ try {
       await page.waitForFunction((prev) => [...document.querySelectorAll('.assistant-drawer button')].some((b) => /^上下文/.test(b.textContent ?? '') && b.textContent !== prev && /钉住 1/.test(b.textContent ?? '')), labelBefore)
       assert.match(await contextButton.innerText(), /钉住 1/)
       if (shotDir) await page.screenshot({ path: join(shotDir, `narrow-${width}.png`) })
+      // 焦点陷阱：连续 Tab / Shift+Tab 焦点始终在抽屉内
+      const inDrawer = () => page.evaluate(() => Boolean(document.querySelector('.assistant-drawer')?.contains(document.activeElement)))
+      const tabStops = await drawer.evaluate((node) => node.querySelectorAll('button, [href], input, select, textarea, summary, [tabindex]:not([tabindex="-1"])').length)
+      for (let i = 0; i < tabStops + 3; i += 1) { await page.keyboard.press('Tab'); assert.ok(await inDrawer(), `${width}px：Tab 第 ${i + 1} 次焦点仍在抽屉内`) }
+      for (let i = 0; i < 5; i += 1) { await page.keyboard.press('Shift+Tab'); assert.ok(await inDrawer(), `${width}px：Shift+Tab 第 ${i + 1} 次焦点仍在抽屉内`) }
+      // 在抽屉里排除一条上下文，「排除 N」计数变化，再恢复
+      const firstCheckbox = drawer.locator('.context-sources li input[type="checkbox"]:not([disabled])').first()
+      await firstCheckbox.uncheck()
+      await page.waitForFunction(() => [...document.querySelectorAll('.assistant-drawer button')].some((b) => /^上下文（.*排除 1/.test(b.textContent ?? '')))
+      await drawer.locator('.context-sources li input[type="checkbox"]:not(:checked):not([disabled])').first().check()
+      await page.waitForFunction(() => [...document.querySelectorAll('.assistant-drawer button')].some((b) => /^上下文/.test(b.textContent ?? '') && !/排除/.test(b.textContent ?? '')))
       await drawer.locator('.context-sources li', { hasText: '人物 · 窄屏甲' }).getByRole('button', { name: '取消钉住' }).click()
       await page.waitForFunction(() => [...document.querySelectorAll('.assistant-drawer button')].some((b) => (b.textContent ?? '') === '上下文'))
       if (width === 900) await page.keyboard.press('Escape')
