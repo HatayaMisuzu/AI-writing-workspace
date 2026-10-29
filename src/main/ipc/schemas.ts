@@ -1,3 +1,4 @@
+import { PROMPT_TEMPLATE_MAX_LENGTH, validatePromptTemplate } from '../../shared/prompt-templates'
 import { z } from 'zod'
 import { checkBaseUrl } from '../../shared/base-url'
 
@@ -102,6 +103,13 @@ export const writingGoalsInputSchema = z.object({
   dailyChapterGoalEnabled: z.boolean().optional(),
   dailyChapterGoal: z.number().int().nullable().optional()
 }).strict()
+
+// P1-4：提示词模板（变量与长度由 validatePromptTemplate 校验，未知变量拒绝保存）
+export const promptTemplateModeSchema = z.enum(['discussion','brainstorm','generation','editing','organization','chapter_digest','proofreading','reader_review'])
+export const promptTemplateTextSchema = z.string().max(PROMPT_TEMPLATE_MAX_LENGTH).superRefine((text, ctx) => {
+  const check = validatePromptTemplate(text)
+  if (!check.ok) ctx.addIssue({ code: 'custom', message: check.error })
+})
 
 // P1-3 F10：章节字数区间（正整数，可只设一端，下限≤上限）
 const optionalPositiveInt = z.number().int().positive().nullable()

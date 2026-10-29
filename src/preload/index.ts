@@ -77,6 +77,11 @@ const api: WorkspaceApi = {
     getChapterWordRange: (projectId) => invoke('writing:get-word-range', projectId),
     setChapterWordRange: (projectId, range) => invoke('writing:set-word-range', projectId, range)
   },
+  prompts: {
+    list: (projectId) => invoke('prompts:list', projectId),
+    set: (projectId, mode, text) => invoke('prompts:set', projectId, mode, text),
+    reset: (projectId, mode) => invoke('prompts:reset', projectId, mode)
+  },
   backup: {
     exportProject: (projectId) => invoke('backup:export-project', projectId), importProject: () => invoke('backup:import-project'),
     importManuscript: () => invoke('backup:import-manuscript'),

@@ -3,6 +3,8 @@ import { z } from 'zod'
 import type { ProofreadIssue } from '../../shared/domain'
 import type { AppDatabase } from '../database/database'
 import { DocumentService } from '../services/document-service'
+import { PromptTemplateService } from '../services/prompt-template-service'
+import { withRoleTemplate } from './prompt-composer'
 import { OpenAICompatibleAdapter, ProviderService, type ProviderMessage } from './provider'
 import { splitText, type TextChunk } from './text-chunks'
 
@@ -42,6 +44,7 @@ export class ProofreadingRunner {
   }
 
   async run(projectId: string, documentId: string): Promise<ProofreadIssue[]> {
+    const contract = withRoleTemplate(CONTRACT, 'proofreading', new PromptTemplateService(this.db).getOverride(projectId, 'proofreading'))
     const content = this.documents.getContent(projectId, documentId)
     const model = this.providers.route('proofreading')
     const { config, apiKey } = this.providers.getWithSecret(model.providerId)
@@ -51,7 +54,7 @@ export class ProofreadingRunner {
     const collected: Array<{ issue: z.infer<typeof issueSchema>; chunk: TextChunk }> = []
     for (const [index, chunk] of chunks.entries()) {
       const user = chunks.length === 1 ? chunk.text : `这是正文第 ${index + 1}/${chunks.length} 段，只校对本段：\n${chunk.text}`
-      const parsed = await this.completeIssues(adapter, model.modelId, [{ role: 'system', content: CONTRACT }, { role: 'user', content: user }])
+      const parsed = await this.completeIssues(adapter, model.modelId, [{ role: 'system', content: contract }, { role: 'user', content: user }])
       parsed.issues.forEach((issue) => collected.push({ issue, chunk }))
     }
     return collected.flatMap(({ issue, chunk }) => {

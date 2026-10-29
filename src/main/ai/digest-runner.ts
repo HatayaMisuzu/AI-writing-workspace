@@ -1,6 +1,8 @@
 import type { AppDatabase } from '../database/database'
 import { chapterDigestSchema, ChapterDigestService, type ChapterDigestPayload } from './chapter-digest-service'
 import { ContextEngine } from './context-engine'
+import { PromptTemplateService } from '../services/prompt-template-service'
+import { withRoleTemplate } from './prompt-composer'
 import { OpenAICompatibleAdapter, ProviderService, type ProviderMessage } from './provider'
 import { DocumentService } from '../services/document-service'
 import { splitText } from './text-chunks'
@@ -23,6 +25,7 @@ export class ChapterDigestRunner {
   }
 
   async run(projectId: string, chapterId: string): Promise<{ id: string; payload: unknown; repaired: boolean }> {
+    const contract = withRoleTemplate(DIGEST_CONTRACT, 'chapter_digest', new PromptTemplateService(this.db).getOverride(projectId, 'chapter_digest'))
     const requestKey = `${projectId}:${chapterId}`
     const sequence = (this.requestSequence.get(requestKey) ?? 0) + 1
     this.requestSequence.set(requestKey, sequence)
@@ -42,7 +45,7 @@ export class ChapterDigestRunner {
       const payloads: ChapterDigestPayload[] = []
       let repaired = false
       for (const [index, chunk] of chunks.entries()) {
-        const messages: ProviderMessage[] = [{ role: 'system', content: DIGEST_CONTRACT },
+        const messages: ProviderMessage[] = [{ role: 'system', content: contract },
           { role: 'user', content: `这是章节第 ${index + 1}/${chunks.length} 段，只总结本段：\n${chunk.text}` }]
         const result = await this.completePayload(adapter, model.modelId, messages)
         assertLatest()
@@ -59,7 +62,7 @@ export class ChapterDigestRunner {
       const stored = this.digests.storeFromModel(projectId, chapterId, JSON.stringify(combined), sourceRevision)
       return { ...stored, repaired }
     }
-    const messages: ProviderMessage[] = [{ role: 'system', content: DIGEST_CONTRACT }, { role: 'user', content: contextText }]
+    const messages: ProviderMessage[] = [{ role: 'system', content: contract }, { role: 'user', content: contextText }]
     const raw = await adapter.complete({ model: model.modelId, messages })
     try {
       assertLatest()
@@ -67,7 +70,7 @@ export class ChapterDigestRunner {
       return { ...stored, repaired: false }
     } catch (firstError) {
       if (firstError instanceof Error && ['DIGEST_SOURCE_STALE', 'DIGEST_REQUEST_SUPERSEDED'].includes(firstError.message)) throw firstError
-      const repairMessages: ProviderMessage[] = [{ role: 'system', content: `${DIGEST_CONTRACT}\n上一次输出无法解析。修复为严格 JSON；不得改变已给内容的事实。` },
+      const repairMessages: ProviderMessage[] = [{ role: 'system', content: `${contract}\n上一次输出无法解析。修复为严格 JSON；不得改变已给内容的事实。` },
         { role: 'user', content: `原始章节上下文：\n${contextText}\n\n无效输出：\n${raw}\n\n解析错误：${firstError instanceof Error ? firstError.message : String(firstError)}` }]
       const repairedRaw = await adapter.complete({ model: model.modelId, messages: repairMessages })
       try {

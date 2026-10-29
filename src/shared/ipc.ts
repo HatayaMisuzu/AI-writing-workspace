@@ -1,3 +1,5 @@
+import type { PromptTemplateEntry } from './prompt-templates'
+import type { AIMode } from './domain'
 import type { ExportChapterRange } from './export-range'
 import type {
   ContextBundle,
@@ -133,6 +135,11 @@ export interface WorkspaceApi {
     }): Promise<WritingGoals>
     getChapterWordRange(projectId: string): Promise<ChapterWordRange>
     setChapterWordRange(projectId: string, range: ChapterWordRange): Promise<ChapterWordRange>
+  }
+  prompts: {
+    list(projectId: string): Promise<PromptTemplateEntry[]>
+    set(projectId: string, mode: AIMode, text: string): Promise<PromptTemplateEntry[]>
+    reset(projectId: string, mode: AIMode): Promise<PromptTemplateEntry[]>
   }
   backup: {
     exportProject(projectId: string): Promise<string | null>
