@@ -1,3 +1,4 @@
+// 编辑器 content 采纳判定（isStaleContent）的纯函数单测
 import { describe, expect, it } from 'vitest'
 import { isStaleContent } from '../src/renderer/src/services/content-adoption'
 
