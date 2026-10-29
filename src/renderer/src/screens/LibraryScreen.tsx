@@ -2,7 +2,7 @@ import { userErrorMessage } from '../../../shared/user-error'
 import { Archive, Download, FileText, MoreHorizontal, Plus, Search, ShieldCheck } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import type { Project } from '../../../shared/domain'
-import type { ExportChapterRange } from '../../../shared/export-range'
+import { emptyExportNotice, type ExportChapterRange } from '../../../shared/export-range'
 import { Modal } from '../components/Modal'
 
 type ExportFormat = 'txt' | 'md' | 'docx'
@@ -19,6 +19,13 @@ export function LibraryScreen({ projects, onOpen, onCreate, onImport, onImportMa
   const [filter, setFilter] = useState<'all' | 'recent' | 'archived'>('all')
   const [menuId, setMenuId] = useState<string>()
   const [exportTarget, setExportTarget] = useState<Project>()
+  const [exportNotice, setExportNotice] = useState<string>()
+  /** 菜单导出（不带范围）：空结果给出与范围导出一致的提示。 */
+  const menuExport = async (project: Project, format: ExportFormat, onlyFinal?: boolean): Promise<void> => {
+    setExportNotice(undefined)
+    try { setExportNotice(emptyExportNotice(await onExport(project, format, onlyFinal), { onlyFinal }) ?? undefined) }
+    catch (next) { setExportNotice(userErrorMessage(next)) }
+  }
   const filtered = useMemo(() => projects.filter((project) => {
     if (filter === 'archived' && !project.archived) return false
     if (filter !== 'archived' && project.archived) return false
@@ -29,6 +36,7 @@ export function LibraryScreen({ projects, onOpen, onCreate, onImport, onImportMa
 
   return <main className="library-screen">
     {exportTarget && <ExportRangeDialog project={exportTarget} onClose={() => setExportTarget(undefined)} onExport={onExport} />}
+    {exportNotice && <div className="export-empty-notice" role="status" data-testid="library-export-notice">{exportNotice}<button onClick={() => setExportNotice(undefined)}>知道了</button></div>}
     <div className="library-head">
       <div><h1>作品库</h1><p>每一部作品都有独立的正文、记忆、对话与检索空间。</p></div>
       <div className="head-actions"><button className="primary" onClick={onCreate}><Plus size={17} />新建作品</button><button onClick={onImportManuscript}><FileText size={17} />导入 TXT/MD</button><button onClick={onImport}><Download size={17} />导入备份</button></div>
@@ -54,7 +62,7 @@ export function LibraryScreen({ projects, onOpen, onCreate, onImport, onImportMa
             <span>{typeName[project.projectType]}</span><span>{relative(project.updatedAt)}</span><span>{formatCount(project.totalWordCount)}</span>
             <span className="local-status"><ShieldCheck size={15} />本地保存</span>
             <div className="row-actions"><button className="text-action" onClick={() => onOpen(project)}>继续写作</button><button className="icon-button" onClick={() => setMenuId(menuId === project.id ? undefined : project.id)}><MoreHorizontal size={18} /></button>
-              {menuId === project.id && <div className="context-menu"><button onClick={() => onBackup(project)}><Download size={15} />创建项目备份</button><button onClick={() => onExport(project, 'txt')}><FileText size={15} />导出 TXT</button><button onClick={() => onExport(project, 'md')}><FileText size={15} />导出 Markdown</button><button onClick={() => onExport(project, 'docx')}><FileText size={15} />导出 DOCX</button><button onClick={() => onExport(project, 'txt', true)}><FileText size={15} />导出仅定稿 TXT</button><button onClick={() => onExport(project, 'md', true)}><FileText size={15} />导出仅定稿 Markdown</button><button onClick={() => { setMenuId(undefined); setExportTarget(project) }}><FileText size={15} />按章节范围导出…</button><button onClick={() => onArchive(project)}><Archive size={15} />{project.archived ? '取消归档' : '归档作品'}</button></div>}
+              {menuId === project.id && <div className="context-menu"><button onClick={() => onBackup(project)}><Download size={15} />创建项目备份</button><button onClick={() => void menuExport(project, 'txt')}><FileText size={15} />导出 TXT</button><button onClick={() => void menuExport(project, 'md')}><FileText size={15} />导出 Markdown</button><button onClick={() => void menuExport(project, 'docx')}><FileText size={15} />导出 DOCX</button><button onClick={() => void menuExport(project, 'txt', true)}><FileText size={15} />导出仅定稿 TXT</button><button onClick={() => void menuExport(project, 'md', true)}><FileText size={15} />导出仅定稿 Markdown</button><button onClick={() => { setMenuId(undefined); setExportTarget(project) }}><FileText size={15} />按章节范围导出…</button><button onClick={() => onArchive(project)}><Archive size={15} />{project.archived ? '取消归档' : '归档作品'}</button></div>}
             </div>
           </div>)}
         </div>
@@ -64,7 +72,6 @@ export function LibraryScreen({ projects, onOpen, onCreate, onImport, onImportMa
   </main>
 }
 
-const isEmptyExport = (result: unknown): boolean => typeof result === 'object' && result !== null && (result as { status?: unknown }).status === 'empty'
 
 /** P1-2 F12：第 N–M 章（章树顺序，1 起始）× 仅定稿 × 格式。 */
 function ExportRangeDialog({ project, onClose, onExport }: { project: Project; onClose(): void; onExport(project: Project, format: ExportFormat, onlyFinal?: boolean, range?: ExportChapterRange): void | Promise<unknown> }): React.JSX.Element {
@@ -82,7 +89,8 @@ function ExportRangeDialog({ project, onClose, onExport }: { project: Project; o
     setNotice(undefined)
     try {
       const result = await onExport(project, format, onlyFinal, range)
-      if (isEmptyExport(result)) { setNotice(onlyFinal ? '所选范围内没有定稿章节，未生成文件。' : '所选范围内没有章节，未生成文件。'); return }
+      const empty = emptyExportNotice(result, { onlyFinal, range })
+      if (empty) { setNotice(empty); return }
       onClose()
     } catch (next) { setError(userErrorMessage(next)) }
   }

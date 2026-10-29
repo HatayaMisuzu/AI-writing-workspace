@@ -8,6 +8,7 @@ import { computeContextInputBudget, DEFAULT_CONTEXT_WINDOW, DEFAULT_MAX_OUTPUT }
 import { normalizeCandidateCount } from '../../shared/candidate-count'
 import { ChatService } from '../services/chat-service'
 import { DocumentService } from '../services/document-service'
+import { PromptTemplateService } from '../services/prompt-template-service'
 
 const estimateTokens = (text: string): number => Math.ceil(text.length / 2.2)
 
@@ -17,11 +18,12 @@ type RuntimeAdapterFactory = (baseUrl: string, apiKey: string) => RuntimeAdapter
 export class AICreativeRuntime {
   private readonly context: ContextEngine
   private readonly chat: ChatService
+  private readonly templates: PromptTemplateService
   private readonly controllers = new Map<string, AbortController>()
 
   constructor(private readonly db: AppDatabase, private readonly providers: ProviderService,
     private readonly adapterFactory: RuntimeAdapterFactory = (baseUrl, apiKey) => new OpenAICompatibleAdapter(baseUrl, apiKey)) {
-    this.context = new ContextEngine(db); this.chat = new ChatService(db)
+    this.context = new ContextEngine(db); this.chat = new ChatService(db); this.templates = new PromptTemplateService(db)
   }
 
   async *run(requestId: string, task: AITaskEnvelope, threadId: string, userMessageId: string, assistantMessageId: string): AsyncIterable<{ requestId: string; chunk: string; context?: ContextBundle; candidates?: string[] }> {
@@ -93,7 +95,7 @@ export class AICreativeRuntime {
     const maxOutput = Math.max(1, model?.maxOutput ?? Math.min(DEFAULT_MAX_OUTPUT, Math.floor(contextWindow * 0.2)))
     // S7：预算 = 窗口 − 最大输出 − 余量
     const inputLimit = Math.max(256, computeContextInputBudget(contextWindow, maxOutput))
-    const systemOnly = this.messageTokens(composeProviderMessages({ task: { ...task, userIntent: '' }, context: {
+    const systemOnly = this.messageTokens(composeProviderMessages({ roleTemplate: this.templates.getOverride(task.projectId, task.mode), task: { ...task, userIntent: '' }, context: {
       projectId: task.projectId, policy: task.mode === 'reader_review' ? 'reader' : 'creative', items: [],
       metadata: { estimatedTokens: 0, sourceIds: [], excludedKinds: [] }
     }, history: [] }))
@@ -103,7 +105,7 @@ export class AICreativeRuntime {
     const history = this.fitHistory(this.loadHistory(providerTask, threadId), Math.floor(inputLimit * 0.25))
     const emptyContext: ContextBundle = { projectId: task.projectId, policy: task.mode === 'reader_review' ? 'reader' : 'creative',
       items: [], metadata: { estimatedTokens: 0, sourceIds: [], excludedKinds: [] } }
-    const fixedTokens = this.messageTokens(composeProviderMessages({ task: providerTask, context: emptyContext, history }))
+    const fixedTokens = this.messageTokens(composeProviderMessages({ task: providerTask, context: emptyContext, history, roleTemplate: this.templates.getOverride(task.projectId, task.mode) }))
     const builtContext = this.context.build(providerTask, Math.max(0, inputLimit - fixedTokens))
     return this.fitFinalMessages(providerTask, builtContext, history, inputLimit)
   }
@@ -120,7 +122,7 @@ export class AICreativeRuntime {
 
   buildMessages(task: AITaskEnvelope, context: ContextBundle, threadId: string): ProviderMessage[] {
     const history = this.loadHistory(task, threadId)
-    return composeProviderMessages({ task, context, history })
+    return composeProviderMessages({ task, context, history, roleTemplate: this.templates.getOverride(task.projectId, task.mode) })
   }
 
   private loadHistory(task: AITaskEnvelope, threadId: string): ProviderMessage[] {
@@ -148,8 +150,9 @@ export class AICreativeRuntime {
   private fitFinalMessages(task: AITaskEnvelope, source: ContextBundle, history: ProviderMessage[], limit: number): { messages: ProviderMessage[]; context: ContextBundle } {
     const context: ContextBundle = { ...source, items: source.items.map((item) => ({ ...item })), metadata: { ...source.metadata, omitted: [...(source.metadata.omitted ?? [])] } }
     const fittedHistory = [...history]
+    const roleTemplate = this.templates.getOverride(task.projectId, task.mode)
     while (context.items.length) {
-      const messages = composeProviderMessages({ task, context, history: fittedHistory })
+      const messages = composeProviderMessages({ task, context, history: fittedHistory, roleTemplate })
       const overflow = this.messageTokens(messages) - limit
       if (overflow <= 0) return { messages, context }
       const last = context.items.at(-1)!
@@ -159,10 +162,10 @@ export class AICreativeRuntime {
       context.metadata.estimatedTokens = context.items.reduce((sum, item) => sum + estimateTokens(item.content), 0)
       context.metadata.sourceIds = context.items.map((item) => item.id)
     }
-    let messages = composeProviderMessages({ task, context, history: fittedHistory })
+    let messages = composeProviderMessages({ task, context, history: fittedHistory, roleTemplate })
     while (this.messageTokens(messages) > limit && fittedHistory.length) {
       fittedHistory.shift()
-      messages = composeProviderMessages({ task, context, history: fittedHistory })
+      messages = composeProviderMessages({ task, context, history: fittedHistory, roleTemplate })
     }
     if (this.messageTokens(messages) > limit) throw Object.assign(new Error('模型输入超出上下文预算。'), { code: 'MODEL_CONTEXT_BUDGET_EXCEEDED' })
     return { messages, context }

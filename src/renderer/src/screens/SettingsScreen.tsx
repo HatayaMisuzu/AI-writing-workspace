@@ -1,6 +1,7 @@
 import { Check, Plus, Save, Server, TestTube2, XCircle } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { ModelConfig, ProviderConfig, RoutedTask } from '../../../shared/domain'
+import { SETTINGS_PROJECT_HINTS } from '../services/settings-hints'
 import { userErrorMessage } from '../../../shared/user-error'
 import { BASE_URL_QUERY_SECRET_HINT, checkBaseUrl, hasSecretQuery } from '../../../shared/base-url'
 import {
@@ -134,7 +135,7 @@ export function SettingsScreen(): React.JSX.Element {
   const enabledModels = models.filter((item) => item.enabled)
   const defaultModel = enabledModels.find((item) => item.isDefault)
   return <main className="settings-screen">
-    <aside className="settings-nav"><div className="settings-nav-label">应用设置</div><button className="active"><Server size={18} />模型与服务</button></aside>
+    <aside className="settings-nav"><div className="settings-nav-label">应用设置</div><button className="active"><Server size={18} />模型与服务</button><div className="settings-nav-label">作品内设置</div>{SETTINGS_PROJECT_HINTS.map((hint) => <p key={hint} className="settings-nav-hint" data-testid="settings-project-hint">{hint}</p>)}</aside>
     <section className="settings-content">
       <header>
         <h1>模型与服务</h1>

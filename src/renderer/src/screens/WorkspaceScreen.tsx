@@ -6,6 +6,7 @@ import { EditorSurface, type EditorController, type EditorSelection } from '../c
 import { AssistantPanel } from '../components/AssistantPanel'
 import { ChapterOutlineAside, CharactersView, HistoryView, IdeasView, MemoryView, NotesView, OutlineView, PatchDrawer } from './ProjectViews'
 import { DailyStatsView } from './DailyStatsView'
+import { PromptTemplatesView } from './PromptTemplatesView'
 import { StockpileView } from './StockpileView'
 import { ForeshadowView } from './ForeshadowView'
 import { RelatedTimelineEvents, TimelineView } from './TimelineView'
@@ -217,6 +218,7 @@ export function WorkspaceScreen({ project, onProjectChanged, onSettings, onRegis
         : section === 'story' ? <NotesView projectId={project.id} section="story" onRegisterFlush={registerAuxiliaryFlush} />
         : section === 'references' ? <NotesView projectId={project.id} section="reference" onRegisterFlush={registerAuxiliaryFlush} />
         : section === 'characters' ? <CharactersView projectId={project.id} onRegisterFlush={registerAuxiliaryFlush} focusCharacterId={characterFocus} onOpenTimelineEvent={(id) => void openTimelineEvent(id)} />
+        : section === 'prompts' ? <PromptTemplatesView project={project} />
         : section === 'daily' ? <DailyStatsView project={project} />
         : section === 'stockpile' ? <StockpileView project={project} chapters={tree.filter((node) => node.type === 'chapter')} onProgressChanged={() => { onProjectChanged(); void refreshTree() }} />
         : section === 'timeline' ? <TimelineView project={project} chapters={tree.filter((node) => node.type === 'chapter')} focusEventId={timelineFocus} onOpenChapter={(id) => void openChapterById(id)} onOpenCharacter={(id) => void openCharacter(id)} />

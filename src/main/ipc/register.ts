@@ -1,3 +1,4 @@
+import { PromptTemplateService } from '../services/prompt-template-service'
 import { runManuscriptExport } from '../services/manuscript-export-flow'
 import type { ExportChapterRange } from '../../shared/export-range'
 import { BrowserWindow, dialog, ipcMain, type IpcMainEvent, type IpcMainInvokeEvent } from 'electron'
@@ -42,7 +43,7 @@ const handle = <T extends unknown[], R>(channel: string, fn: (...args: T) => R |
 }
 
 import {
-  idSchema, shortTextSchema, contentSchema, nonNegativeIntSchema, projectCreateSchema, documentCreateSchema, documentSaveSchema, noteSaveSchema, characterSaveSchema, providerInputSchema, modelSchema, routeSchema, patchProposalSchema, snapshotReasonSchema, aiStartSchema, aiPreviewContextSchema, noteSectionSchema, outlineSaveSchema, batchCreateChaptersSchema, writingGoalsInputSchema, chapterStatusSchema, foreshadowRegisterSchema, foreshadowSetStateSchema, foreshadowUpdateMetaSchema, timelineSortModeSchema, timelineEventSaveSchema, chapterWordRangeSchema
+  idSchema, shortTextSchema, contentSchema, nonNegativeIntSchema, projectCreateSchema, documentCreateSchema, documentSaveSchema, noteSaveSchema, characterSaveSchema, providerInputSchema, modelSchema, routeSchema, patchProposalSchema, snapshotReasonSchema, aiStartSchema, aiPreviewContextSchema, noteSectionSchema, outlineSaveSchema, batchCreateChaptersSchema, writingGoalsInputSchema, chapterStatusSchema, foreshadowRegisterSchema, foreshadowSetStateSchema, foreshadowUpdateMetaSchema, timelineSortModeSchema, timelineEventSaveSchema, chapterWordRangeSchema, promptTemplateModeSchema, promptTemplateTextSchema
 } from './schemas'
 const parse = <T>(schema: z.ZodType<T>, value: unknown): T => schema.parse(value)
 
@@ -68,6 +69,7 @@ export function registerIpc(db: AppDatabase, codec: SecretCodec, network?: Netwo
   const memoryIntent = new MemoryIntentRunner(db, providers)
   const proofreading = new ProofreadingRunner(db, providers)
   const writingDaily = new WritingDailyService(db)
+  const promptTemplates = new PromptTemplateService(db)
   const foreshadows = new ForeshadowService(db)
   const timeline = new TimelineService(db)
 
@@ -168,6 +170,9 @@ export function registerIpc(db: AppDatabase, codec: SecretCodec, network?: Netwo
   handle('writing:set-goals', (projectId: string, input: unknown) => writingDaily.setGoals(parse(idSchema, projectId), parse(writingGoalsInputSchema, input)))
   handle('writing:get-word-range', (projectId: string) => writingDaily.getChapterWordRange(parse(idSchema, projectId)))
   handle('writing:set-word-range', (projectId: string, range: unknown) => writingDaily.setChapterWordRange(parse(idSchema, projectId), parse(chapterWordRangeSchema, range)))
+  handle('prompts:list', (projectId: string) => promptTemplates.list(parse(idSchema, projectId)))
+  handle('prompts:set', (projectId: string, mode: unknown, text: unknown) => promptTemplates.set(parse(idSchema, projectId), parse(promptTemplateModeSchema, mode), parse(promptTemplateTextSchema, text)))
+  handle('prompts:reset', (projectId: string, mode: unknown) => promptTemplates.reset(parse(idSchema, projectId), parse(promptTemplateModeSchema, mode)))
   handle('linter:run', (text: string) => lintChineseText(text))
   handle('digests:run', (projectId: string, chapterId: string) => digestRunner.run(parse(idSchema, projectId), parse(idSchema, chapterId)))
   handle('digests:list', (projectId: string, chapterId?: string) => digests.list(projectId, chapterId))
