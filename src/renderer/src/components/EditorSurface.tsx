@@ -8,6 +8,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Character, CharacterHoverPrefs, DocumentContent, DocumentNode, DocumentTaskTarget, LocalLintIssue, ProofreadIssue, TextPatch } from '../../../shared/domain'
 import { textIdentity } from '../../../shared/text-identity'
 import { findTextRange, findTextRanges, plainTextRangeToPm } from '../services/prosemirror-range'
+import { LIVE_WORD_COUNT_DELAY_MS, liveWordCountOf } from '../services/live-word-count'
 import { SaveCoordinator, type SaveState } from '../services/save-coordinator'
 import { NameMatcher, termsFromCharacters } from '../../../shared/name-matcher'
 import { CHARACTERS_CHANGED_EVENT, HOVER_DEGRADE_NOTICE, characterHoverPlugin, hitAt, ignoreHoverAt, isHoverDegraded, setHoverMatcher, type DecoratedHit } from '../services/character-hover'
@@ -48,6 +49,15 @@ export function EditorSurface({ node, content, focusMode, onFocusMode, onSaved, 
   const [proofreadError, setProofreadError] = useState<string>()
   const [ignoredIssues, setIgnoredIssues] = useState<Set<string>>(new Set())
   const [liveWordCount, setLiveWordCount] = useState(content.wordCount)
+  const wordCountTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const scheduleWordCount = useCallback((): void => {
+    if (wordCountTimer.current) clearTimeout(wordCountTimer.current)
+    wordCountTimer.current = setTimeout(() => {
+      wordCountTimer.current = undefined
+      setLiveWordCount(liveWordCountOf(latestPlainText.current))
+    }, LIVE_WORD_COUNT_DELAY_MS)
+  }, [])
+  useEffect(() => () => { if (wordCountTimer.current) clearTimeout(wordCountTimer.current) }, [])
   const onSavedRef = useRef(onSaved)
   const pendingStyleSample = useRef<{ origin: 'ai'; text: string } | undefined>(undefined)
   const renderedDocumentId = useRef(node.id)
@@ -104,11 +114,12 @@ export function EditorSurface({ node, content, focusMode, onFocusMode, onSaved, 
     onUpdate: ({ editor: activeEditor }) => {
       const plainText = activeEditor.getText({ blockSeparator: '\n\n' })
       latestPlainText.current = plainText
-      setLocalIssues([])
-      setIgnoredIssues(new Set())
+      // 按键路径只做必要的事：没有提示时不触发重渲染；字数是全文正则（20 万字约 7–17ms），推迟到停顿后再算
+      setLocalIssues((previous) => previous.length ? [] : previous)
+      setIgnoredIssues((previous) => previous.size ? new Set() : previous)
       const styleSample = pendingStyleSample.current
       pendingStyleSample.current = undefined
-      setLiveWordCount((plainText.match(/[\p{Script=Han}]/gu)?.length ?? 0) + (plainText.match(/[A-Za-z0-9]+/g)?.length ?? 0))
+      scheduleWordCount()
       coordinator.markDirty({ editorJson: activeEditor.getJSON() as Record<string, unknown>, plainText, styleSample })
       coordinator.schedule()
     },

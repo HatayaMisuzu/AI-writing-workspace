@@ -417,8 +417,8 @@ try {
     await running.page.getByRole('button', { name: '恢复此版本' }).first().click()
     await running.page.getByRole('button', { name: '确认' }).click()
     await running.page.getByRole('button', { name: '正文', exact: true }).click()
-    await running.page.locator('.manuscript-editor').waitFor()
-    assert.equal((await running.page.locator('.manuscript-editor').innerText()).trim(), '快照版本一')
+    await running.page.locator('.manuscript-editor', { hasText: '快照版本一' }).waitFor({ timeout: 5_000 }).catch(() => {})
+    assert.equal((await running.page.locator('.manuscript-editor').textContent()).trim(), '快照版本一')
   })
 
   await record('摘要请求中正文变化不会写成 fresh', async () => {
@@ -808,7 +808,7 @@ try {
     assert.deepEqual(prefs.ignoredTerms, [{ characterId: f14.characterId, term: '林栀' }])
   })
 
-  await record('F14 ⑫ 20 万字章节显示降级提示，开启悬停的按键到绘制 p95 不明显高于关闭悬停基线（绝对值见日志）', async () => {
+  await record('F14 ⑫ 20 万字章节显示降级提示，开启悬停的按键到绘制 p95 ≤ 50ms 且不明显高于关闭悬停基线', async () => {
     const page = running.page
     await openChapter(page, '长章')
     await page.getByTestId('hover-degraded').waitFor({ timeout: 15_000 })
@@ -828,7 +828,7 @@ try {
       await page.waitForTimeout(800)
       const samples = await page.evaluate(() => window.__f14Latency.toSorted((a, b) => a - b))
       assert.ok(samples.length >= 38)
-      return { p95: samples[Math.min(samples.length - 1, Math.ceil(samples.length * 0.95) - 1)], max: samples.at(-1), n: samples.length }
+      return { p50: samples[Math.floor((samples.length - 1) / 2)], p95: samples[Math.min(samples.length - 1, Math.ceil(samples.length * 0.95) - 1)], max: samples.at(-1), n: samples.length }
     }
     await measure() // 预热（首轮含 JIT / 首次布局）
     // 交替测 3 轮「开 / 关」，各取 p95 的中位数，减少机器抖动影响
@@ -843,12 +843,13 @@ try {
       onRuns.push(await measure())
       await toggleHover(false); offRuns.push(await measure()); await toggleHover(true)
     }
-    const median = (runs) => runs.map((run) => run.p95).toSorted((x, y) => x - y)[1]
+    const median = (runs, key = 'p95') => runs.map((run) => run[key]).toSorted((x, y) => x - y)[1]
     const withHover = { p95: median(onRuns), max: Math.max(...onRuns.map((run) => run.max)) }
     const baseline = { p95: median(offRuns), max: Math.max(...offRuns.map((run) => run.max)) }
     process.stdout.write(`F14 200k keypress→paint p95: hover on ${withHover.p95.toFixed(1)}ms (max ${withHover.max.toFixed(1)}), hover off ${baseline.p95.toFixed(1)}ms (max ${baseline.max.toFixed(1)})\n`)
-    // spec ⑫ 的绝对值 50ms：在 xvfb 软件渲染下，关闭悬停的基线本身就超过 50ms（编辑器每次按键的 getText/getJSON），
-    // 不属于 F14 引入；这里断言「不明显增加」：开启后 p95 ≤ 基线 × 1.25 + 10ms。绝对值见日志，PR 中如实列出。
+    process.stdout.write(`F14 200k keypress→paint p50: hover on ${median(onRuns, 'p50').toFixed(1)}ms, hover off ${median(offRuns, 'p50').toFixed(1)}ms\n`)
+    // spec ⑫：开启悬停 p95 ≤ 50ms（屏外段落 content-visibility 跳过布局、字数延后统计之后可达），同时仍要求不明显高于关闭基线
+    assert.ok(withHover.p95 <= 50, `开启悬停 p95 ${withHover.p95.toFixed(1)}ms 应 ≤ 50ms`)
     assert.ok(withHover.p95 <= baseline.p95 * 1.25 + 10, `开启悬停 p95 ${withHover.p95.toFixed(1)}ms 不应明显高于基线 ${baseline.p95.toFixed(1)}ms`)
     // 滚动到中间后，附近段落也有下划线
     await page.locator('.manuscript-editor').evaluate((editor) => { let element = editor; while (element && element.scrollHeight <= element.clientHeight + 10) element = element.parentElement; (element ?? document.scrollingElement).scrollTop = (element ?? document.scrollingElement).scrollHeight / 2 })
@@ -856,6 +857,67 @@ try {
     const middle = await page.evaluate(() => { const hits = [...document.querySelectorAll('.manuscript-editor .character-hit')]; const view = window.innerHeight; return hits.some((hit) => { const rect = hit.getBoundingClientRect(); return rect.top >= 0 && rect.bottom <= view }) })
     assert.ok(middle, '滚动后可见区域内有下划线')
     await waitSaved(page)
+  })
+
+  // 按键性能 PR：自动保存改为「停顿 700ms / 连续输入最迟 2000ms」（save-coordinator.ts SAVE_MAX_WAIT_MS）。
+  // 数据丢失上限：强杀时最多丢「最近 2000ms 内的输入 + 一次进行中的保存」。这里给进行中的保存 + 按键投递留 500ms 余量。
+  const SAVE_MAX_WAIT_MS = 2000
+  const KILL_LOSS_BOUND_MS = SAVE_MAX_WAIT_MS + 500
+  await record('按键性能：输入后立即切章 / 回作品库都会先落盘（不等防抖）', async () => {
+    const page = running.page
+    const made = await page.evaluate(async (projectId) => {
+      const tree = await window.workspace.documents.tree(projectId)
+      const volume = tree.find((item) => item.type === 'volume')
+      const a = await window.workspace.documents.create({ projectId, parentId: volume.id, type: 'chapter', title: '强杀章' })
+      return { kill: a.id }
+    }, ids.projectId)
+    f14.kill = made.kill
+    await page.reload(); await page.getByRole('button', { name: '继续写作' }).click(); await page.locator('.manuscript-editor').waitFor()
+    await openChapter(page, '强杀章')
+    await page.locator('.manuscript-editor').click()
+    await page.keyboard.type('切章前一刻')
+    await openChapter(page, '悬停章') // 不等待：切章必须先 flush
+    await page.locator('.manuscript-editor', { hasText: '林栀推门进来' }).waitFor()
+    const afterSwitch = await page.evaluate(async ({ projectId, id }) => (await window.workspace.documents.get(projectId, id)).plainText, { projectId: ids.projectId, id: made.kill })
+    assert.equal(afterSwitch, '切章前一刻')
+    await openChapter(page, '强杀章')
+    await page.locator('.manuscript-editor', { hasText: '切章前一刻' }).waitFor()
+    await page.locator('.manuscript-editor').click(); await page.keyboard.press('Control+End')
+    await page.keyboard.type('回库前一刻')
+    await page.locator('.works-rail button[title="作品库"]').click()
+    await page.getByRole('button', { name: '继续写作' }).first().waitFor()
+    const afterLeave = await page.evaluate(async ({ projectId, id }) => (await window.workspace.documents.get(projectId, id)).plainText, { projectId: ids.projectId, id: made.kill })
+    assert.equal(afterLeave, '切章前一刻回库前一刻')
+    await page.getByRole('button', { name: '继续写作' }).first().click(); await page.locator('.manuscript-editor').waitFor()
+  })
+
+  await record(`按键性能：连续输入中强杀进程，重启后丢失的只有最后 ≤${KILL_LOSS_BOUND_MS}ms 的输入`, async () => {
+    let page = running.page
+    await openChapter(page, '强杀章')
+    await page.locator('.manuscript-editor', { hasText: '切章前一刻回库前一刻' }).waitFor()
+    await page.locator('.manuscript-editor').click(); await page.keyboard.press('Control+End')
+    await page.keyboard.press('Enter')
+    const typedAt = []
+    // 每 50ms 一键、约 5 秒不停顿：旧逻辑（只有 700ms 停顿防抖）在这期间一次都不会保存
+    for (let i = 0; i < 80; i += 1) { typedAt.push(Date.now()); await page.keyboard.type(String(i % 10)); await page.waitForTimeout(50) }
+    const killAt = Date.now()
+    await killApp(running)
+    running = await launch()
+    page = running.page
+    watchRendererRequests(page)
+    const persisted = await page.evaluate(async ({ projectId, id }) => (await window.workspace.documents.get(projectId, id)).plainText, { projectId: ids.projectId, id: f14.kill })
+    // 之前的段落不含数字：只取数字串比较，与光标落在段首/段尾无关
+    const typed = (persisted.match(/[0-9]+/g) ?? []).join('')
+    const expected = Array.from({ length: 80 }, (_, i) => String(i % 10)).join('')
+    assert.ok(expected.startsWith(typed), `落盘内容必须是已输入内容的前缀：${typed}`)
+    const kept = typed.length
+    const lostWindowMs = kept >= 80 ? 0 : killAt - typedAt[kept]
+    process.stdout.write(`kill-loss: typed 80 over ${killAt - typedAt[0]}ms, persisted ${kept}, lost ${80 - kept} (window ${lostWindowMs}ms, bound ${KILL_LOSS_BOUND_MS}ms)\n`)
+    assert.ok(kept > 0, '连续输入期间也必须有中途保存（最迟 2000ms）')
+    assert.ok(lostWindowMs <= KILL_LOSS_BOUND_MS, `丢失窗口 ${lostWindowMs}ms 超过上限 ${KILL_LOSS_BOUND_MS}ms`)
+    assert.ok(persisted.includes('切章前一刻回库前一刻'), '强杀前已保存的正文保留')
+    await page.getByRole('button', { name: '继续写作' }).click()
+    await page.locator('.manuscript-editor').waitFor()
   })
 
   await record('F14 ⑪ 小黑屋内能悬停，看不到「打开人物卡」，网络请求为 0', async () => {
