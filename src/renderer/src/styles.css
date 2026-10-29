@@ -498,6 +498,7 @@ button.link { border: 0; background: none; padding: 0; color: var(--accent, #2f6
 .timeline-mode { display: flex; gap: 6px; flex-wrap: wrap; }
 .timeline-mode button.active { font-weight: 600; border-color: var(--ink); }
 .timeline-grid { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 18px; min-height: 0; }
+@media (max-width: 1099px) { .timeline-grid { grid-template-columns: minmax(0, 1fr); } }
 .timeline-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
 .timeline-item { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; background: #fff; }
 .timeline-item.active { border-color: var(--ink); }

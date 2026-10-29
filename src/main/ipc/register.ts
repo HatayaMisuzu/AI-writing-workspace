@@ -1,3 +1,4 @@
+import type { ExportChapterRange } from '../../shared/export-range'
 import { BrowserWindow, dialog, ipcMain, type IpcMainEvent, type IpcMainInvokeEvent } from 'electron'
 import { z } from 'zod'
 import type { AppDatabase } from '../database/database'
@@ -228,15 +229,16 @@ export function registerIpc(db: AppDatabase, codec: SecretCodec, network?: Netwo
     if (result.canceled || !result.filePaths[0]) return null
     return backup.importManuscript(result.filePaths[0])
   })
-  handle('backup:export-manuscript', async (projectId: string, format: 'txt' | 'md' | 'docx', onlyFinal?: boolean) => {
+  handle('backup:export-manuscript', async (projectId: string, format: 'txt' | 'md' | 'docx', onlyFinal?: boolean, range?: ExportChapterRange) => {
     projectId = parse(idSchema, projectId)
     format = parse(z.enum(['txt', 'md', 'docx']), format)
     const finalOnly = parse(z.boolean().optional(), onlyFinal) === true
+    const chapterRange = parse(z.object({ from: z.number().int(), to: z.number().int() }).optional(), range)
     const project = projects.get(projectId)
-    const suffix = finalOnly ? '-仅定稿' : ''
+    const suffix = `${chapterRange ? `-第${chapterRange.from}-${chapterRange.to}章` : ''}${finalOnly ? '-仅定稿' : ''}`
     const result = await dialog.showSaveDialog({ defaultPath: `${project.title}${suffix}.${format}`, filters: [{ name: format.toUpperCase(), extensions: [format] }] })
     if (result.canceled || !result.filePath) return null
-    await backup.exportManuscript(projectId, result.filePath, format, { onlyFinal: finalOnly })
+    await backup.exportManuscript(projectId, result.filePath, format, { onlyFinal: finalOnly, range: chapterRange })
     return result.filePath
   })
 

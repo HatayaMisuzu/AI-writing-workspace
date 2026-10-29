@@ -1,3 +1,4 @@
+import type { ExportChapterRange } from './export-range'
 import type {
   ContextBundle,
   AITaskEnvelope, Character, ChatCursor, ChatMessage, ChatThread, DigestStatus, DocumentContent, DocumentNode, Idea, LocalLintIssue,
@@ -135,7 +136,7 @@ export interface WorkspaceApi {
     exportProject(projectId: string): Promise<string | null>
     importProject(): Promise<Project | null>
     importManuscript(): Promise<Project | null>
-    exportManuscript(projectId: string, format: 'txt' | 'md' | 'docx', onlyFinal?: boolean): Promise<string | null>
+    exportManuscript(projectId: string, format: 'txt' | 'md' | 'docx', onlyFinal?: boolean, range?: ExportChapterRange): Promise<string | null>
   }
   ai: {
     start(request: AIStartRequest, onEvent: (event: AIStreamEvent) => void): () => void

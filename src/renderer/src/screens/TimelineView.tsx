@@ -2,6 +2,7 @@ import { CalendarClock, Plus, Save, Trash2 } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import type { Character, DocumentNode, Project, TimelineEvent, TimelineSortMode } from '../../../shared/domain'
 import { TIMELINE_SORT_LABEL } from '../../../shared/timeline'
+import { ConfirmAction } from '../components/ConfirmAction'
 
 type Draft = { id?: string; storyTimeLabel: string; sortKey: string; title: string; chapterId: string; characterIds: string[] }
 const emptyDraft = (): Draft => ({ storyTimeLabel: '', sortKey: '0', title: '', chapterId: '', characterIds: [] })
@@ -69,7 +70,7 @@ export function TimelineView({ project, chapters, focusEventId, onOpenChapter, o
         <label><span>排序键（数字，越小越早）</span><input type="number" value={draft.sortKey} onChange={(event) => setDraft({ ...draft, sortKey: event.target.value })} /></label>
         <label><span>关联章节</span><select value={draft.chapterId} onChange={(event) => setDraft({ ...draft, chapterId: event.target.value })}><option value="">（无）</option>{chapters.map((chapter) => <option key={chapter.id} value={chapter.id}>{chapter.title}</option>)}</select></label>
         <fieldset className="timeline-characters"><legend>关联人物</legend>{characters.length === 0 ? <small>暂无人物</small> : characters.map((item) => <label key={item.id}><input type="checkbox" checked={draft.characterIds.includes(item.id)} onChange={() => toggleCharacter(item.id)} />{item.name}</label>)}</fieldset>
-        <div><button className="primary" onClick={() => void save()}><Save size={15} />保存</button>{draft.id && <button onClick={() => void remove()}><Trash2 size={15} />删除</button>}</div>
+        <div><button className="primary" onClick={() => void save()}><Save size={15} />保存</button>{draft.id && <ConfirmAction title="删除时间线事件" message={`确定删除事件“${draft.title}”吗？此操作不可撤销。`} onConfirm={remove}><Trash2 size={15} />删除</ConfirmAction>}</div>
       </div>
     </div>
   </section>
