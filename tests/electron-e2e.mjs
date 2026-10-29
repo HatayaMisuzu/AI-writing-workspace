@@ -940,7 +940,19 @@ try {
     await drawer.getByRole('button', { name: '全部接受（3 条）' }).waitFor()
     assert.equal(await editorText(page), original, '接受前正文不变')
     await drawer.getByRole('button', { name: '全部接受（3 条）' }).click()
-    await page.locator('.manuscript-editor', { hasText: '仍旧在座三' }).waitFor()
+    await page.locator('.manuscript-editor', { hasText: '仍旧在座三' }).waitFor().catch(async (error) => {
+      // 失败时把渲染层与持久层状态打到日志里（CI 只有日志可看），再原样抛出
+      const state = await page.evaluate(async ({ projectId, documentId }) => ({
+        editor: document.querySelector('.manuscript-editor')?.textContent,
+        drawer: document.querySelector('.patch-drawer')?.textContent,
+        alerts: [...document.querySelectorAll('[role="alert"]')].map((node) => node.textContent),
+        saveState: document.querySelector('.save-state, .editor-toolbar')?.textContent,
+        doc: await window.workspace.documents.get(projectId, documentId).then((doc) => ({ revision: doc.revision, plainText: doc.plainText })),
+        patches: (await window.workspace.patches.list(projectId, documentId)).map((patch) => ({ status: patch.status, rev: patch.documentRevision, fromPm: patch.fromPm, toPm: patch.toPm }))
+      }), { projectId: ids.projectId, documentId: f13.batch }).catch((evalError) => ({ evalError: String(evalError) }))
+      process.stdout.write(`F13 ⑪ diagnostics: ${JSON.stringify(state)}\n`)
+      throw error
+    })
     const after = await editorText(page)
     assert.ok(!after.includes('在坐') && (after.match(/在座/g) ?? []).length === 3, `全部接受后应替换 3 处，实际 ${after}`)
     assert.equal(await drawer.locator('.patch-status.stale').count(), 0, '无失效提案')
