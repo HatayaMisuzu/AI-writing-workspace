@@ -4,6 +4,7 @@ import { DocumentService } from '../services/document-service'
 import { MemoryService } from '../services/memory-service'
 import { StyleEngine } from './style-engine'
 import { relevanceScore } from './relevance'
+import { validateReaderChapterNumber } from '../../shared/reader-review'
 
 const estimateTokens = (text: string): number => Math.ceil(text.length / 2.2)
 
@@ -20,8 +21,9 @@ export class ContextEngine {
 
   build(task: AITaskEnvelope, budget = 12_000): ContextBundle {
     if (task.mode === 'reader_review') {
-      if (!task.throughChapterId) throw new Error('READER_CHAPTER_REQUIRED')
-      return this.buildReader(task.projectId, task.throughChapterId, budget, task.excludedIds)
+      const through = task.throughChapterNumber ?? task.throughChapterId
+      if (through === undefined) throw new Error('READER_CHAPTER_REQUIRED')
+      return this.buildReader(task.projectId, through, budget, task.excludedIds)
     }
     return this.buildCreative(task, budget)
   }
@@ -147,7 +149,12 @@ export class ContextEngine {
         kind: 'digest', title: '前文章节理解', content: row.summary, projectId, reason: '非陈旧的前章摘要', priority: 57 + score }))
   }
 
-  buildReader(projectId: string, throughChapterId: string, budget = 12_000, excludedIds: string[] = []): ContextBundle {
+  /**
+   * P1-5：读者上下文 = 仅第 1..N 章正文，按章树（卷序、章序）顺序；
+   * 不带设定/记忆/细纲/大纲/时间线/伏笔/人物卡/第 N 章之后/他书内容。
+   * 预算不足时按 S7 规则裁剪（保留靠近第 N 章的正文），被裁掉的章节进 omitted（reason=budget，清单显示「已省略」）。
+   */
+  buildReader(projectId: string, through: string | number, budget = 12_000, excludedIds: string[] = []): ContextBundle {
     const ordered = this.db.raw.prepare(`
       SELECT c.id, c.title, dc.plain_text
       FROM document_nodes c JOIN document_nodes v ON v.id = c.parent_id AND v.project_id = c.project_id
@@ -155,19 +162,25 @@ export class ContextEngine {
       WHERE c.project_id = ? AND c.type = 'chapter' AND v.type = 'volume'
       ORDER BY v.order_index, c.order_index, c.created_at
     `).all(projectId) as Array<{ id: string; title: string; plain_text: string }>
-    const throughIndex = ordered.findIndex((chapter) => chapter.id === throughChapterId)
-    if (throughIndex < 0) throw new Error('READER_CHAPTER_NOT_FOUND_IN_PROJECT')
-    const candidates: Array<ContextItem & { priority: number }> = ordered.slice(0, throughIndex + 1).map((chapter, index) => ({
-      id: chapter.id, kind: 'document', title: chapter.title, content: chapter.plain_text, projectId,
+    let throughIndex: number
+    if (typeof through === 'number') {
+      const checked = validateReaderChapterNumber(through, ordered.length)
+      if (!checked.ok) throw Object.assign(new Error(checked.error), { code: 'READER_CHAPTER_INVALID' })
+      throughIndex = checked.index
+    } else {
+      throughIndex = ordered.findIndex((chapter) => chapter.id === through)
+      if (throughIndex < 0) throw new Error('READER_CHAPTER_NOT_FOUND_IN_PROJECT')
+    }
+    const visible = ordered.slice(0, throughIndex + 1)
+    const order = new Map(visible.map((chapter, index) => [chapter.id, index]))
+    const candidates: Array<ContextItem & { priority: number }> = visible.map((chapter, index) => ({
+      id: chapter.id, kind: 'document', title: `第 ${index + 1} 章 · ${chapter.title}`, content: chapter.plain_text, projectId,
       reason: `读者截至第 ${throughIndex + 1} 章可见的正文`, priority: 60 + index
     }))
-    const visibleMemories = this.db.raw.prepare(`
-      SELECT * FROM memories WHERE project_id = ? AND reader_visible_from IS NOT NULL AND reader_visible_from <= ?
-        AND status IN ('observed','confirmed') ORDER BY reader_visible_from, updated_at
-    `).all(projectId, throughIndex + 1) as Array<Record<string, unknown>>
-    visibleMemories.forEach((memory) => candidates.push({ id: memory.id as string, kind: 'memory', title: '读者可见信息',
-      content: memory.content as string, projectId, reason: `readerVisibleFrom=${memory.reader_visible_from as number}`, priority: 75 }))
-    return this.budget(projectId, 'reader', candidates, budget, ['future_chapters', 'private_memory', 'creative_chat', 'ideas', 'future_plan', 'story_notes', 'references', 'digests'], excludedIds)
+    const bundle = this.budget(projectId, 'reader', candidates, budget, ['future_chapters', 'private_memory', 'creative_chat', 'ideas', 'future_plan', 'story_notes', 'references', 'digests', 'outlines', 'characters', 'timeline', 'foreshadows', 'other_projects'], excludedIds)
+    const byOrder = (a: { id: string }, b: { id: string }): number => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0)
+    const items = bundle.items.toSorted(byOrder)
+    return { ...bundle, items, metadata: { ...bundle.metadata, sourceIds: items.map((item) => item.id), omitted: (bundle.metadata.omitted ?? []).toSorted(byOrder) } }
   }
 
   private budget(projectId: string, policy: ContextBundle['policy'], candidates: Array<ContextItem & { priority: number }>, maxTokens: number, excludedKinds: string[], excludedIds: string[] = [], includedIds: string[] = []): ContextBundle {

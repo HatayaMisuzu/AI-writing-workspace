@@ -291,6 +291,8 @@ export interface AITaskEnvelope {
   target?: DocumentTaskTarget
   selection?: { from: number; to: number; text: string }
   throughChapterId?: string
+  /** P1-5：读者审稿「读到第 N 章」（章树顺序，1 起）；优先于 throughChapterId。 */
+  throughChapterNumber?: number
   /** R4：作者在上下文清单中排除的来源 id（ContextItem.id）；同 id 的所有条目都不会发送。 */
   excludedIds?: string[]
   /** S6：默认不发送的来源（如大纲）被作者勾选后列入；只作用于单次请求。 */

@@ -2,6 +2,7 @@ import { Bot, Check, ChevronRight, Copy, FileSearch, MessageSquarePlus, PenLine,
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { AIMode, ChatThread, ContextBundle, DigestStatus, DocumentTaskTarget, MemoryProposal, ModelConfig, Project, RoutedTask } from '../../../shared/domain'
 import { DEFAULT_CANDIDATE_COUNT, MAX_CANDIDATE_COUNT, normalizeCandidateCount } from '../../../shared/candidate-count'
+import { READER_REVIEW_DEFAULT_INTENT } from '../../../shared/reader-review'
 import type { EditorSelection } from './EditorSurface'
 import { clearedExclusionState, isRowChecked, omittedLabel, toContextSourceRows, toggleExcludedId, toggleIncludedId, type ContextSourceRow } from '../services/context-sources'
 import { activeCandidateText, canProposeGenerationPatch, mapChatHistory, resolveDisplayedModelMode, resolveModelDisplayName, retryInputForMessage, type AssistantHistoryMessage } from '../services/assistant-history'
@@ -30,6 +31,8 @@ export function AssistantPanel({ project, documentId, documentRevision, selectio
   const [input, setInput] = useState('')
   const [mode, setMode] = useState<AIMode>('discussion')
   const [candidateCount, setCandidateCount] = useState(DEFAULT_CANDIDATE_COUNT)
+  // P1-5：读者审稿「读到第 N 章」；原样发给后端校验（<1、越界、非整数给中文报错）
+  const [readerThrough, setReaderThrough] = useState('1')
   const [messages, setMessages] = useState<ViewMessage[]>([])
   const [threadId, setThreadId] = useState<string>()
   const [threads, setThreads] = useState<ChatThread[]>([])
@@ -98,12 +101,13 @@ export function AssistantPanel({ project, documentId, documentRevision, selectio
           projectId: project.id, documentId, selection: selection ? { from: selection.fromPm, to: selection.toPm, text: selection.text } : undefined,
           excludedIds: excludedIds.length ? excludedIds : undefined,
           includedIds: includedIds.length ? includedIds : undefined,
+          throughChapterNumber: requestedMode === 'reader_review' ? Number(readerThrough) : undefined,
           candidateCount: requestedMode === 'generation' ? normalizeCandidateCount(candidateCount) : undefined } }))
         .then((bundle) => { if (active) setSourcePreview({ rows: toContextSourceRows(bundle), tokens: bundle.metadata.estimatedTokens }) })
         .catch((error) => { if (active) setSourcePreview({ rows: [], tokens: 0, error: error instanceof Error ? error.message : String(error) }) })
     }, 250)
     return () => { active = false; clearTimeout(timer) }
-  }, [sourcesOpen, threadId, input, mode, project.id, documentId, documentRevision, selection, excludedIds, includedIds, candidateCount, onEnsureSaved])
+  }, [sourcesOpen, threadId, input, mode, project.id, documentId, documentRevision, selection, excludedIds, includedIds, candidateCount, readerThrough, onEnsureSaved])
 
   const loadEarlier = async (): Promise<void> => {
     if (!threadId || !messages[0]) return
@@ -145,7 +149,10 @@ export function AssistantPanel({ project, documentId, documentRevision, selectio
       return
     }
 
-    const intentPromise = window.workspace.memories.extractIntent(project.id, messageId, text)
+    const reader = requestedMode === 'reader_review'
+    // 读者审稿只读：不抽取记忆意图、不带编辑目标
+    const intentPromise = reader ? Promise.resolve([] as MemoryProposal[]) : window.workspace.memories.extractIntent(project.id, messageId, text)
+    if (reader) target = undefined
     streamed.current.set(requestId, '')
     const cleanup = window.workspace.ai.start({ requestId, threadId, userMessageId: messageId, assistantMessageId: assistantId, task: {
       mode: requestedMode, writePermission: requestedMode === 'editing' || requestedMode === 'generation' ? 'proposal' : 'none', userIntent: text,
@@ -153,6 +160,7 @@ export function AssistantPanel({ project, documentId, documentRevision, selectio
       selection: target?.selection ? { from: target.selection.fromPm, to: target.selection.toPm, text: target.selection.text } : undefined,
       excludedIds: excludedIds.length ? excludedIds : undefined,
       includedIds: includedIds.length ? includedIds : undefined,
+      throughChapterNumber: reader ? Number(readerThrough) : undefined,
       candidateCount: requestedMode === 'generation' ? requestCandidateCount : undefined
     } }, (event) => {
       if (event.requestId !== requestId) return
@@ -214,7 +222,8 @@ export function AssistantPanel({ project, documentId, documentRevision, selectio
 
   const setQuickMode = (next: AIMode): void => {
     setMode(next)
-    if (!input) setInput(next === 'editing' ? '请修改选中的文字，保持原意和语气。' : next === 'generation' ? '请根据当前上下文生成一段候选文字。' : '')
+    if (!input || next === 'reader_review') setInput(next === 'editing' ? '请修改选中的文字，保持原意和语气。' : next === 'generation' ? '请根据当前上下文生成一段候选文字。'
+      : next === 'reader_review' ? READER_REVIEW_DEFAULT_INTENT(Number(readerThrough) || 1) : '')
   }
   const resolveProposal = async (messageId: string, proposalId: string, action: 'confirm' | 'reject'): Promise<void> => {
     try {
@@ -283,7 +292,7 @@ export function AssistantPanel({ project, documentId, documentRevision, selectio
                 if (row.kind === 'outline' || row.omittedReason === 'default_excluded') setIncludedIds((current) => toggleIncludedId(current, row.id))
                 else setExcludedIds((current) => toggleExcludedId(current, row.id))
               }} />
-                <strong>{row.title}</strong>{row.included ? <span>{row.preview}{row.truncated ? '…（已截断）' : ''}</span> : <small>{omittedLabel(row.omittedReason)}</small>}</label></li>)}</ul></>}
+                <strong>{row.title}</strong>{row.included ? <span>{row.preview}{row.truncated ? '…（已截断，部分已省略）' : ''}</span> : <small>{omittedLabel(row.omittedReason)}</small>}</label></li>)}</ul></>}
       </div>}
       {selection && <div className="selection-chip">已选择 {selection.text.length} 字</div>}
       <textarea value={input} disabled={loadingHistory} onChange={(event) => setInput(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void submit() } }} placeholder="和同行者聊聊这部作品…" />
@@ -297,6 +306,10 @@ export function AssistantPanel({ project, documentId, documentRevision, selectio
             {Array.from({ length: MAX_CANDIDATE_COUNT }, (_, index) => index + 1).map((value) => <option key={value} value={value}>{value}</option>)}
           </select>
         </label>}
+        <button className={mode === 'reader_review' ? 'active' : ''} title="只读报告：仅发送第 1..N 章正文" onClick={() => setQuickMode('reader_review')}>读者审稿</button>
+        {mode === 'reader_review' && <label className="candidate-count-picker" title="读者读到第 N 章（按章树顺序）">读到第
+          <input aria-label="读到第 N 章" type="number" min={1} step={1} style={{ width: 52 }} value={readerThrough} disabled={Boolean(runningId)}
+            onChange={(event) => setReaderThrough(event.target.value)} />章</label>}
         <button className={sourcesOpen ? 'active' : ''} aria-expanded={sourcesOpen} onClick={() => setSourcesOpen((open) => !open)}>上下文{(excludedIds.length || includedIds.length) ? `（排除 ${excludedIds.length}·勾选大纲 ${includedIds.length}）` : ''}</button>
       </div>{runningId ? <button className="send-button" title="取消请求" onClick={() => void window.workspace.ai.cancel(runningId)}><Square size={14} /></button> : <button className="send-button" disabled={!input.trim() || !threadId} aria-label="发送" onClick={() => void submit()}><Send size={15} /></button>}</div>
     </div>
