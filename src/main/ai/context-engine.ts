@@ -6,6 +6,14 @@ import { StyleEngine } from './style-engine'
 import { relevanceScore } from './relevance'
 import { validateReaderChapterNumber } from '../../shared/reader-review'
 import { truncateBySide, truncationSideFor } from '../../shared/consistency-check'
+import { compareSettingRank, memoryEntryNames, rankSetting, settingBasis, BASIS_LABELS, type SettingRank } from '../../shared/setting-order'
+
+type Candidate = ContextItem & { priority: number; rank?: SettingRank }
+/** P3-e：钉住的设定在创作类模式中排在选区之后、其余一切之前。 */
+const PINNED_PRIORITY = 99
+export const CONSISTENCY_MEMORY_LIMIT = 60
+export const CONSISTENCY_CHARACTER_LIMIT = 40
+export const CREATIVE_MEMORY_LIMIT = 12
 
 const estimateTokens = (text: string): number => Math.ceil(text.length / 2.2)
 const settingName = (content: string): string => { const flat = content.replace(/\s+/g, ' ').trim(); return [...flat].length > 16 ? `${[...flat].slice(0, 16).join('')}…` : flat || '未命名' }
@@ -40,34 +48,52 @@ export class ContextEngine {
     const { projectId } = task
     const chapter = this.documents.getContent(projectId, task.documentId)
     const node = this.documents.listTree(projectId).find((item) => item.id === task.documentId)
-    const chapterItem: ContextItem & { priority: number } = { id: chapter.documentId, kind: 'document', title: `本章 · ${node?.title ?? '当前章节'}`,
+    const chapterItem: Candidate = { id: chapter.documentId, kind: 'document', title: `本章 · ${node?.title ?? '当前章节'}`,
       content: chapter.plainText, projectId, reason: '待检查的本章正文', priority: 100 }
-    const candidates: Array<ContextItem & { priority: number }> = []
-    const memories = this.db.raw.prepare("SELECT id, type, content FROM memories WHERE project_id = ? AND status = 'confirmed' AND type != 'foreshadowing' ORDER BY updated_at DESC LIMIT 60")
-      .all(projectId) as Array<{ id: string; type: string; content: string }>
-    memories.forEach((memory) => candidates.push({ id: memory.id, kind: 'memory', title: `设定 · ${settingName(memory.content)}（${memory.type}）`, content: memory.content,
-      projectId, reason: '作者已确认的设定', priority: 80 }))
-    const characters = this.db.raw.prepare('SELECT * FROM characters WHERE project_id = ? ORDER BY updated_at DESC LIMIT 40').all(projectId) as Array<Record<string, unknown>>
+    const candidates: Candidate[] = []
+    // P3-e：本章相关 = 本章正文或当前选区出现条目名/别名（纯本地字符串匹配）
+    const haystack = [chapter.plainText, task.selection?.text ?? ''].join('\n')
+    const pinned = new Set(task.includedIds ?? [])
+    const memories = this.db.raw.prepare("SELECT id, type, content, updated_at FROM memories WHERE project_id = ? AND status = 'confirmed' AND type != 'foreshadowing' ORDER BY updated_at DESC, id")
+      .all(projectId) as Array<{ id: string; type: string; content: string; updated_at: number }>
+    // P3-e M1：先对全部已确认设定按新规则排序，再截取上限（60 条），避免早期相关设定被 SQL LIMIT 先截掉
+    const memoryCandidates: Candidate[] = []
+    memories.forEach((memory) => {
+      const rank = rankSetting({ id: memory.id, pinned: pinned.has(memory.id), confirmed: true, names: memoryEntryNames(memory.content), updatedAt: memory.updated_at }, haystack)
+      memoryCandidates.push({ id: memory.id, kind: 'memory', title: `设定 · ${settingName(memory.content)}（${memory.type}）`, content: memory.content,
+        projectId, reason: '作者已确认的设定', priority: 80, rank, basis: settingBasis(rank) })
+    })
+    candidates.push(...memoryCandidates.toSorted((a, b) => compareSettingRank(a.rank!, b.rank!)).slice(0, CONSISTENCY_MEMORY_LIMIT))
+    const characters = this.db.raw.prepare('SELECT * FROM characters WHERE project_id = ? ORDER BY updated_at DESC, id').all(projectId) as Array<Record<string, unknown>>
+    // P3-e M1：人物卡同理，先排序再截取 40 条
+    const characterCandidates: Candidate[] = []
     characters.forEach((row) => {
       const aliases = JSON.parse(row.aliases_json as string) as string[]
       const fields = JSON.parse(row.fields_json as string) as Record<string, string>
       const content = [aliases.length ? `别名：${aliases.join('、')}` : '', row.notes as string,
         ...Object.entries(fields).filter(([, value]) => value).map(([key, value]) => `${key}：${value}`)].filter(Boolean).join('\n')
-      candidates.push({ id: row.id as string, kind: 'character', title: `人物 · ${row.name as string}`, content: content || '（无更多信息）',
-        projectId, reason: '人物卡', priority: chapter.plainText.includes(row.name as string) ? 79 : 70 })
+      const rank = rankSetting({ id: row.id as string, pinned: pinned.has(row.id as string), confirmed: false, names: [row.name as string, ...aliases], updatedAt: row.updated_at as number }, haystack)
+      characterCandidates.push({ id: row.id as string, kind: 'character', title: `人物 · ${row.name as string}`, content: content || '（无更多信息）',
+        projectId, reason: '人物卡', priority: rank.mentioned ? 79 : 70, rank, basis: settingBasis(rank) })
     })
+    candidates.push(...characterCandidates.toSorted((a, b) => compareSettingRank(a.rank!, b.rank!)).slice(0, CONSISTENCY_CHARACTER_LIMIT))
     const titles = new Map(this.documents.listTree(projectId).map((item) => [item.id, item.title]))
     const events = this.db.raw.prepare('SELECT id, story_time_label, title, chapter_id FROM timeline_events WHERE project_id = ? ORDER BY sort_key, created_at LIMIT 200')
       .all(projectId) as Array<{ id: string; story_time_label: string; title: string; chapter_id: string | null }>
     events.forEach((event, index) => candidates.push({ id: event.id, kind: 'timeline', title: `时间线 · ${event.title || '未命名事件'}`,
       content: [`故事时间：${event.story_time_label || '未标注'}`, `顺序：第 ${index + 1} 个事件`, event.chapter_id ? `关联章节：${titles.get(event.chapter_id) ?? event.chapter_id}` : ''].filter(Boolean).join('；'),
-      projectId, reason: '时间线事件（仅一致性检查使用）', priority: 76 - Math.min(5, index / 40) }))
+      projectId, reason: '时间线事件（仅一致性检查使用）', priority: 76 - Math.min(5, index / 40),
+      basis: pinned.has(event.id) ? [BASIS_LABELS.pinned, '时间线顺序'] : ['时间线顺序'] }))
     const excludedKinds = ['other_chapters', 'pending_memory', 'foreshadows', 'ideas', 'outlines', 'digests', 'story_notes', 'references', 'creative_chat', 'other_projects']
     // P2-2：先给设定/人物卡/时间线预留预算（本章至少保底 25%），剩余给本章；本章放不下则截断本章（保留开头）。
     const chapterFloor = Math.min(estimateTokens(chapter.plainText), Math.floor(budget * 0.25))
     // PR25 P2-3：设定/人物卡/时间线按类别轮转排列（各类内部仍按优先级），避免人物卡被大量设定挤掉。
-    const byKind = ['memory', 'character', 'timeline'].map((kind) => candidates.filter((item) => item.kind === kind).toSorted((a, b) => b.priority - a.priority))
-    const rotated: Array<ContextItem & { priority: number }> = []
+    // P3-e：类内按 钉住 > 已确认 > 本章提及 > 最近更新 > id 排序（时间线保持故事顺序，仅钉住提前）；钉住的条目跨类别排在最前。
+    const isPinned = (item: Candidate): boolean => pinned.has(item.id)
+    const inKind = (a: Candidate, b: Candidate): number => a.rank && b.rank ? compareSettingRank(a.rank, b.rank) : Number(isPinned(b)) - Number(isPinned(a)) || b.priority - a.priority
+    const sortedRefs = candidates.toSorted(inKind)
+    const byKind = ['memory', 'character', 'timeline'].map((kind) => sortedRefs.filter((item) => item.kind === kind && !isPinned(item)))
+    const rotated: Candidate[] = sortedRefs.filter(isPinned).map((item, index) => ({ ...item, priority: 95 - index / 1000 }))
     for (let round = 0; byKind.some((list) => round < list.length); round += 1)
       for (const list of byKind) if (round < list.length) rotated.push({ ...list[round], priority: 90 - rotated.length / 1000 })
     const refs = this.budget(projectId, 'consistency', rotated, Math.max(0, budget - chapterFloor), excludedKinds, task.excludedIds)
@@ -79,7 +105,7 @@ export class ContextEngine {
   }
 
   private buildCreative(task: AITaskEnvelope, budget: number): ContextBundle {
-    const candidates: Array<ContextItem & { priority: number }> = []
+    const candidates: Candidate[] = []
     let currentText = ''
     if (task.selection?.text) candidates.push({ id: `selection:${task.documentId ?? 'unknown'}`, kind: 'selection', title: '当前选区',
       content: task.selection.text, projectId: task.projectId, reason: '用户当前选中的目标文本', priority: 100 })
@@ -100,13 +126,28 @@ export class ContextEngine {
     }
 
     const signal = [task.userIntent, task.selection?.text ?? '', currentText].filter(Boolean).join('\n')
-    for (const memory of this.memories.searchRelevant(task.projectId, ['confirmed', 'observed', 'tentative', 'idea'], signal)) {
-      const stateWeight = memory.status === 'confirmed' ? 85 : memory.status === 'observed' ? 78 : memory.status === 'tentative' ? 55 : 40
+    // P3-e：本章相关只看本章正文与当前选区（不含提问），纯本地字符串匹配
+    const haystack = [task.selection?.text ?? '', currentText].join('\n')
+    const pinned = new Set(task.includedIds ?? [])
+    const statuses = ['confirmed', 'observed', 'tentative', 'idea'] as const
+    // P3-e M1/M3：先取全部关键词相关记忆，按 钉住 > 状态权重 > 本章提及 > 关键词相关度（沿用 base 的 relevanceScore，含作者提问）> 更新 > id 排序，再截取 12 条
+    const stateWeightOf = (status: string): number => status === 'confirmed' ? 85 : status === 'observed' ? 78 : status === 'tentative' ? 55 : 40
+    const relevant = this.memories.searchRelevant(task.projectId, [...statuses], signal, Number.MAX_SAFE_INTEGER)
+      .map((memory) => ({ memory, score: relevanceScore(memory.content, signal),
+        rank: rankSetting({ id: memory.id, pinned: pinned.has(memory.id), confirmed: memory.status === 'confirmed', names: memoryEntryNames(memory.content), updatedAt: memory.updatedAt }, haystack) }))
+      .toSorted((a, b) => Number(b.rank.pinned) - Number(a.rank.pinned) || stateWeightOf(b.memory.status) - stateWeightOf(a.memory.status)
+        || Number(b.rank.mentioned) - Number(a.rank.mentioned) || b.score - a.score || compareSettingRank(a.rank, b.rank))
+      .slice(0, CREATIVE_MEMORY_LIMIT).map((item) => item.memory)
+    const pinnedMemories = this.memories.list(task.projectId, [...statuses]).filter((memory) => pinned.has(memory.id) && !relevant.some((item) => item.id === memory.id))
+    for (const memory of [...relevant, ...pinnedMemories]) {
+      const stateWeight = stateWeightOf(memory.status)
+      const rank = rankSetting({ id: memory.id, pinned: pinned.has(memory.id), confirmed: memory.status === 'confirmed', names: memoryEntryNames(memory.content), updatedAt: memory.updatedAt }, haystack)
       candidates.push({ id: memory.id, kind: 'memory', title: `${memory.type} · ${memory.status}`, content: memory.content,
-        projectId: task.projectId, reason: `关键词相关的长期记忆，状态为 ${memory.status}`, priority: stateWeight })
+        projectId: task.projectId, reason: rank.pinned && !relevant.includes(memory) ? `作者钉住的长期记忆，状态为 ${memory.status}` : `关键词相关的长期记忆，状态为 ${memory.status}`,
+        priority: rank.pinned ? PINNED_PRIORITY : stateWeight, rank, basis: settingBasis(rank) })
     }
 
-    this.addCharacters(task.projectId, signal, candidates)
+    this.addCharacters(task.projectId, signal, candidates, haystack, pinned)
     this.addNotes(task.projectId, signal, task.mode, candidates)
     this.addOutlines(task.projectId, task.documentId, candidates)
     this.addDigests(task.projectId, task.documentId, signal, candidates)
@@ -134,20 +175,23 @@ export class ContextEngine {
     return this.budget(task.projectId, 'creative', candidates, budget, ['other_projects'], task.excludedIds, task.includedIds)
   }
 
-  private addCharacters(projectId: string, signal: string, candidates: Array<ContextItem & { priority: number }>): void {
+  private addCharacters(projectId: string, signal: string, candidates: Candidate[], haystack = '', pinned: Set<string> = new Set()): void {
     const rows = this.db.raw.prepare('SELECT * FROM characters WHERE project_id = ? ORDER BY updated_at DESC').all(projectId) as Array<Record<string, unknown>>
     rows.map((row) => ({
       character: { id: row.id as string, projectId, name: row.name as string, aliases: JSON.parse(row.aliases_json as string) as string[],
         notes: row.notes as string, fields: JSON.parse(row.fields_json as string) as Record<string, string>, createdAt: row.created_at as number, updatedAt: row.updated_at as number } satisfies Character,
       matched: [row.name as string, ...(JSON.parse(row.aliases_json as string) as string[])].some((name) => name && signal.includes(name))
-    })).filter((item) => item.matched).slice(0, 8).forEach(({ character }) => candidates.push({
+    })).map((item) => ({ ...item, rank: rankSetting({ id: item.character.id, pinned: pinned.has(item.character.id), confirmed: false,
+      names: [item.character.name, ...item.character.aliases], updatedAt: item.character.updatedAt }, haystack) }))
+      // P3-e：钉住的人物卡即使未被提及也带上；8 条上限按确定排序截取
+      .filter((item) => item.matched || item.rank.pinned).toSorted((a, b) => compareSettingRank(a.rank, b.rank)).slice(0, 8).forEach(({ character, rank }) => candidates.push({
       id: character.id, kind: 'character', title: `人物 · ${character.name}`,
       content: [character.aliases.length ? `别名：${character.aliases.join('、')}` : '', character.notes, JSON.stringify(character.fields)].filter(Boolean).join('\n'),
-      projectId, reason: '问题、选区或当前章明确提及该人物', priority: 82
+      projectId, reason: rank.pinned ? '作者钉住的人物卡' : '问题、选区或当前章明确提及该人物', priority: rank.pinned ? PINNED_PRIORITY : 82, rank, basis: settingBasis(rank)
     }))
   }
 
-  private addNotes(projectId: string, signal: string, mode: AITaskEnvelope['mode'], candidates: Array<ContextItem & { priority: number }>): void {
+  private addNotes(projectId: string, signal: string, mode: AITaskEnvelope['mode'], candidates: Candidate[]): void {
     const rows = this.db.raw.prepare("SELECT * FROM project_notes WHERE project_id = ? AND section IN ('story','reference') ORDER BY updated_at DESC").all(projectId) as Array<Record<string, unknown>>
     rows.map((row) => ({ note: { id: row.id as string, projectId, section: row.section as ProjectNote['section'], title: row.title as string,
       content: row.content as string, createdAt: row.created_at as number, updatedAt: row.updated_at as number }, score: relevanceScore(`${row.title as string}\n${row.content as string}`, signal) }))
@@ -161,7 +205,7 @@ export class ContextEngine {
    * S5：细纲进 AI 上下文；优先级在选区之后、当前章之前（PRD §4）。
    * S6：清单可见可勾选，默认不发送（budget 里 default_excluded，除非 includedIds 勾选）。
    */
-  private addOutlines(projectId: string, documentId: string | undefined, candidates: Array<ContextItem & { priority: number }>): void {
+  private addOutlines(projectId: string, documentId: string | undefined, candidates: Candidate[]): void {
     const rows = this.db.raw.prepare(`SELECT o.node_id, o.summary, o.beats_json, o.hook, n.title, n.type
       FROM node_outlines o JOIN document_nodes n ON n.id = o.node_id
       WHERE o.project_id = ? AND n.project_id = ?`).all(projectId, projectId) as Array<Record<string, unknown>>
@@ -188,7 +232,7 @@ export class ContextEngine {
     }
   }
 
-  private addDigests(projectId: string, documentId: string | undefined, signal: string, candidates: Array<ContextItem & { priority: number }>): void {
+  private addDigests(projectId: string, documentId: string | undefined, signal: string, candidates: Candidate[]): void {
     const ordered = this.documents.listOrderedChapters(projectId)
     const currentIndex = documentId ? ordered.findIndex((chapter) => chapter.id === documentId) : ordered.length
     const allowed = new Set(ordered.slice(0, currentIndex < 0 ? ordered.length : currentIndex).map((chapter) => chapter.id))
@@ -223,7 +267,7 @@ export class ContextEngine {
     }
     const visible = ordered.slice(0, throughIndex + 1)
     const order = new Map(visible.map((chapter, index) => [chapter.id, index]))
-    const candidates: Array<ContextItem & { priority: number }> = visible.map((chapter, index) => ({
+    const candidates: Candidate[] = visible.map((chapter, index) => ({
       id: chapter.id, kind: 'document', title: `第 ${index + 1} 章 · ${chapter.title}`, content: chapter.plain_text, projectId,
       reason: `读者截至第 ${throughIndex + 1} 章可见的正文`, priority: 60 + index
     }))
@@ -233,26 +277,28 @@ export class ContextEngine {
     return { ...bundle, items, metadata: { ...bundle.metadata, sourceIds: items.map((item) => item.id), omitted: (bundle.metadata.omitted ?? []).toSorted(byOrder) } }
   }
 
-  private budget(projectId: string, policy: ContextBundle['policy'], candidates: Array<ContextItem & { priority: number }>, maxTokens: number, excludedKinds: string[], excludedIds: string[] = [], includedIds: string[] = []): ContextBundle {
-    const sorted = candidates.toSorted((a, b) => b.priority - a.priority)
+  private budget(projectId: string, policy: ContextBundle['policy'], candidates: Candidate[], maxTokens: number, excludedKinds: string[], excludedIds: string[] = [], includedIds: string[] = []): ContextBundle {
+    // P3-e：同优先级的同类设定按确定规则排序（compareSettingRank），其余保持原插入顺序（稳定排序）
+    const sorted = candidates.toSorted((a, b) => b.priority - a.priority || (a.rank && b.rank && a.kind === b.kind ? compareSettingRank(a.rank, b.rank) : 0))
     const excluded = new Set(excludedIds)
     const included = new Set(includedIds)
     const items: ContextItem[] = []
     const omitted: ContextOmission[] = []
     let estimatedTokens = 0
     const seen = new Set<string>()
-    for (const { priority, ...item } of sorted) {
-      void priority
+    for (const { priority, rank, ...item } of sorted) {
+      void priority; void rank
+      const basis = item.basis ? { basis: item.basis } : {}
       const key = `${item.kind}:${item.id}`
       if (seen.has(key) || item.projectId !== projectId) continue
-      if (excluded.has(item.id)) { seen.add(key); omitted.push({ id: item.id, kind: item.kind, title: item.title, reason: 'user_excluded' }); continue }
+      if (excluded.has(item.id)) { seen.add(key); omitted.push({ id: item.id, kind: item.kind, title: item.title, reason: 'user_excluded', ...basis }); continue }
       // S6/P1：大纲进清单但默认不发送，除非 includedIds 勾选
       if (item.kind === 'outline' && !included.has(item.id)) {
         seen.add(key); omitted.push({ id: item.id, kind: item.kind, title: item.title, reason: 'default_excluded' }); continue
       }
       if (!item.content.trim()) continue
       const remaining = maxTokens - estimatedTokens
-      if (remaining <= 0) { seen.add(key); omitted.push({ id: item.id, kind: item.kind, title: item.title, reason: 'budget' }); continue }
+      if (remaining <= 0) { seen.add(key); omitted.push({ id: item.id, kind: item.kind, title: item.title, reason: 'budget', ...basis }); continue }
       const itemTokens = estimateTokens(item.content)
       const fitted = itemTokens <= remaining ? item : { ...item, content: truncateBySide(item.content, remaining * 2.2, truncationSideFor(policy)), truncated: true }
       const fittedTokens = estimateTokens(fitted.content)

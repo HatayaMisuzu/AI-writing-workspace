@@ -6,7 +6,7 @@ import { inputForQuickMode, inputForReaderThrough } from '../services/quick-mode
 import { CONSISTENCY_DEFAULT_INTENT, consistencyCoverage } from '../../../shared/consistency-check'
 import { ConsistencyReportView } from './ConsistencyReportView'
 import type { EditorSelection } from './EditorSurface'
-import { clearedExclusionState, isRowChecked, omittedLabel, toContextSourceRows, toggleExcludedId, toggleIncludedId, type ContextSourceRow } from '../services/context-sources'
+import { basisLabel, clearedExclusionState, contextButtonLabel, PIN_SCOPE_HINT, stateAfterRequest, isPinnable, isRowChecked, omittedLabel, toContextSourceRows, toggleExcludedId, toggleIncludedId, type ContextSourceRow } from '../services/context-sources'
 import { activeCandidateText, canProposeGenerationPatch, mapChatHistory, resolveDisplayedModelMode, resolveModelDisplayName, retryInputForMessage, type AssistantHistoryMessage } from '../services/assistant-history'
 
 type ContextSummary = { count: number; tokens: number; items: ContextSourceRow[] }
@@ -179,7 +179,8 @@ export function AssistantPanel({ project, documentId, documentText, documentRevi
         const candidates = event.candidates?.length ? event.candidates : (requestedMode === 'generation' && finalText ? [finalText] : undefined)
         setRunningId(undefined)
         setActiveRequestMode(undefined)
-        { const cleared = clearedExclusionState(); setExcludedIds(cleared.excludedIds); setIncludedIds(cleared.includedIds) }
+        // P3-e M2：钉住在本次对话内保留；排除项与勾选大纲照旧清空
+        setExcludedIds([]); setIncludedIds((current) => stateAfterRequest({ excludedIds: [], includedIds: current }).includedIds)
         setMessages((current) => current.map((item) => item.id === assistantId ? {
           ...item,
           content: candidates?.[0] ?? finalText,
@@ -276,7 +277,7 @@ export function AssistantPanel({ project, documentId, documentText, documentRevi
             disabled={Boolean(message.inserted)}
             onClick={() => setMessages((current) => current.map((item) => item.id === message.id ? { ...item, activeCandidateIndex: index } : item))}>候选 {index + 1}</button>)}
         </div>}
-        {message.context && <details className="context-inspector"><summary>使用 {message.context.count} 条作品上下文 · 约 {message.context.tokens} tokens</summary><ul>{message.context.items.map((item, index) => <li key={`${item.kind}-${index}`} className={item.included ? '' : 'omitted'}><strong>{item.title}</strong>{item.included ? <><span>{item.preview}{item.truncated ? '…（已截断）' : ''}</span><small>{item.reason}</small></> : <small>{omittedLabel(item.omittedReason)}</small>}</li>)}</ul></details>}
+        {message.context && <details className="context-inspector"><summary>使用 {message.context.count} 条作品上下文 · 约 {message.context.tokens} tokens</summary><ul>{message.context.items.map((item, index) => <li key={`${item.kind}-${index}`} className={item.included ? '' : 'omitted'}><strong>{item.title}</strong>{item.included ? <><span>{item.preview}{item.truncated ? '…（已截断）' : ''}</span><small>{item.reason}</small></> : <small>{omittedLabel(item.omittedReason)}</small>}{basisLabel(item) && <small className="context-basis">{basisLabel(item)}</small>}</li>)}</ul></details>}
         {message.proposals?.map((proposal) => <div className="memory-proposal" key={proposal.id}><strong>记忆提案 · {proposal.type}</strong><p>{proposal.content}</p><span>尚未写入长期设定，需要你确认</span><div><button onClick={() => void resolveProposal(message.id, proposal.id, 'reject')}><Trash2 size={13} />忽略</button><button className="primary" onClick={() => void resolveProposal(message.id, proposal.id, 'confirm')}><Check size={13} />记录这条</button></div></div>)}
         {message.recorded && !message.proposals?.length && <div className="recorded-note"><Check size={13} />已记录到 Story Memory</div>}
         {message.proposalError && <div className="inline-error" role="alert">{message.proposalError}</div>}
@@ -291,13 +292,15 @@ export function AssistantPanel({ project, documentId, documentText, documentRevi
       {sourcesOpen && <div className="context-sources" aria-label="将发送的上下文">
         {sourcePreview?.error ? <div className="inline-error" role="alert">上下文预览失败：{sourcePreview.error}</div>
           : !sourcePreview ? <div className="context-note">正在整理上下文…</div>
-          : <><div className="context-note">将发送 {sourcePreview.rows.filter((row) => row.included).length} 条 · 约 {sourcePreview.tokens} tokens（取消勾选即不发送）</div>
+          : <><div className="context-note">将发送 {sourcePreview.rows.filter((row) => row.included).length} 条 · 约 {sourcePreview.tokens} tokens（取消勾选即不发送）<small className="context-pin-hint">{PIN_SCOPE_HINT}</small></div>
             <ul>{sourcePreview.rows.map((row) => <li key={`${row.kind}:${row.id}`} className={row.included ? '' : 'omitted'}>
               <label><input type="checkbox" checked={isRowChecked(row, excludedIds, includedIds)} disabled={row.omittedReason === 'budget'} onChange={() => {
                 if (row.kind === 'outline' || row.omittedReason === 'default_excluded') setIncludedIds((current) => toggleIncludedId(current, row.id))
                 else setExcludedIds((current) => toggleExcludedId(current, row.id))
               }} />
-                <strong>{row.title}</strong>{row.included ? <span>{row.preview}{row.truncated ? '…（已截断，部分已省略）' : ''}</span> : <small>{omittedLabel(row.omittedReason)}</small>}</label></li>)}</ul></>}
+                <strong>{row.title}</strong>{row.included ? <span>{row.preview}{row.truncated ? '…（已截断，部分已省略）' : ''}</span> : <small>{omittedLabel(row.omittedReason)}</small>}
+                {basisLabel(row) && <small className="context-basis">{basisLabel(row)}</small>}</label>
+              {isPinnable(row) && <button type="button" className="context-pin" aria-pressed={includedIds.includes(row.id)} onClick={() => setIncludedIds((current) => toggleIncludedId(current, row.id))}>{includedIds.includes(row.id) ? '取消钉住' : '钉住'}</button>}</li>)}</ul></>}
       </div>}
       {selection && <div className="selection-chip">已选择 {selection.text.length} 字</div>}
       <textarea value={input} disabled={loadingHistory} onChange={(event) => setInput(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void submit() } }} placeholder="和同行者聊聊这部作品…" />
@@ -315,7 +318,7 @@ export function AssistantPanel({ project, documentId, documentText, documentRevi
         {mode === 'reader_review' && <label className="candidate-count-picker" title="读者读到第 N 章（按章树顺序）">读到第
           <input aria-label="读到第 N 章" type="number" min={1} step={1} style={{ width: 52 }} value={readerThrough} disabled={Boolean(runningId)}
             onChange={(event) => { const value = event.target.value; setReaderThrough(value); setInput((current) => inputForReaderThrough(current, value)) }} />章</label>}
-        <button className={sourcesOpen ? 'active' : ''} aria-expanded={sourcesOpen} onClick={() => setSourcesOpen((open) => !open)}>上下文{(excludedIds.length || includedIds.length) ? `（排除 ${excludedIds.length}·勾选大纲 ${includedIds.length}）` : ''}</button>
+        <button className={sourcesOpen ? 'active' : ''} aria-expanded={sourcesOpen} onClick={() => setSourcesOpen((open) => !open)}>{contextButtonLabel(excludedIds, includedIds)}</button>
       </div>{runningId ? <button className="send-button" title="取消请求" onClick={() => void window.workspace.ai.cancel(runningId)}><Square size={14} /></button> : <button className="send-button" disabled={!input.trim() || !threadId} aria-label="发送" onClick={() => void submit()}><Send size={15} /></button>}</div>
     </div>
   </aside>
