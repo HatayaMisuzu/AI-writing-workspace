@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { Project, ProjectType } from '../../shared/domain'
+import type { FocusLockedProject, Project, ProjectType } from '../../shared/domain'
+import { FocusLockNotice } from './components/Blackroom'
 import { TitleBar } from './components/TitleBar'
 import { WorksRail } from './components/WorksRail'
 import { Modal } from './components/Modal'
@@ -18,12 +19,23 @@ export function App(): React.JSX.Element {
   const [appError, setAppError] = useState<string>()
   const [appNotice, setAppNotice] = useState<string>()
   const [blackroomLocked, setBlackroomLocked] = useState(false)
-  const onFocusLockChange = useCallback((locked: boolean): void => setBlackroomLocked(locked), [])
+  const [lockedProjects, setLockedProjects] = useState<FocusLockedProject[]>([])
+  const refreshLocked = useCallback(async (): Promise<void> => {
+    try { setLockedProjects(await window.workspace.focus.lockedProjects()) } catch { /* 读不到锁状态不阻止写作 */ }
+  }, [])
+  const onFocusLockChange = useCallback((locked: boolean): void => { setBlackroomLocked(locked); void refreshLocked() }, [refreshLocked])
   const beforeLeaveRef = useRef<(() => Promise<void>) | undefined>(undefined)
   const active = screen.type === 'workspace' ? projects.find((project) => project.id === screen.projectId) : undefined
   const reload = useCallback(async () => setProjects(await window.workspace.projects.list(true)), [])
   const registerBeforeLeave = useCallback((handler?: () => Promise<void>): void => { beforeLeaveRef.current = handler }, [])
   useEffect(() => { void reload() }, [reload])
+  useEffect(() => {
+    void refreshLocked()
+    const timer = window.setInterval(() => void refreshLocked(), 2000)
+    const onFocus = (): void => void refreshLocked()
+    window.addEventListener('focus', onFocus)
+    return () => { window.clearInterval(timer); window.removeEventListener('focus', onFocus) }
+  }, [refreshLocked, screen])
 
   useEffect(() => window.workspace.window.onBeforeClose(() => {
     void (async () => {
@@ -42,6 +54,9 @@ export function App(): React.JSX.Element {
     const project = await window.workspace.projects.create(newProject)
     setCreateOpen(false); setNewProject({ title: '', projectType: 'novel', description: '' }); await reload(); open(project)
   }
+  // 在被锁作品里由小黑屋界面自己呈现；在作品库 / 其他作品 / 设置里显示锁定提示
+  const lockNotice = blackroomLocked ? [] : lockedProjects.filter((item) => !(screen.type === 'workspace' && screen.projectId === item.projectId))
+  const returnToLocked = (projectId: string): void => { void navigate({ type: 'workspace', projectId }) }
   const title = screen.type === 'library' ? '作品库' : screen.type === 'settings' ? '设置 · 模型与服务' : active ? `${active.title} · 写作` : '墨记'
 
   return <div className="app-shell">
@@ -50,7 +65,8 @@ export function App(): React.JSX.Element {
     {appNotice && <div className="app-notice" role="status" data-testid="app-notice"><span>{appNotice}</span><button onClick={() => setAppNotice(undefined)}>关闭</button></div>}
     <div className={blackroomLocked ? "app-body is-blackroom" : "app-body"}>
       {!blackroomLocked && <WorksRail projects={projects.filter((project) => !project.archived)} activeId={active?.id} onLibrary={() => void navigate({ type: 'library' })} onOpen={open} onCreate={() => setCreateOpen(true)} onSettings={() => void navigate({ type: 'settings' })} onSearch={() => void navigate({ type: 'library' })} />}
-      <div className="screen-host">
+      <div className={lockNotice.length ? "screen-host has-lock-notice" : "screen-host"}>
+        <FocusLockNotice locked={lockNotice} onReturn={returnToLocked} />
         {screen.type === 'library' ? <LibraryScreen projects={projects} onOpen={open} onCreate={() => setCreateOpen(true)} onImport={async () => { const project = await window.workspace.backup.importProject(); if (project) { if (project.importNotice) setAppNotice(project.importNotice); await reload(); open(project) } }} onImportManuscript={async () => { const project = await window.workspace.backup.importManuscript(); if (project) { await reload(); open(project) } }} onArchive={async (project) => { await window.workspace.projects.archive(project.id, !project.archived); await reload() }} onBackup={(project) => void window.workspace.backup.exportProject(project.id)} onExport={(project, format, onlyFinal, range) => window.workspace.backup.exportManuscript(project.id, format, onlyFinal, range)} />
           : screen.type === 'settings' ? <SettingsScreen />
           : active ? <WorkspaceScreen key={active.id} project={active} onProjectChanged={() => void reload()} onSettings={() => void navigate({ type: 'settings' })} onRegisterBeforeLeave={registerBeforeLeave} onFocusLockChange={onFocusLockChange} />

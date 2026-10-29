@@ -1,11 +1,11 @@
-import { installEgressGate } from './net/egress-guard'
+import { installEgressGate, isFocusEgressLocked } from './net/egress-guard'
 import { app, BrowserWindow, safeStorage, session, shell } from 'electron'
 import { join } from 'node:path'
 import { AppDatabase } from './database/database'
 import { registerIpc } from './ipc/register'
 import type { SecretCodec } from './ai/provider'
 import { attachCloseHandshake } from './window-close'
-import { isAllowedExternalUrl } from './external-url'
+import { shouldOpenExternal } from './external-url'
 import { NetworkGate, originsFromProviderBaseUrls } from './network-policy'
 
 let database: AppDatabase | undefined
@@ -31,7 +31,7 @@ if (!app.requestSingleInstanceLock()) {
     win.webContents.on('will-navigate', (event) => { event.preventDefault() })
     attachCloseHandshake(win)
     win.webContents.setWindowOpenHandler(({ url }) => {
-      if (isAllowedExternalUrl(url)) void shell.openExternal(url)
+      if (shouldOpenExternal(url, isFocusEgressLocked())) void shell.openExternal(url)
       return { action: 'deny' }
     })
     if (process.env.ELECTRON_RENDERER_URL) void win.loadURL(process.env.ELECTRON_RENDERER_URL)
@@ -62,6 +62,7 @@ if (!app.requestSingleInstanceLock()) {
     const isDev = Boolean(process.env.ELECTRON_RENDERER_URL) || !app.isPackaged
     networkGate = new NetworkGate({
       isDev,
+      isFocusLocked: isFocusEgressLocked,
       onBlocked: (entry) => {
         console.warn(`[network-guard] blocked ${entry.reason}: ${entry.url}`)
       }

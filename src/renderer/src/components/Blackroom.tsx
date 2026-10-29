@@ -1,9 +1,10 @@
 import { useState } from 'react'
-import type { DocumentNode, FocusLockCombine, FocusLockInput, FocusLockMode, FocusLockStatus } from '../../../shared/domain'
+import type { DocumentNode, FocusLockCombine, FocusLockInput, FocusLockMode, FocusLockStatus, FocusLockedProject } from '../../../shared/domain'
+import { userErrorMessage } from '../../../shared/user-error'
 import { Modal } from './Modal'
 
 const EXIT_PHRASE = '我要出屋'
-const cleanError = (error: unknown): string => (error instanceof Error ? error.message : String(error)).replace(/^Error invoking remote method '[^']+': (Error: )?/, '')
+const cleanError = userErrorMessage
 const formatRemaining = (ms: number): string => {
   const total = Math.ceil(ms / 1000)
   return `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`
@@ -63,9 +64,20 @@ export function BlackroomBar({ status, chapters, selectedId, onSelectChapter, on
 export function BlackroomEmergencyDialog({ onClose, onConfirm }: { onClose(): void; onConfirm(phrase: string): Promise<void> }): React.JSX.Element {
   const [phrase, setPhrase] = useState('')
   const [error, setError] = useState<string>()
-  return <Modal title="紧急出屋" onClose={onClose}><form className="node-create-form" onSubmit={(event) => { event.preventDefault(); void onConfirm(phrase).catch((failure) => setError(cleanError(failure))) }}>
+  // Esc 只关闭本对话框（不出屋）
+  return <Modal title="紧急出屋" onClose={onClose} closeOnEscape><form className="node-create-form" onSubmit={(event) => { event.preventDefault(); void onConfirm(phrase).catch((failure) => setError(cleanError(failure))) }}>
     <label><span>输入「{EXIT_PHRASE}」确认离开（会先保存正文）</span><input aria-label="紧急出屋确认" autoFocus value={phrase} onChange={(event) => setPhrase(event.target.value)} /></label>
     {error && <div className="inline-error" role="alert">{error}</div>}
     <div className="modal-actions"><button type="button" onClick={onClose}>取消</button><button className="danger-button" type="submit" disabled={phrase.trim() !== EXIT_PHRASE}>确认出屋</button></div>
   </form></Modal>
+}
+
+/** 作品库 / 其他作品里的锁定提示：写明哪本书被锁，并给出回到该书小黑屋的入口（出屋只能在那本书里完成）。 */
+export function FocusLockNotice({ locked, onReturn }: { locked: FocusLockedProject[]; onReturn(projectId: string): void }): React.JSX.Element | null {
+  if (!locked.length) return null
+  const names = locked.map((item) => `《${item.title}》`).join('、')
+  return <div className="focus-lock-notice" role="status" data-testid="focus-lock-notice">
+    <span><strong>{names}</strong>正在小黑屋中。锁定期间所有作品的 AI 与联网请求都已关闭，出屋需回到该书。</span>
+    {locked.map((item) => <button key={item.projectId} className="primary" data-testid="focus-lock-return" onClick={() => onReturn(item.projectId)}>回到《{item.title}》的小黑屋</button>)}
+  </div>
 }

@@ -535,3 +535,10 @@ button.link { border: 0; background: none; padding: 0; color: var(--accent, #2f6
 .blackroom-modes { border: 0; padding: 0; margin: 0; display: flex; gap: 14px; font-size: 12px; }
 .blackroom-modes legend { margin-bottom: 6px; }
 .app-body.is-blackroom { grid-template-columns: 1fr; }
+
+/* F15：作品库 / 其他作品里的小黑屋锁定提示 */
+.focus-lock-notice { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: center; margin: 12px 18px 0; padding: 10px 14px; color: var(--ink, #2d2a26); background: #f6f1e7; border: 1px solid #d9cdb5; border-radius: 8px; }
+.focus-lock-notice span { flex: 1 1 320px; }
+.screen-host.has-lock-notice { display: flex; flex-direction: column; }
+.screen-host.has-lock-notice > :not(.focus-lock-notice) { flex: 1 1 0; min-height: 0; height: auto; }
+.screen-host.has-lock-notice > .focus-lock-notice { flex: none; }

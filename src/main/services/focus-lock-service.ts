@@ -5,7 +5,7 @@
  * - 数据损坏：视为未锁定并记日志，绝不阻止作者打开书稿。
  */
 import type { AppDatabase } from '../database/database'
-import type { FocusLastSession, FocusLock, FocusLockInput, FocusLockStatus } from '../../shared/domain'
+import type { FocusLastSession, FocusLock, FocusLockInput, FocusLockStatus, FocusLockedProject } from '../../shared/domain'
 import { localDateKey } from './writing-daily-service'
 
 export const FOCUS_MAX_WORDS = 50_000
@@ -17,6 +17,15 @@ export class FocusLockError extends Error {
     super(message)
     this.name = 'FocusLockError'
   }
+  /** Electron invoke 用 `${error}` 拼接报错；只给出文案，不把「FocusLockError:」带给作者。 */
+  override toString(): string { return this.message }
+}
+
+/** 锁定文案：带上被锁作品的书名（F15 锁定可见性）。全部拒绝是有意设计：任一作品锁定 → 所有作品的 AI 与出站请求都拒绝。 */
+export function focusLockedMessage(titles: readonly string[], scope: 'ai' | 'network' = 'ai'): string {
+  const named = titles.length ? titles.map((title) => `《${title}》`).join('、') : '某部作品'
+  const what = scope === 'ai' ? ' AI 功能' : '联网请求'
+  return `${named}正在小黑屋中：锁定期间所有作品的${what}都已关闭，回到${named}出屋后可用。`
 }
 
 type SettingsBag = Record<string, unknown>
@@ -128,9 +137,14 @@ export class FocusLockService {
     try { return this.status(projectId).locked } catch { return false }
   }
 
+  /** 当前处于小黑屋中的作品（书名用于提示与报错）。 */
+  lockedProjects(): FocusLockedProject[] {
+    const rows = this.db.raw.prepare(`SELECT id, title FROM projects WHERE settings_json LIKE '%"focusLock"%' ORDER BY updated_at DESC`).all() as Array<{ id: string; title: string }>
+    return rows.filter((row) => this.isLocked(row.id)).map((row) => ({ projectId: row.id, title: row.title }))
+  }
+
   anyLocked(): boolean {
-    const rows = this.db.raw.prepare(`SELECT id FROM projects WHERE settings_json LIKE '%"focusLock"%'`).all() as Array<{ id: string }>
-    return rows.some((row) => this.isLocked(row.id))
+    return this.lockedProjects().length > 0
   }
 
   /** 正常出屋：仅在达成后可用。 */
@@ -172,10 +186,18 @@ export class FocusLockService {
   }
 }
 
-/** 主进程 AI 入口守门：锁定期间直接拒绝（FOCUS_LOCKED），不触达 Provider。 */
-export function assertNotFocusLocked(focus: Pick<FocusLockService, 'isLocked'>, projectId: string): void {
-  if (focus.isLocked(projectId)) throw new FocusLockError('FOCUS_LOCKED', '小黑屋锁定中（FOCUS_LOCKED）：AI 功能已关闭，出屋后可用。')
+/**
+ * 主进程 AI / 测试连接入口守门：任一作品锁定 → 直接拒绝（code FOCUS_LOCKED），不触达 Provider。
+ * 有意不按作品区分：锁定期间整个应用零出站（见 03-f15-spec.md「锁定期间拒绝的出站请求」）。
+ */
+export function assertNoFocusLockAnywhere(focus: Pick<FocusLockService, 'lockedProjects'>): void {
+  const locked = focus.lockedProjects()
+  if (locked.length) throw new FocusLockError('FOCUS_LOCKED', focusLockedMessage(locked.map((item) => item.title)))
 }
-export function assertNoFocusLockAnywhere(focus: Pick<FocusLockService, 'anyLocked'>): void {
-  if (focus.anyLocked()) throw new FocusLockError('FOCUS_LOCKED', '小黑屋锁定中（FOCUS_LOCKED）：AI 功能已关闭，出屋后可用。')
+/** 按作品调用的入口：判定同样是「任一作品锁定」（含本作品）；本作品被锁时书名排在前面。 */
+export function assertNotFocusLocked(focus: Pick<FocusLockService, 'lockedProjects'>, projectId: string): void {
+  const locked = focus.lockedProjects()
+  if (!locked.length) return
+  const ordered = [...locked.filter((item) => item.projectId === projectId), ...locked.filter((item) => item.projectId !== projectId)]
+  throw new FocusLockError('FOCUS_LOCKED', focusLockedMessage(ordered.map((item) => item.title)))
 }

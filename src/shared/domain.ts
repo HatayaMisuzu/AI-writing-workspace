@@ -490,3 +490,6 @@ export interface FocusLastSession {
   startedAt: number; endedAt: number; mode: FocusLockMode; words?: number; minutes?: number; combine?: FocusLockCombine
   netWords: number; endedBy: 'reached' | 'emergency'
 }
+
+/** F15：处于小黑屋中的作品（用于作品库 / 其他作品的锁定提示）。 */
+export interface FocusLockedProject { projectId: string; title: string }
