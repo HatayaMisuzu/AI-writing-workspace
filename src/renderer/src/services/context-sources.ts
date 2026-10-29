@@ -74,3 +74,18 @@ export const contextButtonLabel = (excludedIds: string[], includedIds: string[])
 export const clearedExclusionState = (): { excludedIds: string[]; includedIds: string[] } =>
   ({ excludedIds: [], includedIds: [] })
 
+
+/** 钉住按模式分开：「当前对话」与「检查一致性」各一组，互不影响；仍只在本次对话内有效。 */
+export type PinScope = 'chat' | 'consistency'
+export type PinsByScope = Record<PinScope, string[]>
+export const pinScopeOf = (mode: string): PinScope => mode === 'consistency_check' ? 'consistency' : 'chat'
+export const emptyPinsByScope = (): PinsByScope => ({ chat: [], consistency: [] })
+export const updatePinsByScope = (state: PinsByScope, scope: PinScope, update: (current: string[]) => string[]): PinsByScope =>
+  ({ ...state, [scope]: update(state[scope]) })
+/** 请求完成后只整理发出请求的那一组（清掉勾选大纲，保留钉住），另一组不动。 */
+export const pinsByScopeAfterRequest = (state: PinsByScope, scope: PinScope): PinsByScope =>
+  updatePinsByScope(state, scope, (current) => stateAfterRequest({ excludedIds: [], includedIds: current }).includedIds)
+
+/** 排除也按模式分开（与钉住同结构）；「排除 N」只算当前清单里可见的已排除条目。 */
+export const visibleExcludedIds = (excludedIds: string[], rows: Pick<ContextSourceRow, 'id'>[] | undefined): string[] =>
+  excludedIds.filter((id) => (rows ?? []).some((row) => row.id === id))

@@ -6,7 +6,7 @@ import { inputForQuickMode, inputForReaderThrough } from '../services/quick-mode
 import { CONSISTENCY_DEFAULT_INTENT, consistencyCoverage } from '../../../shared/consistency-check'
 import { ConsistencyReportView } from './ConsistencyReportView'
 import type { EditorSelection } from './EditorSurface'
-import { OVERFLOW_TRUNCATED_NOTE, overflowSummary, basisLabel, clearedExclusionState, contextButtonLabel, PIN_SCOPE_HINT, stateAfterRequest, isPinnable, isRowChecked, omittedLabel, toContextSourceRows, toggleExcludedId, toggleIncludedId, type ContextSourceRow } from '../services/context-sources'
+import { OVERFLOW_TRUNCATED_NOTE, overflowSummary, basisLabel, contextButtonLabel, PIN_SCOPE_HINT, isPinnable, isRowChecked, omittedLabel, toContextSourceRows, toggleExcludedId, toggleIncludedId, emptyPinsByScope, pinScopeOf, pinsByScopeAfterRequest, updatePinsByScope, visibleExcludedIds, type ContextSourceRow, type PinsByScope } from '../services/context-sources'
 import { activeCandidateText, canProposeGenerationPatch, mapChatHistory, resolveDisplayedModelMode, resolveModelDisplayName, retryInputForMessage, type AssistantHistoryMessage } from '../services/assistant-history'
 
 type ContextSummary = { count: number; tokens: number; items: ContextSourceRow[] }
@@ -47,10 +47,17 @@ export function AssistantPanel({ project, documentId, documentText, documentRevi
   const [digestStatus, setDigestStatus] = useState<DigestStatus>()
   const [digestBusy, setDigestBusy] = useState(false)
   const [modelRouting, setModelRouting] = useState<{ models: ModelConfig[]; routes: Record<RoutedTask, string | 'default'> }>()
-  const [excludedIds, setExcludedIds] = useState<string[]>([])
-  const [includedIds, setIncludedIds] = useState<string[]>([])
+  // 排除按模式分开：当前对话 / 检查一致性各一组（请求后清空发出的那组，切换对话两组都重置）
+  const [exclusionsByScope, setExclusionsByScope] = useState<PinsByScope>(emptyPinsByScope)
+  // 钉住按模式分开：当前对话 / 检查一致性各一组（不持久化，切换对话重置）
+  const [pinsByScope, setPinsByScope] = useState<PinsByScope>(emptyPinsByScope)
   // M2：清单可切换为「检查一致性」将发送的内容，使时间线/设定的超限条目可见、可钉住
   const [previewConsistency, setPreviewConsistency] = useState(false)
+  const activeScope = previewConsistency ? 'consistency' : 'chat'
+  const includedIds = pinsByScope[activeScope]
+  const excludedIds = exclusionsByScope[activeScope]
+  const setExcludedIds = (update: (current: string[]) => string[]): void => setExclusionsByScope((state) => updatePinsByScope(state, activeScope, update))
+  const setIncludedIds = (update: (current: string[]) => string[]): void => setPinsByScope((state) => updatePinsByScope(state, activeScope, update))
   const [sourcesOpen, setSourcesOpen] = useState(false)
   const [sourcePreview, setSourcePreview] = useState<{ rows: ContextSourceRow[]; tokens: number; overflow?: ContextOverflow[]; error?: string }>()
   const cleanups = useRef(new Map<string, () => void>())
@@ -72,7 +79,7 @@ export function AssistantPanel({ project, documentId, documentText, documentRevi
     const history = await window.workspace.chat.listMessages(project.id, thread.id, undefined, 50)
     followLatest.current = true
     setThreads(available); setThreadId(thread.id); setMessages(mapChatHistory(history)); setHasEarlier(history.length === 50); setLoadingHistory(false)
-    const cleared = clearedExclusionState(); setExcludedIds(cleared.excludedIds); setIncludedIds(cleared.includedIds) // 排除项不持久化
+    setExclusionsByScope(emptyPinsByScope()); setPinsByScope(emptyPinsByScope()) // 排除项不持久化
   }, [project.id])
 
   useEffect(() => { void loadThread().catch((error) => { setLoadingHistory(false); setMessages([{ id: crypto.randomUUID(), role: 'assistant',
@@ -125,7 +132,7 @@ export function AssistantPanel({ project, documentId, documentText, documentRevi
     const thread = await window.workspace.chat.newThread(project.id, '新对话')
     setThreads((current) => [thread, ...current]); setThreadId(thread.id); setMessages([]); setHasEarlier(false); setInput('')
     // O1：与切换对话一致，清空上下文排除态
-    const cleared = clearedExclusionState(); setExcludedIds(cleared.excludedIds); setIncludedIds(cleared.includedIds)
+    setExclusionsByScope(emptyPinsByScope()); setPinsByScope(emptyPinsByScope())
     setSourcePreview(undefined)
   }
 
@@ -156,6 +163,9 @@ export function AssistantPanel({ project, documentId, documentText, documentRevi
     }
 
     const reader = requestedMode === 'reader_review'
+    const requestScope = pinScopeOf(requestedMode)
+    const requestIncludedIds = pinsByScope[requestScope]
+    const requestExcludedIds = exclusionsByScope[requestScope]
     const consistency = requestedMode === 'consistency_check'
     // 读者审稿 / 一致性检查只读：不抽取记忆意图、不带编辑目标
     const intentPromise = reader || consistency ? Promise.resolve([] as MemoryProposal[]) : window.workspace.memories.extractIntent(project.id, messageId, text)
@@ -165,8 +175,8 @@ export function AssistantPanel({ project, documentId, documentText, documentRevi
       mode: requestedMode, writePermission: requestedMode === 'editing' || requestedMode === 'generation' ? 'proposal' : 'none', userIntent: text,
       projectId: project.id, documentId: consistency ? documentId : target?.documentId, target,
       selection: target?.selection ? { from: target.selection.fromPm, to: target.selection.toPm, text: target.selection.text } : undefined,
-      excludedIds: excludedIds.length ? excludedIds : undefined,
-      includedIds: includedIds.length ? includedIds : undefined,
+      excludedIds: requestExcludedIds.length ? requestExcludedIds : undefined,
+      includedIds: requestIncludedIds.length ? requestIncludedIds : undefined,
       throughChapterNumber: reader ? Number(readerThrough) : undefined,
       candidateCount: requestedMode === 'generation' ? requestCandidateCount : undefined
     } }, (event) => {
@@ -184,7 +194,7 @@ export function AssistantPanel({ project, documentId, documentText, documentRevi
         setRunningId(undefined)
         setActiveRequestMode(undefined)
         // P3-e M2：钉住在本次对话内保留；排除项与勾选大纲照旧清空
-        setExcludedIds([]); setIncludedIds((current) => stateAfterRequest({ excludedIds: [], includedIds: current }).includedIds)
+        setExclusionsByScope((state) => updatePinsByScope(state, requestScope, () => [])); setPinsByScope((state) => pinsByScopeAfterRequest(state, requestScope))
         setMessages((current) => current.map((item) => item.id === assistantId ? {
           ...item,
           content: candidates?.[0] ?? finalText,
@@ -355,7 +365,7 @@ export function AssistantPanel({ project, documentId, documentText, documentRevi
         {mode === 'reader_review' && <label className="candidate-count-picker" title="读者读到第 N 章（按章树顺序）">读到第
           <input aria-label="读到第 N 章" type="number" min={1} step={1} style={{ width: 52 }} value={readerThrough} disabled={Boolean(runningId)}
             onChange={(event) => { const value = event.target.value; setReaderThrough(value); setInput((current) => inputForReaderThrough(current, value)) }} />章</label>}
-        <button className={sourcesOpen ? 'active' : ''} aria-expanded={sourcesOpen} onClick={() => setSourcesOpen((open) => !open)}>{contextButtonLabel(excludedIds, includedIds)}</button>
+        <button className={sourcesOpen ? 'active' : ''} aria-expanded={sourcesOpen} onClick={() => setSourcesOpen((open) => !open)}>{contextButtonLabel(visibleExcludedIds(excludedIds, sourcePreview?.rows), includedIds)}</button>
       </div>{runningId ? <button className="send-button" title="取消请求" onClick={() => void window.workspace.ai.cancel(runningId)}><Square size={14} /></button> : <button className="send-button" disabled={!input.trim() || !threadId} aria-label="发送" onClick={() => void submit()}><Send size={15} /></button>}</div>
     </div>
   </aside>

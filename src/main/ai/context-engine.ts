@@ -8,7 +8,8 @@ import { validateReaderChapterNumber } from '../../shared/reader-review'
 import { truncateBySide, truncationSideFor } from '../../shared/consistency-check'
 import { compareSettingRank, memoryEntryNames, rankSetting, settingBasis, BASIS_LABELS, type SettingRank } from '../../shared/setting-order'
 
-type Candidate = ContextItem & { priority: number; rank?: SettingRank }
+/** listTitle：只用于清单展示（作者排除行），不进入发送内容。 */
+type Candidate = ContextItem & { priority: number; rank?: SettingRank; listTitle?: string }
 /** P3-e：钉住的设定在创作类模式中排在选区之后、其余一切之前。 */
 const PINNED_PRIORITY = 99
 export const CONSISTENCY_MEMORY_LIMIT = 60
@@ -166,7 +167,7 @@ export class ContextEngine {
     for (const memory of [...relevant, ...pinnedMemories]) {
       const stateWeight = stateWeightOf(memory.status)
       const rank = rankSetting({ id: memory.id, pinned: pinned.has(memory.id), confirmed: memory.status === 'confirmed', names: memoryEntryNames(memory.content), updatedAt: memory.updatedAt }, haystack)
-      candidates.push({ id: memory.id, kind: 'memory', title: `${memory.type} · ${memory.status}`, content: memory.content,
+      candidates.push({ id: memory.id, kind: 'memory', title: `${memory.type} · ${memory.status}`, listTitle: `记忆 · ${settingName(memory.content)}（${memory.type} · ${memory.status}）`, content: memory.content,
         projectId: task.projectId, reason: rank.pinned && !relevant.includes(memory) ? `作者钉住的长期记忆，状态为 ${memory.status}` : `关键词相关的长期记忆，状态为 ${memory.status}`,
         priority: rank.pinned ? PINNED_PRIORITY : stateWeight, rank, basis: settingBasis(rank) })
     }
@@ -315,12 +316,12 @@ export class ContextEngine {
     const omitted: ContextOmission[] = []
     let estimatedTokens = 0
     const seen = new Set<string>()
-    for (const { priority, rank, ...item } of sorted) {
+    for (const { priority, rank, listTitle, ...item } of sorted) {
       void priority; void rank
       const basis = item.basis ? { basis: item.basis } : {}
       const key = `${item.kind}:${item.id}`
       if (seen.has(key) || item.projectId !== projectId) continue
-      if (excluded.has(item.id)) { seen.add(key); omitted.push({ id: item.id, kind: item.kind, title: item.title, reason: 'user_excluded', ...basis }); continue }
+      if (excluded.has(item.id)) { seen.add(key); omitted.push({ id: item.id, kind: item.kind, title: listTitle ?? item.title, reason: 'user_excluded', ...basis }); continue }
       // S6/P1：大纲进清单但默认不发送，除非 includedIds 勾选
       if (item.kind === 'outline' && !included.has(item.id)) {
         seen.add(key); omitted.push({ id: item.id, kind: item.kind, title: item.title, reason: 'default_excluded' }); continue
