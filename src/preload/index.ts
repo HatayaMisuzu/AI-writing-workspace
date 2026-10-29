@@ -80,7 +80,8 @@ const api: WorkspaceApi = {
   focus: {
     status: (projectId) => invoke('focus:status', projectId), restore: (projectId) => invoke('focus:restore', projectId),
     start: (projectId, input) => invoke('focus:start', projectId, input), finish: (projectId) => invoke('focus:finish', projectId),
-    emergencyExit: (projectId, phrase) => invoke('focus:emergency-exit', projectId, phrase), lastSession: (projectId) => invoke('focus:last-session', projectId)
+    emergencyExit: (projectId, phrase) => invoke('focus:emergency-exit', projectId, phrase), lastSession: (projectId) => invoke('focus:last-session', projectId),
+    lockedProjects: () => invoke('focus:locked-projects')
   },
   prompts: {
     list: (projectId) => invoke('prompts:list', projectId),

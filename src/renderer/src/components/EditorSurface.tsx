@@ -1,3 +1,4 @@
+import { userErrorMessage } from '../../../shared/user-error'
 import { CharacterCount } from '@tiptap/extension-character-count'
 import { Placeholder } from '@tiptap/extension-placeholder'
 import { EditorContent, useEditor } from '@tiptap/react'
@@ -199,7 +200,7 @@ export function EditorSurface({ node, content, focusMode, onFocusMode, onSaved, 
       await coordinator.flush()
       setAiIssues(await window.workspace.proofreading.run(node.projectId, node.id))
       setAiProofreadRan(true)
-    } catch (error) { setProofreadError(error instanceof Error ? error.message : String(error)) }
+    } catch (error) { setProofreadError(userErrorMessage(error)) }
     finally { setProofreadBusy(false) }
   }
 

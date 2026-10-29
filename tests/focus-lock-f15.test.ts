@@ -148,11 +148,12 @@ describe('F15 ④ 锁定期间 AI 主进程入口返回 FOCUS_LOCKED，Provider 
     expect(providerCalls).toBe(1)
     expect(rawFetchCalls).toBe(1)
   })
-  it('锁只作用于当前作品：另一作品的 AI 入口不受影响', () => {
+  it('有意全局：任一作品锁定 → 另一作品的 AI 入口同样拒绝（与出站兜底一致），报错带被锁书名', () => {
     const { db, focus, project } = setup()
     const other = new ProjectService(db).create({ title: '另一本', projectType: 'novel' })
     focus.start(project.id, { mode: 'words', words: 10 })
-    expect(codeOf(() => assertNotFocusLocked(focus, other.id))).toBeUndefined()
+    expect(codeOf(() => assertNotFocusLocked(focus, other.id))).toBe('FOCUS_LOCKED')
+    expect(() => assertNotFocusLocked(focus, other.id)).toThrow('《小黑屋》')
   })
 })
 

@@ -5,7 +5,7 @@ import type {
   ContextBundle,
   AITaskEnvelope, Character, ChatCursor, ChatMessage, ChatThread, DigestStatus, DocumentContent, DocumentNode, Idea, LocalLintIssue,
   MemoryItem, MemoryProposal, ModelConfig, NodeOutline, Project, ProjectNote, ProjectType, ProofreadIssue, ProviderConfig,
-  ProviderInput, RoutedTask, SearchResult, Snapshot, TaskModelRoute, TextOrigin, TextPatch, WritingDailyRow, WritingGoals, ChapterWordRange, ChapterStatus, SerialProgress, StockpileSummary, ForeshadowEntry, ForeshadowState, TimelineEvent, TimelineSortMode, FocusLockInput, FocusLockStatus, FocusLastSession
+  ProviderInput, RoutedTask, SearchResult, Snapshot, TaskModelRoute, TextOrigin, TextPatch, WritingDailyRow, WritingGoals, ChapterWordRange, ChapterStatus, SerialProgress, StockpileSummary, ForeshadowEntry, ForeshadowState, TimelineEvent, TimelineSortMode, FocusLockInput, FocusLockStatus, FocusLastSession, FocusLockedProject
 } from './domain'
 
 export interface WorkspaceApi {
@@ -143,6 +143,7 @@ export interface WorkspaceApi {
     finish(projectId: string): Promise<FocusLockStatus>
     emergencyExit(projectId: string, phrase: string): Promise<FocusLockStatus>
     lastSession(projectId: string): Promise<FocusLastSession | null>
+    lockedProjects(): Promise<FocusLockedProject[]>
   }
   prompts: {
     list(projectId: string): Promise<PromptTemplateEntry[]>
