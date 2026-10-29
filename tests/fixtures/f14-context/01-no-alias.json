@@ -1,0 +1,30 @@
+{
+ "name": "01-no-alias",
+ "chapter": "林舟推开门，沈月没有回头。雨下了一夜。",
+ "characters": [
+  {
+   "id": "c1",
+   "name": "林舟",
+   "aliases": [],
+   "notes": "惯用右手",
+   "fields": {},
+   "updatedAt": 1003
+  },
+  {
+   "id": "c2",
+   "name": "沈月",
+   "aliases": [],
+   "notes": "沉默寡言",
+   "fields": {},
+   "updatedAt": 1002
+  },
+  {
+   "id": "c3",
+   "name": "周岚",
+   "aliases": [],
+   "notes": "未出场",
+   "fields": {},
+   "updatedAt": 1001
+  }
+ ]
+}

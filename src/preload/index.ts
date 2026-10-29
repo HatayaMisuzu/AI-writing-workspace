@@ -37,7 +37,7 @@ const api: WorkspaceApi = {
   ideas: { list: (projectId) => invoke('ideas:list', projectId), create: (projectId, content, tags) => invoke('ideas:create', projectId, content, tags) },
   outlines: { get: (projectId, nodeId) => invoke('outlines:get', projectId, nodeId), list: (projectId) => invoke('outlines:list', projectId), save: (input) => invoke('outlines:save', input) },
   notes: { list: (projectId, section) => invoke('notes:list', projectId, section), save: (input) => invoke('notes:save', input), delete: (projectId, id) => invoke('notes:delete', projectId, id) },
-  characters: { list: (projectId) => invoke('characters:list', projectId), save: (input) => invoke('characters:save', input), delete: (projectId, id) => invoke('characters:delete', projectId, id) },
+  characters: { list: (projectId) => invoke('characters:list', projectId), save: (input) => invoke('characters:save', input), delete: (projectId, id) => invoke('characters:delete', projectId, id), hoverPrefs: (projectId) => invoke('characters:hover-prefs', projectId), setHoverPrefs: (projectId, prefs) => invoke('characters:set-hover-prefs', projectId, prefs) },
   foreshadows: {
     listLedger: (projectId) => invoke('foreshadows:list-ledger', projectId),
     listPending: (projectId) => invoke('foreshadows:list-pending', projectId),

@@ -1,0 +1,34 @@
+{
+ "name": "s2-lin-linzhi",
+ "singleChar": true,
+ "allowDiff": [
+  "c1"
+ ],
+ "chapter": "林栀来了，林说了句话。",
+ "characters": [
+  {
+   "id": "c1",
+   "name": "林",
+   "aliases": [],
+   "notes": "单字名",
+   "fields": {},
+   "updatedAt": 1003
+  },
+  {
+   "id": "c2",
+   "name": "林栀",
+   "aliases": [],
+   "notes": "双字名",
+   "fields": {},
+   "updatedAt": 1002
+  },
+  {
+   "id": "c3",
+   "name": "周岚",
+   "aliases": [],
+   "notes": "未出场",
+   "fields": {},
+   "updatedAt": 1004
+  }
+ ]
+}

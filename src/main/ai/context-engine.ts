@@ -6,6 +6,8 @@ import { StyleEngine } from './style-engine'
 import { relevanceScore } from './relevance'
 import { validateReaderChapterNumber } from '../../shared/reader-review'
 import { truncateBySide, truncationSideFor } from '../../shared/consistency-check'
+import { mentionedIds } from '../../shared/name-matcher'
+import { readHoverPrefs } from '../services/hover-prefs-service'
 import { compareSettingRank, memoryEntryNames, rankSetting, settingBasis, BASIS_LABELS, type SettingRank } from '../../shared/setting-order'
 
 /** listTitle：只用于清单展示（作者排除行），不进入发送内容。 */
@@ -41,6 +43,11 @@ export class ContextEngine {
     this.styles = new StyleEngine(db)
   }
 
+  /** F14：作者手动打开的单字名/别名（settings_json.hoverEnabledSingleTerms）；损坏视为空。 */
+  private matcherOptions(projectId: string): { enabledSingleTerms: Array<{ characterId: string; term: string }> } {
+    try { return { enabledSingleTerms: readHoverPrefs(this.db, projectId).enabledSingleTerms } } catch { return { enabledSingleTerms: [] } }
+  }
+
   build(task: AITaskEnvelope, budget = 12_000): ContextBundle {
     if (task.mode === 'reader_review') {
       const through = task.throughChapterNumber ?? task.throughChapterId
@@ -70,8 +77,10 @@ export class ContextEngine {
       .all(projectId) as Array<{ id: string; type: string; content: string; updated_at: number }>
     // P3-e M1：先对全部已确认设定按新规则排序，再截取上限（60 条），避免早期相关设定被 SQL LIMIT 先截掉
     const memoryCandidates: Candidate[] = []
+    // F14：本章提及统一走 name-matcher（最长优先、单字默认不算）
+    const memoryMentioned = mentionedIds(memories.map((memory) => ({ id: memory.id, names: memoryEntryNames(memory.content) })), haystack, this.matcherOptions(projectId))
     memories.forEach((memory) => {
-      const rank = rankSetting({ id: memory.id, pinned: pinned.has(memory.id), confirmed: true, names: memoryEntryNames(memory.content), updatedAt: memory.updated_at }, haystack)
+      const rank = rankSetting({ id: memory.id, pinned: pinned.has(memory.id), confirmed: true, names: memoryEntryNames(memory.content), updatedAt: memory.updated_at }, haystack, memoryMentioned.has(memory.id))
       memoryCandidates.push({ id: memory.id, kind: 'memory', title: `设定 · ${settingName(memory.content)}（${memory.type}）`, content: memory.content,
         projectId, reason: '作者已确认的设定', priority: 80, rank, basis: settingBasis(rank) })
     })
@@ -82,12 +91,13 @@ export class ContextEngine {
     const characters = this.db.raw.prepare('SELECT * FROM characters WHERE project_id = ? ORDER BY updated_at DESC, id').all(projectId) as Array<Record<string, unknown>>
     // P3-e M1：人物卡同理，先排序再截取 40 条
     const characterCandidates: Candidate[] = []
+    const characterMentioned = mentionedIds(characters.map((row) => ({ id: row.id as string, names: [row.name as string, ...(JSON.parse(row.aliases_json as string) as string[])] })), haystack, this.matcherOptions(projectId))
     characters.forEach((row) => {
       const aliases = JSON.parse(row.aliases_json as string) as string[]
       const fields = JSON.parse(row.fields_json as string) as Record<string, string>
       const content = [aliases.length ? `别名：${aliases.join('、')}` : '', row.notes as string,
         ...Object.entries(fields).filter(([, value]) => value).map(([key, value]) => `${key}：${value}`)].filter(Boolean).join('\n')
-      const rank = rankSetting({ id: row.id as string, pinned: pinned.has(row.id as string), confirmed: false, names: [row.name as string, ...aliases], updatedAt: row.updated_at as number }, haystack)
+      const rank = rankSetting({ id: row.id as string, pinned: pinned.has(row.id as string), confirmed: false, names: [row.name as string, ...aliases], updatedAt: row.updated_at as number }, haystack, characterMentioned.has(row.id as string))
       characterCandidates.push({ id: row.id as string, kind: 'character', title: `人物 · ${row.name as string}`, content: content || '（无更多信息）',
         projectId, reason: '人物卡', priority: rank.mentioned ? 79 : 70, rank, basis: settingBasis(rank) })
     })
@@ -155,9 +165,12 @@ export class ContextEngine {
     const statuses = ['confirmed', 'observed', 'tentative', 'idea'] as const
     // P3-e M1/M3：先取全部关键词相关记忆，按 钉住 > 状态权重 > 本章提及 > 关键词相关度（沿用 base 的 relevanceScore，含作者提问）> 更新 > id 排序，再截取 12 条
     const stateWeightOf = (status: string): number => status === 'confirmed' ? 85 : status === 'observed' ? 78 : status === 'tentative' ? 55 : 40
-    const rankedRelevant = this.memories.searchRelevant(task.projectId, [...statuses], signal, Number.MAX_SAFE_INTEGER)
+    const relevantMemories = this.memories.searchRelevant(task.projectId, [...statuses], signal, Number.MAX_SAFE_INTEGER)
+    const pinnedOnly = this.memories.list(task.projectId, [...statuses]).filter((memory) => pinned.has(memory.id) && !relevantMemories.some((item) => item.id === memory.id))
+    const memoryMentioned = mentionedIds([...relevantMemories, ...pinnedOnly].map((memory) => ({ id: memory.id, names: memoryEntryNames(memory.content) })), haystack, this.matcherOptions(task.projectId))
+    const rankedRelevant = relevantMemories
       .map((memory) => ({ memory, score: relevanceScore(memory.content, signal),
-        rank: rankSetting({ id: memory.id, pinned: pinned.has(memory.id), confirmed: memory.status === 'confirmed', names: memoryEntryNames(memory.content), updatedAt: memory.updatedAt }, haystack) }))
+        rank: rankSetting({ id: memory.id, pinned: pinned.has(memory.id), confirmed: memory.status === 'confirmed', names: memoryEntryNames(memory.content), updatedAt: memory.updatedAt }, haystack, memoryMentioned.has(memory.id)) }))
       .toSorted((a, b) => Number(b.rank.pinned) - Number(a.rank.pinned) || stateWeightOf(b.memory.status) - stateWeightOf(a.memory.status)
         || Number(b.rank.mentioned) - Number(a.rank.mentioned) || b.score - a.score || compareSettingRank(a.rank, b.rank))
     const relevant = rankedRelevant.slice(0, CREATIVE_MEMORY_LIMIT).map((item) => item.memory)
@@ -166,7 +179,7 @@ export class ContextEngine {
     const pinnedMemories = this.memories.list(task.projectId, [...statuses]).filter((memory) => pinned.has(memory.id) && !relevant.some((item) => item.id === memory.id))
     for (const memory of [...relevant, ...pinnedMemories]) {
       const stateWeight = stateWeightOf(memory.status)
-      const rank = rankSetting({ id: memory.id, pinned: pinned.has(memory.id), confirmed: memory.status === 'confirmed', names: memoryEntryNames(memory.content), updatedAt: memory.updatedAt }, haystack)
+      const rank = rankSetting({ id: memory.id, pinned: pinned.has(memory.id), confirmed: memory.status === 'confirmed', names: memoryEntryNames(memory.content), updatedAt: memory.updatedAt }, haystack, memoryMentioned.has(memory.id))
       candidates.push({ id: memory.id, kind: 'memory', title: `${memory.type} · ${memory.status}`, listTitle: `记忆 · ${settingName(memory.content)}（${memory.type} · ${memory.status}）`, content: memory.content,
         projectId: task.projectId, reason: rank.pinned && !relevant.includes(memory) ? `作者钉住的长期记忆，状态为 ${memory.status}` : `关键词相关的长期记忆，状态为 ${memory.status}`,
         priority: rank.pinned ? PINNED_PRIORITY : stateWeight, rank, basis: settingBasis(rank) })
@@ -203,12 +216,16 @@ export class ContextEngine {
 
   private addCharacters(projectId: string, signal: string, candidates: Candidate[], haystack = '', pinned: Set<string> = new Set()): ContextOverflow[] {
     const rows = this.db.raw.prepare('SELECT * FROM characters WHERE project_id = ? ORDER BY updated_at DESC').all(projectId) as Array<Record<string, unknown>>
+    const termsOf = (row: Record<string, unknown>) => ({ id: row.id as string, names: [row.name as string, ...(JSON.parse(row.aliases_json as string) as string[])] })
+    // F14：「提及」（signal：提问+选区+正文）与「本章提及」（haystack）都走 name-matcher
+    const signalMatched = mentionedIds(rows.map(termsOf), signal, this.matcherOptions(projectId))
+    const haystackMatched = mentionedIds(rows.map(termsOf), haystack, this.matcherOptions(projectId))
     const ranked = rows.map((row) => ({
       character: { id: row.id as string, projectId, name: row.name as string, aliases: JSON.parse(row.aliases_json as string) as string[],
         notes: row.notes as string, fields: JSON.parse(row.fields_json as string) as Record<string, string>, createdAt: row.created_at as number, updatedAt: row.updated_at as number } satisfies Character,
-      matched: [row.name as string, ...(JSON.parse(row.aliases_json as string) as string[])].some((name) => name && signal.includes(name))
+      matched: signalMatched.has(row.id as string)
     })).map((item) => ({ ...item, rank: rankSetting({ id: item.character.id, pinned: pinned.has(item.character.id), confirmed: false,
-      names: [item.character.name, ...item.character.aliases], updatedAt: item.character.updatedAt }, haystack) }))
+      names: [item.character.name, ...item.character.aliases], updatedAt: item.character.updatedAt }, haystack, haystackMatched.has(item.character.id)) }))
       // P3-e：钉住的人物卡即使未被提及也带上；8 条上限按确定排序截取
       .filter((item) => item.matched || item.rank.pinned).toSorted((a, b) => compareSettingRank(a.rank, b.rank))
     const split = withinLimitOrPinned(ranked, CREATIVE_CHARACTER_LIMIT, (item) => item.rank.pinned)

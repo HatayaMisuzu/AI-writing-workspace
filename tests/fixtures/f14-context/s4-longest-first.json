@@ -1,0 +1,35 @@
+{
+ "name": "s4-longest-first",
+ "singleChar": false,
+ "allowDiff": [
+  "c1"
+ ],
+ "note": "非单字：最长优先导致「林栀」被「林栀子」覆盖而失去本章提及（spec 偏差，见 PR）",
+ "chapter": "林栀子推开门。",
+ "characters": [
+  {
+   "id": "c1",
+   "name": "林栀",
+   "aliases": [],
+   "notes": "姐姐",
+   "fields": {},
+   "updatedAt": 1003
+  },
+  {
+   "id": "c2",
+   "name": "林栀子",
+   "aliases": [],
+   "notes": "妹妹",
+   "fields": {},
+   "updatedAt": 1002
+  },
+  {
+   "id": "c3",
+   "name": "周岚",
+   "aliases": [],
+   "notes": "未出场",
+   "fields": {},
+   "updatedAt": 1004
+  }
+ ]
+}

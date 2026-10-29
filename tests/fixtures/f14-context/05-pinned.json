@@ -1,0 +1,33 @@
+{
+ "name": "05-pinned",
+ "chapter": "林舟独自赶路。",
+ "pinned": [
+  "c3"
+ ],
+ "characters": [
+  {
+   "id": "c1",
+   "name": "林舟",
+   "aliases": [],
+   "notes": "主角",
+   "fields": {},
+   "updatedAt": 1001
+  },
+  {
+   "id": "c2",
+   "name": "沈月",
+   "aliases": [],
+   "notes": "未出场",
+   "fields": {},
+   "updatedAt": 1003
+  },
+  {
+   "id": "c3",
+   "name": "周岚",
+   "aliases": [],
+   "notes": "钉住但未出场",
+   "fields": {},
+   "updatedAt": 1002
+  }
+ ]
+}

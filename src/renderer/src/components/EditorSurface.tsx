@@ -1,14 +1,17 @@
 import { userErrorMessage } from '../../../shared/user-error'
 import { CharacterCount } from '@tiptap/extension-character-count'
 import { Placeholder } from '@tiptap/extension-placeholder'
-import { EditorContent, useEditor } from '@tiptap/react'
+import { EditorContent, Extension, useEditor } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
-import { Check, Focus, Lock, LocateFixed, Redo2, Save, ShieldCheck, Sparkles, Undo2, X } from 'lucide-react'
+import { Check, Focus, UserRound, Lock, LocateFixed, Redo2, Save, ShieldCheck, Sparkles, Undo2, X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { DocumentContent, DocumentNode, DocumentTaskTarget, LocalLintIssue, ProofreadIssue, TextPatch } from '../../../shared/domain'
+import type { Character, CharacterHoverPrefs, DocumentContent, DocumentNode, DocumentTaskTarget, LocalLintIssue, ProofreadIssue, TextPatch } from '../../../shared/domain'
 import { textIdentity } from '../../../shared/text-identity'
 import { findTextRange, findTextRanges, plainTextRangeToPm } from '../services/prosemirror-range'
 import { SaveCoordinator, type SaveState } from '../services/save-coordinator'
+import { NameMatcher, termsFromCharacters } from '../../../shared/name-matcher'
+import { CHARACTERS_CHANGED_EVENT, HOVER_DEGRADE_NOTICE, characterHoverPlugin, hitAt, ignoreHoverAt, isHoverDegraded, setHoverMatcher, type DecoratedHit } from '../services/character-hover'
+import { CharacterHoverCard } from './CharacterHoverCard'
 
 export interface EditorSelection { fromPm: number; toPm: number; text: string }
 export interface EditorController {
@@ -28,8 +31,8 @@ const issueLabel = (kind: string): string => ({
   quote: '引号', punctuation: '标点', typo: '错别字', grammar: '语法', reference: '指代', repetition: '重复', format: '格式'
 }[kind] ?? '文字提示')
 
-export function EditorSurface({ node, content, focusMode, onFocusMode, onSaved, onSelection, onRegisterController, onOpenPatches, blackroomLocked = false, onBlackroom }: {
-  blackroomLocked?: boolean; onBlackroom?(): void
+export function EditorSurface({ node, content, focusMode, onFocusMode, onSaved, onSelection, onRegisterController, onOpenPatches, blackroomLocked = false, onBlackroom, onOpenCharacter }: {
+  blackroomLocked?: boolean; onBlackroom?(): void; onOpenCharacter?(characterId: string): void
   node: DocumentNode; content: DocumentContent; focusMode: boolean; onFocusMode(value: boolean): void
   onSaved(content: DocumentContent): void; onSelection(selection?: EditorSelection): void
   onRegisterController(controller?: EditorController): void
@@ -74,8 +77,28 @@ export function EditorSurface({ node, content, focusMode, onFocusMode, onSaved, 
     setSaveError(state === 'error' ? (error instanceof Error ? error.message : '保存失败，请重试。') : undefined)
   }), [node.id, node.projectId, runLocalLint])
 
+  // F14 人物悬停：人物卡 + 偏好来自本地 IPC；只加 Decoration，不改 editor_json
+  const [characters, setCharacters] = useState<Character[]>([])
+  const [hoverPrefs, setHoverPrefs] = useState<CharacterHoverPrefs>()
+  const [hoverCard, setHoverCard] = useState<{ hit: Pick<DecoratedHit, 'term' | 'characterIds' | 'pmFrom' | 'pmTo'>; position: { left: number; top: number } }>()
+  const [hoverDegraded, setHoverDegraded] = useState(false)
+  const shortcutRef = useRef<(() => void) | undefined>(undefined)
+  const hoverExtension = useMemo(() => Extension.create({ name: 'characterHover',
+    addProseMirrorPlugins: () => [characterHoverPlugin({ onShortcut: () => shortcutRef.current?.() })] }), [])
+  useEffect(() => {
+    let alive = true
+    const load = (): void => { void Promise.all([window.workspace.characters.list(node.projectId), window.workspace.characters.hoverPrefs(node.projectId)])
+      .then(([list, prefs]) => { if (alive) { setCharacters(list); setHoverPrefs(prefs) } }).catch(() => undefined) }
+    load()
+    const onChanged = (event: Event): void => { if ((event as CustomEvent<{ projectId: string }>).detail?.projectId === node.projectId) load() }
+    window.addEventListener(CHARACTERS_CHANGED_EVENT, onChanged)
+    return () => { alive = false; window.removeEventListener(CHARACTERS_CHANGED_EVENT, onChanged) }
+  }, [node.projectId])
+  const hoverMatcher = useMemo(() => hoverPrefs?.enabled ? new NameMatcher(termsFromCharacters(characters),
+    { ignoredTerms: hoverPrefs.ignoredTerms, enabledSingleTerms: hoverPrefs.enabledSingleTerms }) : null, [characters, hoverPrefs])
+
   const editor = useEditor({
-    extensions: [StarterKit, CharacterCount, Placeholder.configure({ placeholder: '从这里开始写……' })],
+    extensions: [StarterKit, CharacterCount, Placeholder.configure({ placeholder: '从这里开始写……' }), hoverExtension],
     content: content.editorJson,
     editorProps: { attributes: { class: 'manuscript-editor', spellcheck: 'false' } },
     onUpdate: ({ editor: activeEditor }) => {
@@ -173,6 +196,58 @@ export function EditorSurface({ node, content, focusMode, onFocusMode, onSaved, 
     return () => { onRegisterController(undefined); coordinator.dispose() }
   }, [coordinator, editor, node.id, node.projectId, onRegisterController])
 
+  useEffect(() => {
+    if (!editor || editor.isDestroyed) return
+    setHoverMatcher(editor.view, hoverMatcher)
+    setHoverCard(undefined)
+    setHoverDegraded(isHoverDegraded(editor.state))
+    const onTransaction = (): void => setHoverDegraded(isHoverDegraded(editor.state))
+    editor.on('transaction', onTransaction)
+    return () => { editor.off('transaction', onTransaction) }
+  }, [editor, hoverMatcher])
+
+  useEffect(() => {
+    if (!editor) return
+    const dom = editor.view.dom as HTMLElement
+    let openTimer: ReturnType<typeof setTimeout> | undefined
+    const cardAt = (target: HTMLElement): void => {
+      const hit = hitAt(editor.state, editor.view.posAtDOM(target, 0))
+      if (!hit) return
+      const rect = target.getBoundingClientRect()
+      setHoverCard({ hit, position: { left: rect.left, top: rect.bottom + 6 } })
+    }
+    const onOver = (event: MouseEvent): void => {
+      const target = (event.target as HTMLElement).closest<HTMLElement>('.character-hit')
+      if (!target) return
+      if (openTimer) clearTimeout(openTimer)
+      openTimer = setTimeout(() => cardAt(target), 300)
+    }
+    const onOut = (event: MouseEvent): void => {
+      const target = (event.target as HTMLElement).closest('.character-hit')
+      if (!target || target.contains(event.relatedTarget as Node | null)) return
+      if (openTimer) { clearTimeout(openTimer); openTimer = undefined }
+      if (!(event.relatedTarget as HTMLElement | null)?.closest?.('.character-hover-card')) setHoverCard(undefined)
+    }
+    dom.addEventListener('mouseover', onOver)
+    dom.addEventListener('mouseout', onOut)
+    shortcutRef.current = () => {
+      const hit = hitAt(editor.state, editor.state.selection.from)
+      if (!hit) return
+      const coords = editor.view.coordsAtPos(hit.pmFrom)
+      setHoverCard({ hit, position: { left: coords.left, top: coords.bottom + 6 } })
+    }
+    return () => { if (openTimer) clearTimeout(openTimer); dom.removeEventListener('mouseover', onOver); dom.removeEventListener('mouseout', onOut); shortcutRef.current = undefined }
+  }, [editor])
+
+  useEffect(() => {
+    if (!hoverCard) return
+    const onKey = (event: KeyboardEvent): void => { if (event.key === 'Escape') setHoverCard(undefined) }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [hoverCard])
+
+  const saveHoverPrefs = async (next: CharacterHoverPrefs): Promise<void> => { setHoverPrefs(await window.workspace.characters.setHoverPrefs(node.projectId, next)) }
+
   const applyLocalIssue = async (issue: LocalLintIssue): Promise<void> => {
     if (!editor || !issue.replacement) return
     if (issue.documentId !== node.id) throw new Error('校对结果不属于当前章节。')
@@ -228,11 +303,19 @@ export function EditorSurface({ node, content, focusMode, onFocusMode, onSaved, 
       {!blackroomLocked && <button className="toolbar-button" onClick={() => setProofreadOpen(true)}><ShieldCheck size={16} />校对{visibleLocalIssues.length > 0 ? ` ${visibleLocalIssues.length}` : ''}</button>}
       {!blackroomLocked && <button className="toolbar-button" onClick={() => onFocusMode(!focusMode)}><Focus size={16} />专注</button>}
       {!blackroomLocked && onBlackroom && <button className="toolbar-button" onClick={onBlackroom}><Lock size={16} />小黑屋</button>}
+      <button className={hoverPrefs?.enabled ? 'toolbar-button active' : 'toolbar-button'} aria-pressed={Boolean(hoverPrefs?.enabled)} title="悬停人名显示只读人物卡" disabled={!hoverPrefs}
+        onClick={() => { if (hoverPrefs) void saveHoverPrefs({ ...hoverPrefs, enabled: !hoverPrefs.enabled }) }}><UserRound size={16} />人物悬停</button>
       <span className="toolbar-spacer" /><span className={`save-indicator ${saveState}`} title={saveError}><Save size={14} />{saveState === 'saved' ? '已保存' : saveState === 'dirty' ? '等待保存' : saveState === 'saving' ? '保存中' : '保存失败，内容仍保留'}</span>
     </div>
     {saveError && <div className="save-error" role="alert">{saveError}</div>}
     <div className="writing-scroll"><article className="writing-page"><h1>{node.title}</h1><EditorContent editor={editor} /></article></div>
-    <div className="editor-status"><span>{liveWordCount.toLocaleString()} 字</span>{visibleLocalIssues.length > 0 && <button className="proofread-count" onClick={() => setProofreadOpen(true)}>{visibleLocalIssues.length} 条校对提示</button>}</div>
+    <div className="editor-status"><span>{liveWordCount.toLocaleString()} 字</span>{visibleLocalIssues.length > 0 && <button className="proofread-count" onClick={() => setProofreadOpen(true)}>{visibleLocalIssues.length} 条校对提示</button>}{hoverDegraded && hoverPrefs?.enabled && <span className="hover-degraded" data-testid="hover-degraded">{HOVER_DEGRADE_NOTICE}</span>}</div>
+    {hoverCard && <CharacterHoverCard term={hoverCard.hit.term} position={hoverCard.position} showOpenLink={!blackroomLocked && Boolean(onOpenCharacter)}
+      characters={hoverCard.hit.characterIds.map((id) => characters.find((item) => item.id === id)).filter((item): item is Character => Boolean(item))}
+      onOpen={(id) => { setHoverCard(undefined); onOpenCharacter?.(id) }}
+      onIgnoreTerm={() => { const { hit } = hoverCard; setHoverCard(undefined); if (hoverPrefs) void saveHoverPrefs({ ...hoverPrefs, ignoredTerms: [...hoverPrefs.ignoredTerms, ...hit.characterIds.map((characterId) => ({ characterId, term: hit.term }))] }) }}
+      onIgnoreHere={() => { const { hit } = hoverCard; setHoverCard(undefined); if (editor) ignoreHoverAt(editor.view, { from: hit.pmFrom, to: hit.pmTo }) }}
+      onMouseEnter={() => undefined} onMouseLeave={() => setHoverCard(undefined)} />}
     {proofreadOpen && !blackroomLocked && <aside className="proofread-drawer" aria-label="校对结果">
       <header><div><h2>校对</h2><p>本地规则可直接修正；AI 建议会先进入修改提案。</p></div><button className="icon-button" aria-label="关闭校对" onClick={() => setProofreadOpen(false)}><X size={18} /></button></header>
       <div className="proofread-actions"><button onClick={() => void runLocalLint(editor?.getText({ blockSeparator: '\n\n' }) ?? '')}>重新检查本地规则</button><button className="primary" disabled={proofreadBusy} onClick={() => void runAiProofread()}><Sparkles size={15} />{proofreadBusy ? 'AI 校对中…' : '运行 AI 校对'}</button></div>

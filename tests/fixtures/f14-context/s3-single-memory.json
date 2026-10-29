@@ -1,0 +1,35 @@
+{
+ "name": "s3-single-memory",
+ "singleChar": true,
+ "allowDiff": [
+  "m1"
+ ],
+ "chapter": "雾很大，城门关了。",
+ "characters": [
+  {
+   "id": "c1",
+   "name": "守门人",
+   "aliases": [],
+   "notes": "未出场",
+   "fields": {},
+   "updatedAt": 1001
+  }
+ ],
+ "memories": [
+  {
+   "id": "m1",
+   "content": "雾：子时起",
+   "t": 1004
+  },
+  {
+   "id": "m2",
+   "content": "城门：子时关闭",
+   "t": 1002
+  },
+  {
+   "id": "m3",
+   "content": "北境：寒冷",
+   "t": 1003
+  }
+ ]
+}
