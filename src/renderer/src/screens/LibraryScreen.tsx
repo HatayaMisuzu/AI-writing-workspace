@@ -1,3 +1,4 @@
+import { userErrorMessage } from '../../../shared/user-error'
 import { Archive, Download, FileText, MoreHorizontal, Plus, Search, ShieldCheck } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import type { Project } from '../../../shared/domain'
@@ -63,6 +64,8 @@ export function LibraryScreen({ projects, onOpen, onCreate, onImport, onImportMa
   </main>
 }
 
+const isEmptyExport = (result: unknown): boolean => typeof result === 'object' && result !== null && (result as { status?: unknown }).status === 'empty'
+
 /** P1-2 F12：第 N–M 章（章树顺序，1 起始）× 仅定稿 × 格式。 */
 function ExportRangeDialog({ project, onClose, onExport }: { project: Project; onClose(): void; onExport(project: Project, format: ExportFormat, onlyFinal?: boolean, range?: ExportChapterRange): void | Promise<unknown> }): React.JSX.Element {
   const [format, setFormat] = useState<ExportFormat>('docx')
@@ -70,18 +73,25 @@ function ExportRangeDialog({ project, onClose, onExport }: { project: Project; o
   const [from, setFrom] = useState('1')
   const [to, setTo] = useState('1')
   const [error, setError] = useState<string>()
+  const [notice, setNotice] = useState<string>()
   const submit = async (): Promise<void> => {
     const range = { from: Number(from), to: Number(to) }
     if (!Number.isInteger(range.from) || !Number.isInteger(range.to) || range.from < 1) { setError('请输入正整数章序号'); return }
     if (range.from > range.to) { setError('起始章不能大于结束章'); return }
     setError(undefined)
-    try { await onExport(project, format, onlyFinal, range); onClose() } catch (next) { setError(next instanceof Error ? next.message : String(next)) }
+    setNotice(undefined)
+    try {
+      const result = await onExport(project, format, onlyFinal, range)
+      if (isEmptyExport(result)) { setNotice(onlyFinal ? '所选范围内没有定稿章节，未生成文件。' : '所选范围内没有章节，未生成文件。'); return }
+      onClose()
+    } catch (next) { setError(userErrorMessage(next)) }
   }
   return <Modal title={`导出《${project.title}》`} onClose={onClose}>
     <label>格式<select value={format} onChange={(event) => setFormat(event.target.value as ExportFormat)}><option value="txt">TXT</option><option value="md">Markdown</option><option value="docx">DOCX</option></select></label>
     <label>第<input type="number" min={1} value={from} onChange={(event) => setFrom(event.target.value)} />章 – 第<input type="number" min={1} value={to} onChange={(event) => setTo(event.target.value)} />章</label>
     <label><input type="checkbox" checked={onlyFinal} onChange={(event) => setOnlyFinal(event.target.checked)} />仅定稿</label>
     {error && <div className="inline-error" role="alert">{error}</div>}
+    {notice && <small className="export-empty-notice">{notice}</small>}
     <div className="modal-actions"><button onClick={onClose}>取消</button><button className="primary" onClick={() => void submit()}>导出</button></div>
   </Modal>
 }

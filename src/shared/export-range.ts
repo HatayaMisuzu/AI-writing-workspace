@@ -3,6 +3,7 @@
  * 先按范围截取，再与 S11「仅定稿」组合过滤；输出保持章树顺序。
  */
 export type ExportChapterRange = { from: number; to: number }
+export type ManuscriptExportResult = { status: 'saved'; filePath: string } | { status: 'canceled' } | { status: 'empty' }
 export type ExportOptions = { onlyFinal?: boolean; range?: ExportChapterRange }
 
 export function validateExportRange(range: ExportChapterRange, total: number): void {

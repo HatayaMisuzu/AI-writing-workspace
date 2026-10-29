@@ -1,3 +1,4 @@
+import { runManuscriptExport } from '../services/manuscript-export-flow'
 import type { ExportChapterRange } from '../../shared/export-range'
 import { BrowserWindow, dialog, ipcMain, type IpcMainEvent, type IpcMainInvokeEvent } from 'electron'
 import { z } from 'zod'
@@ -41,7 +42,7 @@ const handle = <T extends unknown[], R>(channel: string, fn: (...args: T) => R |
 }
 
 import {
-  idSchema, shortTextSchema, contentSchema, nonNegativeIntSchema, projectCreateSchema, documentCreateSchema, documentSaveSchema, noteSaveSchema, characterSaveSchema, providerInputSchema, modelSchema, routeSchema, patchProposalSchema, snapshotReasonSchema, aiStartSchema, aiPreviewContextSchema, noteSectionSchema, outlineSaveSchema, batchCreateChaptersSchema, writingGoalsInputSchema, chapterStatusSchema, foreshadowRegisterSchema, foreshadowSetStateSchema, foreshadowUpdateMetaSchema, timelineSortModeSchema, timelineEventSaveSchema
+  idSchema, shortTextSchema, contentSchema, nonNegativeIntSchema, projectCreateSchema, documentCreateSchema, documentSaveSchema, noteSaveSchema, characterSaveSchema, providerInputSchema, modelSchema, routeSchema, patchProposalSchema, snapshotReasonSchema, aiStartSchema, aiPreviewContextSchema, noteSectionSchema, outlineSaveSchema, batchCreateChaptersSchema, writingGoalsInputSchema, chapterStatusSchema, foreshadowRegisterSchema, foreshadowSetStateSchema, foreshadowUpdateMetaSchema, timelineSortModeSchema, timelineEventSaveSchema, chapterWordRangeSchema
 } from './schemas'
 const parse = <T>(schema: z.ZodType<T>, value: unknown): T => schema.parse(value)
 
@@ -165,6 +166,8 @@ export function registerIpc(db: AppDatabase, codec: SecretCodec, network?: Netwo
   handle('writing:list-range', (projectId: string, fromDate: string, toDate: string) => writingDaily.listRange(parse(idSchema, projectId), parse(z.string().regex(/^\d{4}-\d{2}-\d{2}$/), fromDate), parse(z.string().regex(/^\d{4}-\d{2}-\d{2}$/), toDate)))
   handle('writing:get-goals', (projectId: string) => writingDaily.getGoals(parse(idSchema, projectId)))
   handle('writing:set-goals', (projectId: string, input: unknown) => writingDaily.setGoals(parse(idSchema, projectId), parse(writingGoalsInputSchema, input)))
+  handle('writing:get-word-range', (projectId: string) => writingDaily.getChapterWordRange(parse(idSchema, projectId)))
+  handle('writing:set-word-range', (projectId: string, range: unknown) => writingDaily.setChapterWordRange(parse(idSchema, projectId), parse(chapterWordRangeSchema, range)))
   handle('linter:run', (text: string) => lintChineseText(text))
   handle('digests:run', (projectId: string, chapterId: string) => digestRunner.run(parse(idSchema, projectId), parse(idSchema, chapterId)))
   handle('digests:list', (projectId: string, chapterId?: string) => digests.list(projectId, chapterId))
@@ -236,10 +239,11 @@ export function registerIpc(db: AppDatabase, codec: SecretCodec, network?: Netwo
     const chapterRange = parse(z.object({ from: z.number().int(), to: z.number().int() }).optional(), range)
     const project = projects.get(projectId)
     const suffix = `${chapterRange ? `-第${chapterRange.from}-${chapterRange.to}章` : ''}${finalOnly ? '-仅定稿' : ''}`
-    const result = await dialog.showSaveDialog({ defaultPath: `${project.title}${suffix}.${format}`, filters: [{ name: format.toUpperCase(), extensions: [format] }] })
-    if (result.canceled || !result.filePath) return null
-    await backup.exportManuscript(projectId, result.filePath, format, { onlyFinal: finalOnly, range: chapterRange })
-    return result.filePath
+    return runManuscriptExport({
+      countChapters: (options) => backup.selectManuscriptChapters(projectId, options).length,
+      showSaveDialog: () => dialog.showSaveDialog({ defaultPath: `${project.title}${suffix}.${format}`, filters: [{ name: format.toUpperCase(), extensions: [format] }] }),
+      write: (filePath, options) => backup.exportManuscript(projectId, filePath, format, options)
+    }, { onlyFinal: finalOnly, range: chapterRange })
   })
 
   ipcMain.on('ai:start', async (event, request: AIStartRequest) => {

@@ -12,6 +12,7 @@ import {
   wordGoalSuffix,
   type GoalsFormDraft
 } from '../services/daily-stats-view'
+import { draftToWordRange, wordRangeToDraft } from '../services/chapter-word-range-view'
 
 const emptyGoals = (): WritingGoals => ({
   dailyWordGoalEnabled: false,
@@ -32,6 +33,8 @@ export function DailyStatsView({ project }: { project: Project }): React.JSX.Ele
   const [goalError, setGoalError] = useState<string>()
   const [goalSavedHint, setGoalSavedHint] = useState<string>()
   const [loadError, setLoadError] = useState<string>()
+  const [rangeDraft, setRangeDraft] = useState({ min: '', max: '' })
+  const [rangeNotice, setRangeNotice] = useState<{ ok: boolean; text: string }>()
 
   const load = useCallback(async (): Promise<void> => {
     setLoadError(undefined)
@@ -43,6 +46,7 @@ export function DailyStatsView({ project }: { project: Project }): React.JSX.Ele
         window.workspace.writing.listRange(project.id, range90.from, range90.to),
         window.workspace.writing.getGoals(project.id)
       ])
+      setRangeDraft(wordRangeToDraft(await window.workspace.writing.getChapterWordRange(project.id)))
       setToday(day)
       setRangeRows(rows)
       setGoals(nextGoals)
@@ -72,6 +76,17 @@ export function DailyStatsView({ project }: { project: Project }): React.JSX.Ele
       setGoalSavedHint('已保存')
     } catch (error) {
       setGoalError(error instanceof Error ? error.message : String(error))
+    }
+  }
+
+  const saveRange = async (draftValue: { min: string; max: string }): Promise<void> => {
+    setRangeNotice(undefined)
+    try {
+      const next = await window.workspace.writing.setChapterWordRange(project.id, draftToWordRange(draftValue))
+      setRangeDraft(wordRangeToDraft(next))
+      setRangeNotice({ ok: true, text: '已保存' })
+    } catch (error) {
+      setRangeNotice({ ok: false, text: error instanceof Error ? error.message : String(error) })
     }
   }
 
@@ -199,6 +214,18 @@ export function DailyStatsView({ project }: { project: Project }): React.JSX.Ele
       {goalSavedHint && <small className="daily-goals-saved">{goalSavedHint}</small>}
       <div className="daily-goals-actions">
         <button type="button" className="primary" onClick={() => void saveGoals()}>保存目标</button>
+      </div>
+    </div>
+
+    <div className="daily-goals-block" data-testid="word-range-form">
+      <header><Target size={16} aria-hidden /><h2>章节字数区间</h2></header>
+      <p className="daily-goals-hint">默认不设。设定后仅在状态栏静默显示本章是否在区间内；可只填一端。</p>
+      <label className="daily-goal-row"><span>下限</span><input type="text" inputMode="numeric" value={rangeDraft.min} placeholder="正整数，可留空" aria-label="章节字数下限" onChange={(event) => setRangeDraft({ ...rangeDraft, min: event.target.value })} /></label>
+      <label className="daily-goal-row"><span>上限</span><input type="text" inputMode="numeric" value={rangeDraft.max} placeholder="正整数，可留空" aria-label="章节字数上限" onChange={(event) => setRangeDraft({ ...rangeDraft, max: event.target.value })} /></label>
+      {rangeNotice && (rangeNotice.ok ? <small className="daily-goals-saved">{rangeNotice.text}</small> : <div className="inline-error" role="alert">{rangeNotice.text}</div>)}
+      <div className="daily-goals-actions">
+        <button type="button" onClick={() => void saveRange({ min: '', max: '' })}>关闭区间</button>
+        <button type="button" className="primary" onClick={() => void saveRange(rangeDraft)}>保存区间</button>
       </div>
     </div>
   </section>

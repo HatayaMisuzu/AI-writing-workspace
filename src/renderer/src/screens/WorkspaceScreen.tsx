@@ -1,6 +1,6 @@
 import { BookmarkPlus, FilePlus2, Lightbulb, Search, SidebarClose, SlidersHorizontal } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { DocumentContent, DocumentNode, DocumentTaskTarget, Project, SearchResult, TextPatch } from '../../../shared/domain'
+import type { ChapterWordRange, DocumentContent, DocumentNode, DocumentTaskTarget, Project, SearchResult, TextPatch } from '../../../shared/domain'
 import { ProjectSidebar, type ProjectSection } from '../components/ProjectSidebar'
 import { EditorSurface, type EditorController, type EditorSelection } from '../components/EditorSurface'
 import { AssistantPanel } from '../components/AssistantPanel'
@@ -11,6 +11,7 @@ import { ForeshadowView } from './ForeshadowView'
 import { RelatedTimelineEvents, TimelineView } from './TimelineView'
 import { Modal } from '../components/Modal'
 import { parseSearchSnippet } from '../services/search-snippet'
+import { chapterWordRangeHint } from '../services/chapter-word-range-view'
 
 const renderSnippet = (snippet: string): React.ReactNode[] => {
   return parseSearchSnippet(snippet).map((segment, index) => segment.highlighted ? <mark key={index}>{segment.text}</mark> : segment.text)
@@ -23,6 +24,13 @@ export function WorkspaceScreen({ project, onProjectChanged, onSettings, onRegis
   const [selected, setSelected] = useState<DocumentNode>()
   const [content, setContent] = useState<DocumentContent>()
   const [section, setSection] = useState<ProjectSection>('manuscript')
+  const [wordRange, setWordRange] = useState<ChapterWordRange>()
+  // F10：区间在日更面板设置；切回任意分区时重读，静默显示于状态栏
+  useEffect(() => {
+    let active = true
+    window.workspace.writing.getChapterWordRange(project.id).then((next) => { if (active) setWordRange(next) }).catch(() => { if (active) setWordRange(undefined) })
+    return () => { active = false }
+  }, [project.id, section])
   const [timelineFocus, setTimelineFocus] = useState<string>()
   const [characterFocus, setCharacterFocus] = useState<string>()
   const [assistantCollapsed, setAssistantCollapsed] = useState(false)
@@ -144,6 +152,7 @@ export function WorkspaceScreen({ project, onProjectChanged, onSettings, onRegis
     } catch (error) { setNavigationError(`创建失败：${error instanceof Error ? error.message : String(error)}`) }
   }
   const runSearch = async (): Promise<void> => setSearchResults(await window.workspace.documents.search(project.id, searchQuery))
+  const rangeHint = content ? chapterWordRangeHint(content.wordCount, wordRange) : null
   const totalWords = useMemo(() => tree.reduce((sum, node) => sum + (node.type === 'chapter' ? node.wordCount : 0), 0), [tree])
   const registerController = useCallback((controller?: EditorController): void => { editorController.current = controller }, [])
   const freezeAITarget = useCallback(async (requestId: string, expectedDocumentId?: string, targetSelection?: EditorSelection): Promise<DocumentTaskTarget | undefined> => {
@@ -213,7 +222,7 @@ export function WorkspaceScreen({ project, onProjectChanged, onSettings, onRegis
         : section === 'timeline' ? <TimelineView project={project} chapters={tree.filter((node) => node.type === 'chapter')} focusEventId={timelineFocus} onOpenChapter={(id) => void openChapterById(id)} onOpenCharacter={(id) => void openCharacter(id)} />
         : section === 'foreshadow' ? <ForeshadowView project={project} chapters={tree.filter((node) => node.type === 'chapter')} />
         : <section className="project-view placeholder-view"><FilePlus2 size={34} /><h1>内容</h1><p>这是辅助层，不要求作者维护复杂结构。</p></section>}
-      <footer className="workspace-status"><span className="saved-dot" />本地项目<span>本章 {content?.wordCount.toLocaleString() ?? 0} 字</span><span>全书 {totalWords.toLocaleString()} 字</span><span>项目内容严格隔离</span></footer>
+      <footer className="workspace-status"><span className="saved-dot" />本地项目<span>本章 {content?.wordCount.toLocaleString() ?? 0} 字</span>{rangeHint && <span className={`word-range-hint ${rangeHint.state}`} data-testid="word-range-hint">{rangeHint.text}</span>}<span>全书 {totalWords.toLocaleString()} 字</span><span>项目内容严格隔离</span></footer>
     </div>
     {!focusMode && <AssistantPanel project={project} documentId={selected?.id} documentRevision={content?.revision} selection={selection} collapsed={assistantCollapsed} onCollapse={() => setAssistantCollapsed(!assistantCollapsed)} onCreatePatch={createPatch} onBeforeAI={freezeAITarget} onEnsureSaved={flushAll} onOpenDocument={openTargetDocument} onOpenSettings={onSettings} />}
     {ideaOpen && <div className="quick-idea-popover"><header><strong>快速记录灵感</strong><kbd>Ctrl J</kbd></header><textarea autoFocus value={ideaText} onChange={(event) => setIdeaText(event.target.value)} placeholder="记下一闪而过的想法…" /><div><button onClick={() => { setIdeaText(''); setIdeaOpen(false) }}>取消</button><button className="primary" onClick={async () => { if (ideaText.trim()) await window.workspace.ideas.create(project.id, ideaText); setIdeaText(''); setIdeaOpen(false) }}>保存并返回正文</button></div></div>}

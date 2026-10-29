@@ -3,7 +3,7 @@ import type {
   ContextBundle,
   AITaskEnvelope, Character, ChatCursor, ChatMessage, ChatThread, DigestStatus, DocumentContent, DocumentNode, Idea, LocalLintIssue,
   MemoryItem, MemoryProposal, ModelConfig, NodeOutline, Project, ProjectNote, ProjectType, ProofreadIssue, ProviderConfig,
-  ProviderInput, RoutedTask, SearchResult, Snapshot, TaskModelRoute, TextOrigin, TextPatch, WritingDailyRow, WritingGoals, ChapterStatus, SerialProgress, StockpileSummary, ForeshadowEntry, ForeshadowState, TimelineEvent, TimelineSortMode
+  ProviderInput, RoutedTask, SearchResult, Snapshot, TaskModelRoute, TextOrigin, TextPatch, WritingDailyRow, WritingGoals, ChapterWordRange, ChapterStatus, SerialProgress, StockpileSummary, ForeshadowEntry, ForeshadowState, TimelineEvent, TimelineSortMode
 } from './domain'
 
 export interface WorkspaceApi {
@@ -131,12 +131,14 @@ export interface WorkspaceApi {
       dailyChapterGoalEnabled?: boolean
       dailyChapterGoal?: number | null
     }): Promise<WritingGoals>
+    getChapterWordRange(projectId: string): Promise<ChapterWordRange>
+    setChapterWordRange(projectId: string, range: ChapterWordRange): Promise<ChapterWordRange>
   }
   backup: {
     exportProject(projectId: string): Promise<string | null>
     importProject(): Promise<Project | null>
     importManuscript(): Promise<Project | null>
-    exportManuscript(projectId: string, format: 'txt' | 'md' | 'docx', onlyFinal?: boolean, range?: ExportChapterRange): Promise<string | null>
+    exportManuscript(projectId: string, format: 'txt' | 'md' | 'docx', onlyFinal?: boolean, range?: ExportChapterRange): Promise<import('./export-range').ManuscriptExportResult>
   }
   ai: {
     start(request: AIStartRequest, onEvent: (event: AIStreamEvent) => void): () => void

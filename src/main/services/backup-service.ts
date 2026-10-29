@@ -472,7 +472,8 @@ export class BackupService {
     }
   }
 
-  async exportManuscript(projectId: string, path: string, format: 'txt' | 'md' | 'docx', options?: ExportOptions): Promise<void> {
+  /** 按导出选项筛出的章节（范围非法时抛错）；供弹保存框前预检。 */
+  selectManuscriptChapters(projectId: string, options?: ExportOptions) {
     const chapters = this.db.raw.prepare(`
       SELECT COALESCE(v.title, '') AS volume_title, c.title, dc.plain_text, c.status AS status
       FROM document_nodes c
@@ -483,7 +484,12 @@ export class BackupService {
       WHERE c.project_id = ? AND c.type = 'chapter'
       ORDER BY COALESCE(v.order_index, 2147483647), c.order_index, c.created_at
     `).all(projectId) as Array<{ volume_title: string; title: string; plain_text: string | null; status: string }>
-    const filtered = selectExportChapters(chapters, options)
+    return selectExportChapters(chapters, options)
+  }
+
+  async exportManuscript(projectId: string, path: string, format: 'txt' | 'md' | 'docx', options?: ExportOptions): Promise<void> {
+    const filtered = this.selectManuscriptChapters(projectId, options)
+    if (filtered.length === 0) throw new Error('EXPORT_EMPTY')
     const MISSING_PLACEHOLDER = '［本章内容缺失：导出时正文数据不完整，请检查应用数据］'
     if (format === 'docx') {
       const children: Paragraph[] = []

@@ -73,7 +73,9 @@ const api: WorkspaceApi = {
     getDay: (projectId, date) => invoke('writing:get-day', projectId, date),
     listRange: (projectId, fromDate, toDate) => invoke('writing:list-range', projectId, fromDate, toDate),
     getGoals: (projectId) => invoke('writing:get-goals', projectId),
-    setGoals: (projectId, input) => invoke('writing:set-goals', projectId, input)
+    setGoals: (projectId, input) => invoke('writing:set-goals', projectId, input),
+    getChapterWordRange: (projectId) => invoke('writing:get-word-range', projectId),
+    setChapterWordRange: (projectId, range) => invoke('writing:set-word-range', projectId, range)
   },
   backup: {
     exportProject: (projectId) => invoke('backup:export-project', projectId), importProject: () => invoke('backup:import-project'),
