@@ -1,3 +1,4 @@
+import type { ConsistencyCoverage } from './consistency-check'
 export type ProjectType = 'novel' | 'webnovel' | 'screenplay' | 'other'
 export type DocumentType = 'volume' | 'chapter' | 'scene' | 'note'
 /** S11：本地章节状态（与平台无关）。 */
@@ -347,6 +348,8 @@ export interface ChatMessage {
   createdAt: number
   status: 'streaming' | 'complete' | 'error' | 'cancelled'
   target?: DocumentTaskTarget
+  /** P1-6：一致性检查的比对覆盖情况（由 snapshot 推导，不存正文）。 */
+  coverage?: ConsistencyCoverage
 }
 
 export interface ChatCursor { createdAt: number; id: string }

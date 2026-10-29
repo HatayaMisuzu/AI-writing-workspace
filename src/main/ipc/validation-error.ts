@@ -29,7 +29,8 @@ export const toUserFacingIpcError = (error: unknown): unknown => {
   if (!(error instanceof ZodError)) return error
   const parts = [...new Set(error.issues.map((issue) => {
     const field = fieldLabel(issue.path)
-    return field ? `${field}：${issueReason(issue)}` : issueReason(issue)
+    const reason = issueReason(issue).replace(/[。.]+$/, '')
+    return field ? `${field}：${reason}` : reason
   }))].slice(0, 5)
   return Object.assign(new Error(`请求参数无效：${parts.join('；')}。`), { code: 'IPC_INVALID_INPUT' })
 }

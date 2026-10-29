@@ -29,6 +29,63 @@ export const parseConsistencyReport = (text: string, chapterText?: string): Cons
   try {
     const parsed = reportSchema.safeParse(JSON.parse(body.slice(start, end + 1)))
     if (!parsed.success) return { ok: false, raw: text }
-    return { ok: true, conflicts: parsed.data.conflicts.map((conflict) => chapterText === undefined ? conflict : { ...conflict, quoteFound: chapterText.includes(conflict.quote) }) }
+    const haystack = chapterText === undefined ? undefined : normalizeQuote(chapterText)
+    return { ok: true, conflicts: parsed.data.conflicts.map((conflict) => haystack === undefined ? conflict : { ...conflict, quoteFound: quoteInChapter(conflict.quote, haystack) }) }
   } catch { return { ok: false, raw: text } }
+}
+
+/** 引用比对的归一化：去掉所有空白（含全角空格、换行），避免排版差异导致误判。 */
+export const normalizeQuote = (text: string): string => text.replace(/[\s\u3000]+/g, '')
+const quoteInChapter = (quote: string, normalizedChapter: string): boolean => {
+  const needle = normalizeQuote(quote).replace(/^[「“"']+|[」”"']+$/g, '')
+  return needle.length > 0 && normalizedChapter.includes(needle)
+}
+
+/** 冲突对象标题去掉与类别重复的前缀：「人物 · 林舟」→「林舟」。 */
+export const conflictTargetLabel = (conflict: ConsistencyConflict): string => {
+  const label = CONSISTENCY_KIND_LABELS[conflict.conflictWith.kind]
+  let title = conflict.conflictWith.title.trim()
+  for (const prefix of Object.values(CONSISTENCY_KIND_LABELS)) {
+    const re = new RegExp(`^${prefix}\\s*[·:：]\\s*`)
+    while (re.test(title)) title = title.replace(re, '')
+  }
+  return `${label} · ${title || conflict.conflictWith.title}`
+}
+
+const REF_KINDS: Record<string, ConsistencyConflict['conflictWith']['kind']> = { memory: 'setting', character: 'character', timeline: 'timeline' }
+
+/** 本次一致性检查的比对覆盖情况（来自上下文清单或持久化的 snapshot）。 */
+export interface ConsistencyCoverage {
+  documentId?: string
+  chapterTruncated: boolean
+  chapterOmitted: boolean
+  omittedRefs: Record<ConsistencyConflict['conflictWith']['kind'], number>
+}
+
+export const consistencyCoverage = (snapshot: { sources: Array<{ id: string; kind: string; truncated?: boolean }>; omitted: Array<{ id: string; kind: string }> }): ConsistencyCoverage => {
+  const omittedRefs = { setting: 0, character: 0, timeline: 0 }
+  for (const item of snapshot.omitted) { const kind = REF_KINDS[item.kind]; if (kind) omittedRefs[kind] += 1 }
+  const doc = snapshot.sources.find((item) => item.kind === 'document')
+  const omittedDoc = snapshot.omitted.find((item) => item.kind === 'document')
+  return { documentId: doc?.id ?? omittedDoc?.id, chapterTruncated: Boolean(doc?.truncated), chapterOmitted: !doc, omittedRefs }
+}
+
+/** 覆盖不完整时的报告顶部警告；完整时返回空数组。 */
+export const coverageWarnings = (coverage: ConsistencyCoverage | undefined): string[] => {
+  if (!coverage) return []
+  const warnings: string[] = []
+  const parts = (Object.entries(coverage.omittedRefs) as Array<[ConsistencyConflict['conflictWith']['kind'], number]>)
+    .filter(([, count]) => count > 0).map(([kind, count]) => `${CONSISTENCY_KIND_LABELS[kind]}×${count}`)
+  if (parts.length) warnings.push(`部分设定因上下文窗口不足未参与比对，结果不完整（未比对：${parts.join('、')}）。`)
+  if (coverage.chapterOmitted) warnings.push('本章正文因上下文窗口不足未发送，本次检查无效。')
+  else if (coverage.chapterTruncated) warnings.push('本章过长，只检查了开头部分正文，结果不完整。')
+  return warnings
+}
+
+/** 上下文条目截断：只此一处决定保留哪一端。读者审稿保留结尾（贴近第 N 章阅读位置），其余保留开头。 */
+export type TruncationSide = 'head' | 'tail'
+export const truncationSideFor = (policy: 'creative' | 'reader' | 'consistency'): TruncationSide => policy === 'reader' ? 'tail' : 'head'
+export const truncateBySide = (text: string, keepChars: number, side: TruncationSide): string => {
+  const keep = Math.max(1, Math.floor(keepChars))
+  return side === 'tail' ? text.slice(-keep) : text.slice(0, keep)
 }

@@ -5,8 +5,10 @@ import { MemoryService } from '../services/memory-service'
 import { StyleEngine } from './style-engine'
 import { relevanceScore } from './relevance'
 import { validateReaderChapterNumber } from '../../shared/reader-review'
+import { truncateBySide, truncationSideFor } from '../../shared/consistency-check'
 
 const estimateTokens = (text: string): number => Math.ceil(text.length / 2.2)
+const settingName = (content: string): string => { const flat = content.replace(/\s+/g, ' ').trim(); return [...flat].length > 16 ? `${[...flat].slice(0, 16).join('')}…` : flat || '未命名' }
 
 export class ContextEngine {
   private readonly documents: DocumentService
@@ -38,11 +40,12 @@ export class ContextEngine {
     const { projectId } = task
     const chapter = this.documents.getContent(projectId, task.documentId)
     const node = this.documents.listTree(projectId).find((item) => item.id === task.documentId)
-    const candidates: Array<ContextItem & { priority: number }> = [{ id: chapter.documentId, kind: 'document', title: `本章 · ${node?.title ?? '当前章节'}`,
-      content: chapter.plainText, projectId, reason: '待检查的本章正文', priority: 100 }]
+    const chapterItem: ContextItem & { priority: number } = { id: chapter.documentId, kind: 'document', title: `本章 · ${node?.title ?? '当前章节'}`,
+      content: chapter.plainText, projectId, reason: '待检查的本章正文', priority: 100 }
+    const candidates: Array<ContextItem & { priority: number }> = []
     const memories = this.db.raw.prepare("SELECT id, type, content FROM memories WHERE project_id = ? AND status = 'confirmed' AND type != 'foreshadowing' ORDER BY updated_at DESC LIMIT 60")
       .all(projectId) as Array<{ id: string; type: string; content: string }>
-    memories.forEach((memory) => candidates.push({ id: memory.id, kind: 'memory', title: `设定 · ${memory.type}`, content: memory.content,
+    memories.forEach((memory) => candidates.push({ id: memory.id, kind: 'memory', title: `设定 · ${settingName(memory.content)}（${memory.type}）`, content: memory.content,
       projectId, reason: '作者已确认的设定', priority: 80 }))
     const characters = this.db.raw.prepare('SELECT * FROM characters WHERE project_id = ? ORDER BY updated_at DESC LIMIT 40').all(projectId) as Array<Record<string, unknown>>
     characters.forEach((row) => {
@@ -59,8 +62,15 @@ export class ContextEngine {
     events.forEach((event, index) => candidates.push({ id: event.id, kind: 'timeline', title: `时间线 · ${event.title || '未命名事件'}`,
       content: [`故事时间：${event.story_time_label || '未标注'}`, `顺序：第 ${index + 1} 个事件`, event.chapter_id ? `关联章节：${titles.get(event.chapter_id) ?? event.chapter_id}` : ''].filter(Boolean).join('；'),
       projectId, reason: '时间线事件（仅一致性检查使用）', priority: 76 - Math.min(5, index / 40) }))
-    return this.budget(projectId, 'consistency', candidates, budget,
-      ['other_chapters', 'pending_memory', 'foreshadows', 'ideas', 'outlines', 'digests', 'story_notes', 'references', 'creative_chat', 'other_projects'], task.excludedIds)
+    const excludedKinds = ['other_chapters', 'pending_memory', 'foreshadows', 'ideas', 'outlines', 'digests', 'story_notes', 'references', 'creative_chat', 'other_projects']
+    // P2-2：先给设定/人物卡/时间线预留预算（本章至少保底 25%），剩余给本章；本章放不下则截断本章（保留开头）。
+    const chapterFloor = Math.min(estimateTokens(chapter.plainText), Math.floor(budget * 0.25))
+    const refs = this.budget(projectId, 'consistency', candidates, Math.max(0, budget - chapterFloor), excludedKinds, task.excludedIds)
+    const body = this.budget(projectId, 'consistency', [chapterItem], Math.max(0, budget - refs.metadata.estimatedTokens), excludedKinds, task.excludedIds)
+    // 本章放在最后：runtime 若仍超预算，先截断本章而不是设定。
+    const items = [...refs.items, ...body.items]
+    return { projectId, policy: 'consistency', items, metadata: { estimatedTokens: refs.metadata.estimatedTokens + body.metadata.estimatedTokens,
+      sourceIds: items.map((item) => item.id), excludedKinds, omitted: [...(body.metadata.omitted ?? []), ...(refs.metadata.omitted ?? [])] } }
   }
 
   private buildCreative(task: AITaskEnvelope, budget: number): ContextBundle {
@@ -239,7 +249,7 @@ export class ContextEngine {
       const remaining = maxTokens - estimatedTokens
       if (remaining <= 0) { seen.add(key); omitted.push({ id: item.id, kind: item.kind, title: item.title, reason: 'budget' }); continue }
       const itemTokens = estimateTokens(item.content)
-      const fitted = itemTokens <= remaining ? item : { ...item, content: item.content.slice(0, Math.max(1, Math.floor(remaining * 2.2))), truncated: true }
+      const fitted = itemTokens <= remaining ? item : { ...item, content: truncateBySide(item.content, remaining * 2.2, truncationSideFor(policy)), truncated: true }
       const fittedTokens = estimateTokens(fitted.content)
       if (!fitted.content.trim()) continue
       items.push(fitted); seen.add(key); estimatedTokens += fittedTokens

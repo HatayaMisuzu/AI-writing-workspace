@@ -1,14 +1,20 @@
 import { randomUUID } from 'node:crypto'
 import type { AIMode, ChatCursor, ChatMessage, ChatThread, DocumentTaskTarget } from '../../shared/domain'
 import type { AppDatabase } from '../database/database'
+import { consistencyCoverage } from '../../shared/consistency-check'
 
 type ThreadRow = { id: string; project_id: string; title: string; created_at: number; updated_at: number }
 type MessageRow = { id: string; thread_id: string; project_id: string; role: ChatMessage['role']; content: string; task_mode: AIMode; status: ChatMessage['status']; context_snapshot_json: string | null; created_at: number }
 
 const mapThread = (row: ThreadRow): ChatThread => ({ id: row.id, projectId: row.project_id, title: row.title, createdAt: row.created_at, updatedAt: row.updated_at })
-const mapMessage = (row: MessageRow): ChatMessage => ({ id: row.id, threadId: row.thread_id, projectId: row.project_id,
-  role: row.role, content: row.content, taskMode: row.task_mode, status: row.status, createdAt: row.created_at,
-  target: row.context_snapshot_json ? (JSON.parse(row.context_snapshot_json) as { target?: DocumentTaskTarget }).target : undefined })
+const mapMessage = (row: MessageRow): ChatMessage => {
+  const snapshot = row.context_snapshot_json ? JSON.parse(row.context_snapshot_json) as { target?: DocumentTaskTarget; sources?: Array<{ id: string; kind: string; truncated?: boolean }>; omitted?: Array<{ id: string; kind: string }> } : undefined
+  return { id: row.id, threadId: row.thread_id, projectId: row.project_id,
+    role: row.role, content: row.content, taskMode: row.task_mode, status: row.status, createdAt: row.created_at,
+    target: snapshot?.target,
+    // P1-6：一致性检查报告重启后仍能显示「未参与比对」警告与引用校验所需的章节 id
+    ...(row.task_mode === 'consistency_check' && row.role === 'assistant' && snapshot?.sources ? { coverage: consistencyCoverage({ sources: snapshot.sources, omitted: snapshot.omitted ?? [] }) } : {}) }
+}
 
 export class ChatService {
   constructor(private readonly db: AppDatabase) {}

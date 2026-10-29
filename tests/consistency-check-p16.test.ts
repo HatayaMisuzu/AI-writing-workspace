@@ -11,7 +11,8 @@ import { composeProviderMessages } from '../src/main/ai/prompt-composer'
 import { PromptTemplateService } from '../src/main/services/prompt-template-service'
 import { aiStartSchema, chapterWordRangeSchema, promptTemplateTextSchema } from '../src/main/ipc/schemas'
 import { toUserFacingIpcError } from '../src/main/ipc/validation-error'
-import { CONSISTENCY_OUTPUT_CONTRACT, parseConsistencyReport } from '../src/shared/consistency-check'
+import { CONSISTENCY_OUTPUT_CONTRACT, conflictTargetLabel, consistencyCoverage, coverageWarnings, parseConsistencyReport } from '../src/shared/consistency-check'
+import { mapChatHistory } from '../src/renderer/src/services/assistant-history'
 import { READER_REVIEW_DEFAULT_INTENT } from '../src/shared/reader-review'
 import { inputForQuickMode, inputForReaderThrough } from '../src/renderer/src/services/quick-mode-input'
 import type { AIMode, ContextBundle } from '../src/shared/domain'
@@ -59,7 +60,7 @@ describe('P1-6 consistency_check context', () => {
     const { db, project, chapterId } = setup()
     const bundle = new ContextEngine(db).build(task(project.id, chapterId))
     expect(bundle.policy).toBe('consistency')
-    expect(bundle.items[0]).toMatchObject({ id: chapterId, kind: 'document' })
+    expect(bundle.items.at(-1)).toMatchObject({ id: chapterId, kind: 'document' })
     expect(new Set(bundle.items.map((item) => item.kind))).toEqual(new Set(['document', 'memory', 'character', 'timeline']))
     const serialized = JSON.stringify(bundle)
     for (const expected of ['林舟左手持剑', '已确认设定：京城冬季封城', '惯用右手', '林舟抵达京城', '腊月初九']) expect(serialized).toContain(expected)
@@ -182,5 +183,57 @@ describe('fix 3: wire text carries 已省略/已截断; snapshot records truncat
     const snapshot = JSON.parse((db.raw.prepare("SELECT context_snapshot_json FROM chat_messages WHERE id = 'a2'").get() as { context_snapshot_json: string }).context_snapshot_json) as { sources: Array<{ id: string; truncated?: boolean }>; omitted: Array<{ id: string }> }
     expect(snapshot.sources.find((source) => source.id === chapterId)).toMatchObject({ truncated: true })
     if (context.metadata.omitted?.length) expect(JSON.stringify(sent[0])).toContain('[已省略]')
+  })
+})
+
+describe('PR25 follow-up', () => {
+  it('fix 1: long chapter — settings/characters/timeline reserved first, chapter truncated (head kept)', async () => {
+    const chapter = 'MARK_START' + '林舟左手持剑。'.repeat(1200) + 'MARK_END'
+    const { db, project, chapterId } = setup(chapter)
+    const { runtime, sent } = runtimeWith(db, '{"conflicts":[]}', 1600)
+    const thread = new ChatService(db).createThread(project.id, '长章')
+    const chunks: Array<{ context?: ContextBundle }> = []
+    for await (const chunk of runtime.run('r3', task(project.id, chapterId), thread.id, 'u3', 'a3')) chunks.push(chunk)
+    const wire = JSON.stringify(sent[0])
+    for (const expected of ['已确认设定：京城冬季封城', '惯用右手', '林舟抵达京城', 'MARK_START']) expect(wire).toContain(expected)
+    expect(wire).not.toContain('MARK_END')
+    const context = chunks.find((chunk) => chunk.context)!.context!
+    expect(context.metadata.omitted ?? []).toEqual([])
+    const history = mapChatHistory(new ChatService(db).listMessages(project.id, thread.id))
+    const coverage = history.find((message) => message.id === 'a3')!.coverage!
+    expect(coverage).toMatchObject({ documentId: chapterId, chapterTruncated: true, omittedRefs: { setting: 0, character: 0, timeline: 0 } })
+    expect(coverageWarnings(coverage)).toEqual(['本章过长，只检查了开头部分正文，结果不完整。'])
+  })
+
+  it('fix 1: settings that still do not fit → explicit incomplete warning', () => {
+    const { db, project, chapterId } = setup()
+    const now = Date.now()
+    for (let i = 0; i < 30; i += 1) db.raw.prepare(`INSERT INTO timeline_events(id,project_id,story_time_label,sort_key,title,chapter_id,character_ids_json,created_at,updated_at) VALUES (?,?,?,?,?,NULL,'[]',?,?)`)
+      .run(`tx${i}`, project.id, '某日'.repeat(40), i + 2, `事件${i}`.repeat(30), now, now)
+    const bundle = new ContextEngine(db).build(task(project.id, chapterId), 400)
+    expect(bundle.items.some((item) => item.id === chapterId)).toBe(true)
+    const coverage = consistencyCoverage({ sources: bundle.items, omitted: bundle.metadata.omitted ?? [] })
+    expect(coverage.omittedRefs.timeline).toBeGreaterThan(0)
+    expect(coverageWarnings(coverage)[0]).toMatch(/^部分设定因上下文窗口不足未参与比对，结果不完整（未比对：.*时间线×\d+/)
+    expect(coverageWarnings(consistencyCoverage({ sources: [{ id: 'c', kind: 'document' }], omitted: [] }))).toEqual([])
+  })
+
+  it('fix 4: quote verified against chapter with whitespace normalization', () => {
+    const report = JSON.stringify({ conflicts: [
+      { quote: '林舟 左手\n持剑', conflictWith: { kind: 'character', title: '人物 · 林舟' } },
+      { quote: '林舟右手提灯', conflictWith: { kind: 'setting', title: '设定 · 设定 · 京城' } }] })
+    const parsed = parseConsistencyReport(report, '林舟左手持剑，\u3000于腊月初七抵达京城。')
+    expect(parsed.ok && parsed.conflicts.map((conflict) => conflict.quoteFound)).toEqual([true, false])
+    expect(parseConsistencyReport(report).ok && (parseConsistencyReport(report) as { conflicts: Array<{ quoteFound?: boolean }> }).conflicts[0].quoteFound).toBeUndefined()
+  })
+
+  it('fix 5: no duplicated kind prefix; setting titles carry content name; no 。。', () => {
+    expect(conflictTargetLabel({ quote: 'q', location: '', explanation: '', conflictWith: { kind: 'character', title: '人物 · 人物 · 林舟' } })).toBe('人物 · 林舟')
+    expect(conflictTargetLabel({ quote: 'q', location: '', explanation: '', conflictWith: { kind: 'setting', title: '设定 · 京城冬季封城' } })).toBe('设定 · 京城冬季封城')
+    const { db, project, chapterId } = setup()
+    const setting = new ContextEngine(db).build(task(project.id, chapterId)).items.find((item) => item.kind === 'memory')!
+    expect(setting.title).toBe('设定 · 已确认设定：京城冬季封城（fact）')
+    const result = promptTemplateTextSchema.safeParse('x'.repeat(5000))
+    expect((toUserFacingIpcError(result.error) as Error).message).not.toContain('。。')
   })
 })

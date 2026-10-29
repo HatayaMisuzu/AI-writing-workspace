@@ -11,7 +11,7 @@ import {
 const defaultCapabilities = { streaming: true, tools: false, structuredOutput: false, cancellation: true }
 const routedTasks: Array<[RoutedTask, string]> = [
   ['discussion', '讨论'], ['brainstorm', '脑暴'], ['generation', '续写'], ['editing', '修改'],
-  ['organization', '整理'], ['chapter_digest', '章节理解'], ['proofreading', '校对']
+  ['organization', '整理 / 一致性检查'], ['chapter_digest', '章节理解'], ['proofreading', '校对']
 ]
 const emptyRoutes = Object.fromEntries(routedTasks.map(([task]) => [task, 'default'])) as Record<RoutedTask, string | 'default'>
 const capabilityLabel = (capabilities: ModelConfig['capabilities']): string => [

@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { AIMode, ChatThread, ContextBundle, DigestStatus, DocumentTaskTarget, MemoryProposal, ModelConfig, Project, RoutedTask } from '../../../shared/domain'
 import { DEFAULT_CANDIDATE_COUNT, MAX_CANDIDATE_COUNT, normalizeCandidateCount } from '../../../shared/candidate-count'
 import { inputForQuickMode, inputForReaderThrough } from '../services/quick-mode-input'
-import { CONSISTENCY_DEFAULT_INTENT } from '../../../shared/consistency-check'
+import { CONSISTENCY_DEFAULT_INTENT, consistencyCoverage } from '../../../shared/consistency-check'
 import { ConsistencyReportView } from './ConsistencyReportView'
 import type { EditorSelection } from './EditorSurface'
 import { clearedExclusionState, isRowChecked, omittedLabel, toContextSourceRows, toggleExcludedId, toggleIncludedId, type ContextSourceRow } from '../services/context-sources'
@@ -20,8 +20,8 @@ const inferMode = (text: string, explicit: AIMode): AIMode => {
 }
 const digestLabel = (status?: DigestStatus): string => !status || status.state === 'missing' ? 'AI理解：未更新'
   : status.state === 'fresh' ? 'AI理解：已更新' : 'AI理解：正文已变化'
-export function AssistantPanel({ project, documentId, documentRevision, selection, collapsed, onCollapse, onCreatePatch, onBeforeAI, onEnsureSaved, onOpenDocument, onOpenSettings }: {
-  project: Project; documentId?: string; documentRevision?: number; selection?: EditorSelection; collapsed: boolean; onCollapse(): void
+export function AssistantPanel({ project, documentId, documentText, documentRevision, selection, collapsed, onCollapse, onCreatePatch, onBeforeAI, onEnsureSaved, onOpenDocument, onOpenSettings }: {
+  project: Project; documentId?: string; documentText?: string; documentRevision?: number; selection?: EditorSelection; collapsed: boolean; onCollapse(): void
   /** @deprecated S8 起执笔走 onCreatePatch；保留可选以免旧调用方断裂。 */
   onInsertCandidate?: (target: DocumentTaskTarget, text: string) => Promise<void>
   onCreatePatch(target: DocumentTaskTarget, replacement: string): Promise<void>
@@ -172,7 +172,8 @@ export function AssistantPanel({ project, documentId, documentRevision, selectio
         streamed.current.set(requestId, nextText)
         const bundle = event.context as ContextBundle | undefined
         const context = bundle ? { count: bundle.items.length, tokens: bundle.metadata.estimatedTokens, items: toContextSourceRows(bundle) } : undefined
-        setMessages((current) => current.map((item) => item.id === assistantId ? { ...item, content: nextText, context: context ?? item.context } : item))
+        const coverage = bundle ? consistencyCoverage({ sources: bundle.items, omitted: bundle.metadata.omitted ?? [] }) : undefined
+        setMessages((current) => current.map((item) => item.id === assistantId ? { ...item, content: nextText, context: context ?? item.context, coverage: coverage ?? item.coverage } : item))
       } else if (event.type === 'done') {
         const finalText = streamed.current.get(requestId) ?? ''
         const candidates = event.candidates?.length ? event.candidates : (requestedMode === 'generation' && finalText ? [finalText] : undefined)
@@ -267,7 +268,7 @@ export function AssistantPanel({ project, documentId, documentRevision, selectio
       {loadingHistory ? <div className="chat-loading">正在读取这部作品的对话…</div> : messages.length === 0 ? <div className="chat-empty"><Sparkles size={23} /><h3>从这部作品继续聊</h3><p>讨论不会自动改正文；确定的设定会先成为待确认提案。</p>{modelName === '未配置模型' && <button className="text-action" onClick={onOpenSettings}>配置模型与服务</button>}</div> : messages.map((message) => <div key={message.id} className={`message ${message.role} ${message.status ?? ''}`}>
         <div className="message-role">{message.role === 'user' ? '你' : '同行者'}</div>
         {message.role === 'assistant' && message.mode === 'consistency_check' && !message.status && message.content
-          ? <ConsistencyReportView text={message.content} />
+          ? <ConsistencyReportView text={message.content} coverage={message.coverage} chapterText={message.coverage?.documentId && message.coverage.documentId === documentId ? documentText : undefined} />
           : <div className="message-content">{message.role === 'assistant' && message.candidates?.length ? activeCandidateText(message) : (message.content || '正在思考…')}</div>}
         {message.candidates && message.candidates.length > 1 && !message.status && <div className="candidate-switcher" role="tablist" aria-label="执笔候选">
           {message.candidates.map((_, index) => <button key={index} type="button" role="tab" aria-selected={(message.activeCandidateIndex ?? 0) === index}

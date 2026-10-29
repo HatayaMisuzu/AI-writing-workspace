@@ -6,6 +6,7 @@ import { composeProviderMessages } from './prompt-composer'
 import { OpenAICompatibleAdapter, ProviderService, type ProviderMessage } from './provider'
 import { computeContextInputBudget, DEFAULT_CONTEXT_WINDOW, DEFAULT_MAX_OUTPUT } from '../../shared/provider-presets'
 import { normalizeCandidateCount } from '../../shared/candidate-count'
+import { truncateBySide, truncationSideFor } from '../../shared/consistency-check'
 import { ChatService } from '../services/chat-service'
 import { DocumentService } from '../services/document-service'
 import { PromptTemplateService } from '../services/prompt-template-service'
@@ -168,7 +169,8 @@ export class AICreativeRuntime {
         context.metadata.omitted!.push({ id: last.id, kind: last.kind, title: last.title, reason: 'budget' })
       } else {
         const keep = Math.floor(keepTokens * 2.2)
-        last.content = reader ? last.content.slice(-keep) : last.content.slice(0, keep); last.truncated = true
+        // P2-1：保留端与 context-engine 同源（truncationSideFor），两次截断叠加后仍保留同一端
+        last.content = truncateBySide(last.content, keep, truncationSideFor(context.policy)); last.truncated = true
       }
       context.metadata.estimatedTokens = context.items.reduce((sum, item) => sum + estimateTokens(item.content), 0)
       context.metadata.sourceIds = context.items.map((item) => item.id)
