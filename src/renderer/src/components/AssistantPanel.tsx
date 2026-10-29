@@ -1,12 +1,12 @@
 import { Bot, Check, ChevronRight, Copy, FileSearch, MessageSquarePlus, PenLine, RefreshCw, Send, Sparkles, Square, Trash2 } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { AIMode, ChatThread, ContextBundle, DigestStatus, DocumentTaskTarget, MemoryProposal, ModelConfig, Project, RoutedTask } from '../../../shared/domain'
+import type { AIMode, ChatThread, ContextBundle, ContextOverflow, DigestStatus, DocumentTaskTarget, MemoryProposal, ModelConfig, Project, RoutedTask } from '../../../shared/domain'
 import { DEFAULT_CANDIDATE_COUNT, MAX_CANDIDATE_COUNT, normalizeCandidateCount } from '../../../shared/candidate-count'
 import { inputForQuickMode, inputForReaderThrough } from '../services/quick-mode-input'
 import { CONSISTENCY_DEFAULT_INTENT, consistencyCoverage } from '../../../shared/consistency-check'
 import { ConsistencyReportView } from './ConsistencyReportView'
 import type { EditorSelection } from './EditorSurface'
-import { basisLabel, clearedExclusionState, contextButtonLabel, PIN_SCOPE_HINT, stateAfterRequest, isPinnable, isRowChecked, omittedLabel, toContextSourceRows, toggleExcludedId, toggleIncludedId, type ContextSourceRow } from '../services/context-sources'
+import { OVERFLOW_TRUNCATED_NOTE, overflowSummary, basisLabel, clearedExclusionState, contextButtonLabel, PIN_SCOPE_HINT, stateAfterRequest, isPinnable, isRowChecked, omittedLabel, toContextSourceRows, toggleExcludedId, toggleIncludedId, type ContextSourceRow } from '../services/context-sources'
 import { activeCandidateText, canProposeGenerationPatch, mapChatHistory, resolveDisplayedModelMode, resolveModelDisplayName, retryInputForMessage, type AssistantHistoryMessage } from '../services/assistant-history'
 
 type ContextSummary = { count: number; tokens: number; items: ContextSourceRow[] }
@@ -48,7 +48,7 @@ export function AssistantPanel({ project, documentId, documentText, documentRevi
   const [excludedIds, setExcludedIds] = useState<string[]>([])
   const [includedIds, setIncludedIds] = useState<string[]>([])
   const [sourcesOpen, setSourcesOpen] = useState(false)
-  const [sourcePreview, setSourcePreview] = useState<{ rows: ContextSourceRow[]; tokens: number; error?: string }>()
+  const [sourcePreview, setSourcePreview] = useState<{ rows: ContextSourceRow[]; tokens: number; overflow?: ContextOverflow[]; error?: string }>()
   const cleanups = useRef(new Map<string, () => void>())
   const streamed = useRef(new Map<string, string>())
   const chatScroll = useRef<HTMLDivElement>(null)
@@ -105,7 +105,7 @@ export function AssistantPanel({ project, documentId, documentText, documentRevi
           includedIds: includedIds.length ? includedIds : undefined,
           throughChapterNumber: requestedMode === 'reader_review' ? Number(readerThrough) : undefined,
           candidateCount: requestedMode === 'generation' ? normalizeCandidateCount(candidateCount) : undefined } }))
-        .then((bundle) => { if (active) setSourcePreview({ rows: toContextSourceRows(bundle), tokens: bundle.metadata.estimatedTokens }) })
+        .then((bundle) => { if (active) setSourcePreview({ rows: toContextSourceRows(bundle), tokens: bundle.metadata.estimatedTokens, overflow: bundle.metadata.overflow }) })
         .catch((error) => { if (active) setSourcePreview({ rows: [], tokens: 0, error: error instanceof Error ? error.message : String(error) }) })
     }, 250)
     return () => { active = false; clearTimeout(timer) }
@@ -300,7 +300,13 @@ export function AssistantPanel({ project, documentId, documentText, documentRevi
               }} />
                 <strong>{row.title}</strong>{row.included ? <span>{row.preview}{row.truncated ? '…（已截断，部分已省略）' : ''}</span> : <small>{omittedLabel(row.omittedReason)}</small>}
                 {basisLabel(row) && <small className="context-basis">{basisLabel(row)}</small>}</label>
-              {isPinnable(row) && <button type="button" className="context-pin" aria-pressed={includedIds.includes(row.id)} onClick={() => setIncludedIds((current) => toggleIncludedId(current, row.id))}>{includedIds.includes(row.id) ? '取消钉住' : '钉住'}</button>}</li>)}</ul></>}
+              {isPinnable(row) && <button type="button" className="context-pin" aria-pressed={includedIds.includes(row.id)} onClick={() => setIncludedIds((current) => toggleIncludedId(current, row.id))}>{includedIds.includes(row.id) ? '取消钉住' : '钉住'}</button>}</li>)}</ul>
+            {(sourcePreview.overflow ?? []).map((group) => <details key={group.kind} className="context-overflow" data-testid={`context-overflow-${group.kind}`}>
+              <summary>{overflowSummary(group)}</summary>
+              <ul>{group.items.map((item) => <li key={item.id} className="omitted"><strong>{item.title}</strong><small className="context-basis">{item.basis.join(' · ')}</small>
+                <button type="button" className="context-pin" aria-pressed={includedIds.includes(item.id)} onClick={() => setIncludedIds((current) => toggleIncludedId(current, item.id))}>{includedIds.includes(item.id) ? '取消钉住' : '钉住'}</button></li>)}</ul>
+              {group.listTruncated && <small>{OVERFLOW_TRUNCATED_NOTE}</small>}
+            </details>)}</>}
       </div>}
       {selection && <div className="selection-chip">已选择 {selection.text.length} 字</div>}
       <textarea value={input} disabled={loadingHistory} onChange={(event) => setInput(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void submit() } }} placeholder="和同行者聊聊这部作品…" />

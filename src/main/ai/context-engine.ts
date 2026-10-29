@@ -1,4 +1,4 @@
-import type { AITaskEnvelope, Character, ContextBundle, ContextItem, ContextOmission, ProjectNote } from '../../shared/domain'
+import { OVERFLOW_LIST_LIMIT, type AITaskEnvelope, type Character, type ContextBundle, type ContextItem, type ContextOmission, type ContextOverflow, type ProjectNote } from '../../shared/domain'
 import type { AppDatabase } from '../database/database'
 import { DocumentService } from '../services/document-service'
 import { MemoryService } from '../services/memory-service'
@@ -14,6 +14,14 @@ const PINNED_PRIORITY = 99
 export const CONSISTENCY_MEMORY_LIMIT = 60
 export const CONSISTENCY_CHARACTER_LIMIT = 40
 export const CREATIVE_MEMORY_LIMIT = 12
+export const CREATIVE_CHARACTER_LIMIT = 8
+export const CONSISTENCY_TIMELINE_LIMIT = 200
+export const OVERFLOW_BASIS = '超出上限未带上'
+
+/** L4：上限外条目（已按现有规则排序）→ 清单可见的溢出行；只记 id / 标题 / 依据，不进入发送内容。 */
+const overflowOf = (kind: ContextOverflow['kind'], label: string, limit: number, rest: Array<{ id: string; title: string; basis?: string[] }>): ContextOverflow[] =>
+  rest.length ? [{ kind, label, limit, total: rest.length, listTruncated: rest.length > OVERFLOW_LIST_LIMIT,
+    items: rest.slice(0, OVERFLOW_LIST_LIMIT).map((item) => ({ id: item.id, kind, title: item.title, basis: [...(item.basis ?? []), OVERFLOW_BASIS] })) }] : []
 
 const estimateTokens = (text: string): number => Math.ceil(text.length / 2.2)
 const settingName = (content: string): string => { const flat = content.replace(/\s+/g, ' ').trim(); return [...flat].length > 16 ? `${[...flat].slice(0, 16).join('')}…` : flat || '未命名' }
@@ -63,7 +71,9 @@ export class ContextEngine {
       memoryCandidates.push({ id: memory.id, kind: 'memory', title: `设定 · ${settingName(memory.content)}（${memory.type}）`, content: memory.content,
         projectId, reason: '作者已确认的设定', priority: 80, rank, basis: settingBasis(rank) })
     })
-    candidates.push(...memoryCandidates.toSorted((a, b) => compareSettingRank(a.rank!, b.rank!)).slice(0, CONSISTENCY_MEMORY_LIMIT))
+    const sortedMemories = memoryCandidates.toSorted((a, b) => compareSettingRank(a.rank!, b.rank!))
+    candidates.push(...sortedMemories.slice(0, CONSISTENCY_MEMORY_LIMIT))
+    const overflow: ContextOverflow[] = overflowOf('memory', '设定', CONSISTENCY_MEMORY_LIMIT, sortedMemories.slice(CONSISTENCY_MEMORY_LIMIT))
     const characters = this.db.raw.prepare('SELECT * FROM characters WHERE project_id = ? ORDER BY updated_at DESC, id').all(projectId) as Array<Record<string, unknown>>
     // P3-e M1：人物卡同理，先排序再截取 40 条
     const characterCandidates: Candidate[] = []
@@ -76,11 +86,18 @@ export class ContextEngine {
       characterCandidates.push({ id: row.id as string, kind: 'character', title: `人物 · ${row.name as string}`, content: content || '（无更多信息）',
         projectId, reason: '人物卡', priority: rank.mentioned ? 79 : 70, rank, basis: settingBasis(rank) })
     })
-    candidates.push(...characterCandidates.toSorted((a, b) => compareSettingRank(a.rank!, b.rank!)).slice(0, CONSISTENCY_CHARACTER_LIMIT))
+    const sortedCharacters = characterCandidates.toSorted((a, b) => compareSettingRank(a.rank!, b.rank!))
+    candidates.push(...sortedCharacters.slice(0, CONSISTENCY_CHARACTER_LIMIT))
+    overflow.push(...overflowOf('character', '人物卡', CONSISTENCY_CHARACTER_LIMIT, sortedCharacters.slice(CONSISTENCY_CHARACTER_LIMIT)))
     const titles = new Map(this.documents.listTree(projectId).map((item) => [item.id, item.title]))
-    const events = this.db.raw.prepare('SELECT id, story_time_label, title, chapter_id FROM timeline_events WHERE project_id = ? ORDER BY sort_key, created_at LIMIT 200')
+    // L4：取全部事件（顺序同 base）；前 200 条照旧，200 条之后只有钉住的进入候选，其余进溢出行。
+    const allEvents = this.db.raw.prepare('SELECT id, story_time_label, title, chapter_id FROM timeline_events WHERE project_id = ? ORDER BY sort_key, created_at')
       .all(projectId) as Array<{ id: string; story_time_label: string; title: string; chapter_id: string | null }>
-    events.forEach((event, index) => candidates.push({ id: event.id, kind: 'timeline', title: `时间线 · ${event.title || '未命名事件'}`,
+    const indexed = allEvents.map((event, index) => ({ event, index }))
+    const events = indexed.filter(({ index, event }) => index < CONSISTENCY_TIMELINE_LIMIT || pinned.has(event.id))
+    overflow.push(...overflowOf('timeline', '时间线', CONSISTENCY_TIMELINE_LIMIT, indexed.filter(({ index, event }) => index >= CONSISTENCY_TIMELINE_LIMIT && !pinned.has(event.id))
+      .map(({ event }) => ({ id: event.id, title: `时间线 · ${event.title || '未命名事件'}`, basis: ['时间线顺序'] }))))
+    events.forEach(({ event, index }) => candidates.push({ id: event.id, kind: 'timeline', title: `时间线 · ${event.title || '未命名事件'}`,
       content: [`故事时间：${event.story_time_label || '未标注'}`, `顺序：第 ${index + 1} 个事件`, event.chapter_id ? `关联章节：${titles.get(event.chapter_id) ?? event.chapter_id}` : ''].filter(Boolean).join('；'),
       projectId, reason: '时间线事件（仅一致性检查使用）', priority: 76 - Math.min(5, index / 40),
       basis: pinned.has(event.id) ? [BASIS_LABELS.pinned, '时间线顺序'] : ['时间线顺序'] }))
@@ -101,7 +118,7 @@ export class ContextEngine {
     // 本章放在最后：runtime 若仍超预算，先截断本章而不是设定。
     const items = [...refs.items, ...body.items]
     return { projectId, policy: 'consistency', items, metadata: { estimatedTokens: refs.metadata.estimatedTokens + body.metadata.estimatedTokens,
-      sourceIds: items.map((item) => item.id), excludedKinds, omitted: [...(body.metadata.omitted ?? []), ...(refs.metadata.omitted ?? [])] } }
+      sourceIds: items.map((item) => item.id), excludedKinds, omitted: [...(body.metadata.omitted ?? []), ...(refs.metadata.omitted ?? [])], ...(overflow.length ? { overflow } : {}) } }
   }
 
   private buildCreative(task: AITaskEnvelope, budget: number): ContextBundle {
@@ -132,12 +149,14 @@ export class ContextEngine {
     const statuses = ['confirmed', 'observed', 'tentative', 'idea'] as const
     // P3-e M1/M3：先取全部关键词相关记忆，按 钉住 > 状态权重 > 本章提及 > 关键词相关度（沿用 base 的 relevanceScore，含作者提问）> 更新 > id 排序，再截取 12 条
     const stateWeightOf = (status: string): number => status === 'confirmed' ? 85 : status === 'observed' ? 78 : status === 'tentative' ? 55 : 40
-    const relevant = this.memories.searchRelevant(task.projectId, [...statuses], signal, Number.MAX_SAFE_INTEGER)
+    const rankedRelevant = this.memories.searchRelevant(task.projectId, [...statuses], signal, Number.MAX_SAFE_INTEGER)
       .map((memory) => ({ memory, score: relevanceScore(memory.content, signal),
         rank: rankSetting({ id: memory.id, pinned: pinned.has(memory.id), confirmed: memory.status === 'confirmed', names: memoryEntryNames(memory.content), updatedAt: memory.updatedAt }, haystack) }))
       .toSorted((a, b) => Number(b.rank.pinned) - Number(a.rank.pinned) || stateWeightOf(b.memory.status) - stateWeightOf(a.memory.status)
         || Number(b.rank.mentioned) - Number(a.rank.mentioned) || b.score - a.score || compareSettingRank(a.rank, b.rank))
-      .slice(0, CREATIVE_MEMORY_LIMIT).map((item) => item.memory)
+    const relevant = rankedRelevant.slice(0, CREATIVE_MEMORY_LIMIT).map((item) => item.memory)
+    const overflow: ContextOverflow[] = overflowOf('memory', '记忆', CREATIVE_MEMORY_LIMIT, rankedRelevant.slice(CREATIVE_MEMORY_LIMIT).filter((item) => !item.rank.pinned)
+      .map((item) => ({ id: item.memory.id, title: `${item.memory.type} · ${item.memory.status}`, basis: settingBasis(item.rank) })))
     const pinnedMemories = this.memories.list(task.projectId, [...statuses]).filter((memory) => pinned.has(memory.id) && !relevant.some((item) => item.id === memory.id))
     for (const memory of [...relevant, ...pinnedMemories]) {
       const stateWeight = stateWeightOf(memory.status)
@@ -147,7 +166,7 @@ export class ContextEngine {
         priority: rank.pinned ? PINNED_PRIORITY : stateWeight, rank, basis: settingBasis(rank) })
     }
 
-    this.addCharacters(task.projectId, signal, candidates, haystack, pinned)
+    overflow.push(...this.addCharacters(task.projectId, signal, candidates, haystack, pinned))
     this.addNotes(task.projectId, signal, task.mode, candidates)
     this.addOutlines(task.projectId, task.documentId, candidates)
     this.addDigests(task.projectId, task.documentId, signal, candidates)
@@ -172,23 +191,27 @@ export class ContextEngine {
         content: sample.text, projectId: task.projectId, reason: '生成或编辑任务的人类优先风格样本', priority: 50 + Math.round(sample.score / 10) }))
     }
 
-    return this.budget(task.projectId, 'creative', candidates, budget, ['other_projects'], task.excludedIds, task.includedIds)
+    const bundle = this.budget(task.projectId, 'creative', candidates, budget, ['other_projects'], task.excludedIds, task.includedIds)
+    return overflow.length ? { ...bundle, metadata: { ...bundle.metadata, overflow } } : bundle
   }
 
-  private addCharacters(projectId: string, signal: string, candidates: Candidate[], haystack = '', pinned: Set<string> = new Set()): void {
+  private addCharacters(projectId: string, signal: string, candidates: Candidate[], haystack = '', pinned: Set<string> = new Set()): ContextOverflow[] {
     const rows = this.db.raw.prepare('SELECT * FROM characters WHERE project_id = ? ORDER BY updated_at DESC').all(projectId) as Array<Record<string, unknown>>
-    rows.map((row) => ({
+    const ranked = rows.map((row) => ({
       character: { id: row.id as string, projectId, name: row.name as string, aliases: JSON.parse(row.aliases_json as string) as string[],
         notes: row.notes as string, fields: JSON.parse(row.fields_json as string) as Record<string, string>, createdAt: row.created_at as number, updatedAt: row.updated_at as number } satisfies Character,
       matched: [row.name as string, ...(JSON.parse(row.aliases_json as string) as string[])].some((name) => name && signal.includes(name))
     })).map((item) => ({ ...item, rank: rankSetting({ id: item.character.id, pinned: pinned.has(item.character.id), confirmed: false,
       names: [item.character.name, ...item.character.aliases], updatedAt: item.character.updatedAt }, haystack) }))
       // P3-e：钉住的人物卡即使未被提及也带上；8 条上限按确定排序截取
-      .filter((item) => item.matched || item.rank.pinned).toSorted((a, b) => compareSettingRank(a.rank, b.rank)).slice(0, 8).forEach(({ character, rank }) => candidates.push({
+      .filter((item) => item.matched || item.rank.pinned).toSorted((a, b) => compareSettingRank(a.rank, b.rank))
+    ranked.slice(0, CREATIVE_CHARACTER_LIMIT).forEach(({ character, rank }) => candidates.push({
       id: character.id, kind: 'character', title: `人物 · ${character.name}`,
       content: [character.aliases.length ? `别名：${character.aliases.join('、')}` : '', character.notes, JSON.stringify(character.fields)].filter(Boolean).join('\n'),
       projectId, reason: rank.pinned ? '作者钉住的人物卡' : '问题、选区或当前章明确提及该人物', priority: rank.pinned ? PINNED_PRIORITY : 82, rank, basis: settingBasis(rank)
     }))
+    return overflowOf('character', '人物卡', CREATIVE_CHARACTER_LIMIT, ranked.slice(CREATIVE_CHARACTER_LIMIT).filter((item) => !item.rank.pinned)
+      .map(({ character, rank }) => ({ id: character.id, title: `人物 · ${character.name}`, basis: settingBasis(rank) })))
   }
 
   private addNotes(projectId: string, signal: string, mode: AITaskEnvelope['mode'], candidates: Candidate[]): void {

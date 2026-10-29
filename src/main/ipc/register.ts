@@ -1,5 +1,4 @@
-import { readFile } from 'node:fs/promises'
-import { PromptTemplateService } from '../services/prompt-template-service'
+import { PromptTemplateService, readGlobalTemplateFile } from '../services/prompt-template-service'
 import { runManuscriptExport } from '../services/manuscript-export-flow'
 import type { ExportChapterRange } from '../../shared/export-range'
 import { BrowserWindow, dialog, ipcMain, type IpcMainEvent, type IpcMainInvokeEvent } from 'electron'
@@ -190,7 +189,7 @@ export function registerIpc(db: AppDatabase, codec: SecretCodec, network?: Netwo
   handle('prompts:global-import-preview', async () => {
     const result = await dialog.showOpenDialog({ properties: ['openFile'], filters: [{ name: '墨记全局提示词模板', extensions: ['aiwprompts', 'json'] }] })
     if (result.canceled || !result.filePaths[0]) return null
-    const text = await readFile(result.filePaths[0], 'utf8')
+    const text = await readGlobalTemplateFile(result.filePaths[0])
     const preview = promptTemplates.previewGlobalImport(text)
     pendingGlobalImports.clear(); pendingGlobalImports.set(preview.token, text)
     return preview
