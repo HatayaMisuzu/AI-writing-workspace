@@ -49,7 +49,7 @@ describe('S9 writing_daily migration (v6 → v7)', () => {
     expect(JSON.stringify(goals)).not.toMatch(/\d{3,}/) // 无预置目标数字
     expect(db.raw.prepare('PRAGMA foreign_key_check').all()).toEqual([])
     db.close()
-  })
+  }, 30_000) // Windows CI runner 上旧库迁移偶发 >5s，仅此用例放宽超时
 
   it('fresh database is at v7 with writing_daily and empty goals on create', () => {
     const db = createTestDb()

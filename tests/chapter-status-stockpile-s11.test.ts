@@ -71,7 +71,7 @@ describe('S11 migration v8 · §3.3 ④ 状态默认值', () => {
       expect(new WritingDailyService(db).getGoals(project.id).dailyChapterGoalEnabled).toBe(false)
       db.close()
     })
-  })
+  }, 30_000) // Windows CI runner 上旧库迁移偶发 >5s，仅此用例放宽超时
 
   it('fresh create: 新章默认构思；settings 无进度指针/章数目标', () => {
     const db = createTestDb()

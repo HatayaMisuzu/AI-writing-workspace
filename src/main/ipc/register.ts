@@ -1,3 +1,4 @@
+import { readFile } from 'node:fs/promises'
 import { PromptTemplateService } from '../services/prompt-template-service'
 import { runManuscriptExport } from '../services/manuscript-export-flow'
 import type { ExportChapterRange } from '../../shared/export-range'
@@ -9,7 +10,7 @@ import { DocumentService } from '../services/document-service'
 import { IdeaService, MemoryService } from '../services/memory-service'
 import { PatchService } from '../services/patch-service'
 import { lintChineseText } from '../services/local-linter'
-import { BackupService } from '../services/backup-service'
+import { atomicWriteFile, BackupService } from '../services/backup-service'
 import { createProviderAdapter, ProviderService, type SecretCodec } from '../ai/provider'
 import { originFromBaseUrl } from '../network-policy'
 import { checkBaseUrl } from '../../shared/base-url'
@@ -177,7 +178,32 @@ export function registerIpc(db: AppDatabase, codec: SecretCodec, network?: Netwo
   handle('prompts:list', (projectId: string) => promptTemplates.list(parse(idSchema, projectId)))
   handle('prompts:set', (projectId: string, mode: unknown, text: unknown) => promptTemplates.set(parse(idSchema, projectId), parse(promptTemplateModeSchema, mode), parse(promptTemplateTextSchema, text)))
   handle('prompts:reset', (projectId: string, mode: unknown) => promptTemplates.reset(parse(idSchema, projectId), parse(promptTemplateModeSchema, mode)))
-  handle('prompts:set-scope', (projectId: string, scope: unknown) => promptTemplates.setScope(parse(idSchema, projectId), parse(promptTemplateScopeSchema, scope)))
+  handle('prompts:set-scope', (projectId: string, scope: unknown, choice?: unknown) => promptTemplates.setScope(parse(idSchema, projectId), parse(promptTemplateScopeSchema, scope), choice === undefined ? undefined : parse(z.enum(['restore', 'fromCurrent']), choice)))
+  handle('prompts:global-export', async () => {
+    const result = await dialog.showSaveDialog({ defaultPath: '全局提示词模板.aiwprompts', filters: [{ name: '墨记全局提示词模板', extensions: ['aiwprompts'] }] })
+    if (result.canceled || !result.filePath) return null
+    await atomicWriteFile(result.filePath, promptTemplates.exportGlobalFile())
+    return result.filePath
+  })
+  // M2：预览时把文件内容留在主进程（按 token），确认时只传 token；渲染进程不能指定任意路径或内容。
+  const pendingGlobalImports = new Map<string, string>()
+  handle('prompts:global-import-preview', async () => {
+    const result = await dialog.showOpenDialog({ properties: ['openFile'], filters: [{ name: '墨记全局提示词模板', extensions: ['aiwprompts', 'json'] }] })
+    if (result.canceled || !result.filePaths[0]) return null
+    const text = await readFile(result.filePaths[0], 'utf8')
+    const preview = promptTemplates.previewGlobalImport(text)
+    pendingGlobalImports.clear(); pendingGlobalImports.set(preview.token, text)
+    return preview
+  })
+  handle('prompts:global-import-apply', (token: unknown) => {
+    const key = parse(z.string().regex(/^[0-9a-f]{64}$/), token)
+    const text = pendingGlobalImports.get(key)
+    if (text === undefined) throw Object.assign(new Error('模板在预览后已变化，请重新预览后再确认。'), { code: 'PROMPT_COPY_STALE' })
+    const entries = promptTemplates.applyGlobalImport(text, key)
+    pendingGlobalImports.clear()
+    return entries
+  })
+  handle('prompts:global-import-cancel', () => { pendingGlobalImports.clear(); return null })
   handle('prompts:global-list', () => promptTemplates.listGlobal())
   handle('prompts:global-set', (mode: unknown, text: unknown) => promptTemplates.setGlobal(parse(promptTemplateModeSchema, mode), parse(promptTemplateTextSchema, text)))
   handle('prompts:global-reset', (mode: unknown) => promptTemplates.resetGlobal(parse(promptTemplateModeSchema, mode)))

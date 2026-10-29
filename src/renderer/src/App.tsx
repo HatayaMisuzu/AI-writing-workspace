@@ -16,6 +16,7 @@ export function App(): React.JSX.Element {
   const [createOpen, setCreateOpen] = useState(false)
   const [newProject, setNewProject] = useState<{ title: string; projectType: ProjectType; description: string }>({ title: '', projectType: 'novel', description: '' })
   const [appError, setAppError] = useState<string>()
+  const [appNotice, setAppNotice] = useState<string>()
   const beforeLeaveRef = useRef<(() => Promise<void>) | undefined>(undefined)
   const active = screen.type === 'workspace' ? projects.find((project) => project.id === screen.projectId) : undefined
   const reload = useCallback(async () => setProjects(await window.workspace.projects.list(true)), [])
@@ -44,10 +45,11 @@ export function App(): React.JSX.Element {
   return <div className="app-shell">
     <TitleBar title={title} />
     {appError && <div className="app-error" role="alert"><span>{appError}</span><button onClick={() => setAppError(undefined)}>关闭</button></div>}
+    {appNotice && <div className="app-error" role="status" data-testid="app-notice"><span>{appNotice}</span><button onClick={() => setAppNotice(undefined)}>关闭</button></div>}
     <div className="app-body">
       <WorksRail projects={projects.filter((project) => !project.archived)} activeId={active?.id} onLibrary={() => void navigate({ type: 'library' })} onOpen={open} onCreate={() => setCreateOpen(true)} onSettings={() => void navigate({ type: 'settings' })} onSearch={() => void navigate({ type: 'library' })} />
       <div className="screen-host">
-        {screen.type === 'library' ? <LibraryScreen projects={projects} onOpen={open} onCreate={() => setCreateOpen(true)} onImport={async () => { const project = await window.workspace.backup.importProject(); if (project) { await reload(); open(project) } }} onImportManuscript={async () => { const project = await window.workspace.backup.importManuscript(); if (project) { await reload(); open(project) } }} onArchive={async (project) => { await window.workspace.projects.archive(project.id, !project.archived); await reload() }} onBackup={(project) => void window.workspace.backup.exportProject(project.id)} onExport={(project, format, onlyFinal, range) => window.workspace.backup.exportManuscript(project.id, format, onlyFinal, range)} />
+        {screen.type === 'library' ? <LibraryScreen projects={projects} onOpen={open} onCreate={() => setCreateOpen(true)} onImport={async () => { const project = await window.workspace.backup.importProject(); if (project) { if (project.importNotice) setAppNotice(project.importNotice); await reload(); open(project) } }} onImportManuscript={async () => { const project = await window.workspace.backup.importManuscript(); if (project) { await reload(); open(project) } }} onArchive={async (project) => { await window.workspace.projects.archive(project.id, !project.archived); await reload() }} onBackup={(project) => void window.workspace.backup.exportProject(project.id)} onExport={(project, format, onlyFinal, range) => window.workspace.backup.exportManuscript(project.id, format, onlyFinal, range)} />
           : screen.type === 'settings' ? <SettingsScreen />
           : active ? <WorkspaceScreen key={active.id} project={active} onProjectChanged={() => void reload()} onSettings={() => void navigate({ type: 'settings' })} onRegisterBeforeLeave={registerBeforeLeave} />
           : <div className="fatal-view">作品不存在或已被删除。<button onClick={() => setScreen({ type: 'library' })}>返回作品库</button></div>}

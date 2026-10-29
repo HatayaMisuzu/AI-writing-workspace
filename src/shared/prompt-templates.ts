@@ -97,4 +97,12 @@ export interface PromptCopyPreview {
   changedCount: number
   token: string
 }
+/** M1：本书有旧覆盖时切到「本书自定义」的二选一。restore = 恢复上次的本书设置；fromCurrent = 从当前生效内容开始（替换旧覆盖）。 */
+export type PromptScopeChoice = 'restore' | 'fromCurrent'
+export interface GlobalImportPreview {
+  changes: Array<{ mode: AIMode; role: string; current: string; incoming: string; changed: boolean }>
+  changedCount: number
+  token: string
+}
+export const IMPORT_GLOBAL_SCOPE_NOTICE = '本书沿用全局模板，已改用本机全局；如需原机全局，请在原机导出全局模板。'
 export interface GlobalPromptTemplateEntry { mode: AIMode; role: string; defaultTemplate: string; override: string | null }

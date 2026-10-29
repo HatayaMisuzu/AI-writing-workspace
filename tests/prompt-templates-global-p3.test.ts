@@ -72,7 +72,8 @@ describe('P3 全局提示词模板', () => {
     t.set(a.id, 'brainstorm', '本书大纲')
     t.setScope(a.id, 'global')
     expect(t.resolve(a.id, 'brainstorm')).toMatchObject({ source: 'global', text: '全局大纲' })
-    t.setScope(a.id, 'project')
+    expect(() => t.setScope(a.id, 'project')).toThrow(expect.objectContaining({ code: 'PROMPT_SCOPE_CHOICE_REQUIRED' }))
+    t.setScope(a.id, 'project', 'restore')
     expect(t.resolve(a.id, 'brainstorm')).toMatchObject({ source: 'project', text: '本书大纲' })
     t.reset(a.id, 'brainstorm')
     expect(t.getScope(a.id)).toBe('project') // 删光覆盖也不被推导回全局

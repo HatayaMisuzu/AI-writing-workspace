@@ -59,7 +59,7 @@ describe('S7 Provider 预设 / 空 key / 超时 / 上下文窗口', () => {
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
-  })
+  }, 30_000) // Windows CI runner 上旧库迁移偶发 >5s，仅此用例放宽超时
 
   it('预设只填 Base URL，不内置任何 key；本地允许空 key', () => {
     expect(PROVIDER_PRESETS.map((p) => p.id)).toEqual(['ollama', 'lmstudio', 'openai', 'deepseek', 'openrouter', 'custom'])
