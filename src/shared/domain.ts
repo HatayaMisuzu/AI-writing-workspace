@@ -493,3 +493,6 @@ export interface FocusLastSession {
 
 /** F14：人物悬停偏好（settings_json，无迁移）。 */
 export interface CharacterHoverPrefs { enabled: boolean; ignoredTerms: Array<{ characterId: string; term: string }>; enabledSingleTerms: Array<{ characterId: string; term: string }> }
+
+/** F15：处于小黑屋中的作品（用于作品库 / 其他作品的锁定提示）。 */
+export interface FocusLockedProject { projectId: string; title: string }

@@ -620,7 +620,13 @@ try {
       })
       return out
     }, { projectId: ids.projectId, chapterId: ids.chapterA })
-    for (const [name, message] of Object.entries(rejected)) assert.match(message, /FOCUS_LOCKED/, `${name} 应返回 FOCUS_LOCKED，实际 ${message}`)
+    // 渲染进程拿不到 error.code（Electron 只传文案）：invoke 类断言带书名、无「FocusLockError:」前缀；ai:start 事件带 code
+    const lockedTitle = await page.evaluate(async (projectId) => (await window.workspace.projects.list(true)).find((item) => item.id === projectId).title, ids.projectId)
+    assert.match(rejected.start, /^FOCUS_LOCKED:/, `start 应返回 FOCUS_LOCKED，实际 ${rejected.start}`)
+    for (const [name, message] of Object.entries(rejected)) {
+      assert.ok(message.includes(`《${lockedTitle}》正在小黑屋中`), `${name} 报错应带书名，实际 ${message}`)
+      assert.doesNotMatch(message, /FocusLockError/, `${name} 报错不应带 FocusLockError 前缀`)
+    }
     await addLockedDelta(page, before)
   })
 
@@ -861,6 +867,64 @@ try {
     await page.getByRole('button', { name: '确认出屋' }).click()
     await page.getByTestId('blackroom-bar').waitFor({ state: 'detached' })
     await page.locator('.assistant-panel').waitFor()
+  })
+
+  await record('F15 ⑫ 锁定可见性：作品库 / 其他作品显示被锁书名与回去入口；AI 报错带书名无前缀；Esc 只关紧急出口对话框', async () => {
+    const page = running.page
+    const other = await page.evaluate(() => window.workspace.projects.create({ title: '旁边的书', projectType: 'novel', description: '' }))
+    const lockedTitle = await page.evaluate(async (projectId) => (await window.workspace.projects.list(true)).find((item) => item.id === projectId).title, ids.projectId)
+    await enterBlackroom(page, async (d) => { await d.getByLabel('写满字数').check(); await d.getByLabel('目标字数').fill('1000') })
+    let before = await snapshotNetwork(page)
+    // 在被锁的书里不显示「其他书被锁」提示
+    assert.equal(await page.getByTestId('focus-lock-notice').count(), 0)
+    // Esc：只关闭紧急出口对话框，仍在小黑屋（焦点在输入框里、以及输入一半时都试一次）
+    for (const typed of ['', '我要']) {
+      await page.getByRole('button', { name: '紧急出口' }).click()
+      const input = page.getByLabel('紧急出屋确认')
+      await input.waitFor()
+      if (typed) await input.fill(typed)
+      await page.keyboard.press('Escape')
+      await page.getByRole('dialog', { name: '紧急出屋' }).waitFor({ state: 'detached', timeout: 3_000 })
+      assert.equal(await page.getByTestId('blackroom-bar').count(), 1, 'Esc 关闭对话框后仍应在小黑屋')
+      assert.equal((await page.evaluate((projectId) => window.workspace.focus.status(projectId), ids.projectId)).locked, true, 'Esc 不应解锁')
+    }
+    await addLockedDelta(page, before)
+    // 回到作品库（重新载入界面 = 从作品库开始）
+    await page.reload()
+    before = await snapshotNetwork(page)
+    const libraryNotice = page.getByTestId('focus-lock-notice')
+    await libraryNotice.waitFor()
+    assert.match(await libraryNotice.innerText(), new RegExp(`《${lockedTitle}》正在小黑屋中`))
+    // 打开另一本书：提示仍在，AI 报错带书名、无前缀
+    await page.locator('.work-row', { hasText: '旁边的书' }).getByRole('button', { name: '继续写作' }).click()
+    await page.locator('.assistant-panel').waitFor()
+    await page.getByTestId('focus-lock-notice').waitFor()
+    assert.match(await page.getByTestId('focus-lock-notice').innerText(), new RegExp(`《${lockedTitle}》`))
+    await page.getByRole('button', { name: '理解本章' }).click()
+    const digestError = page.locator('.message-content', { hasText: '章节理解失败' })
+    await digestError.waitFor({ timeout: 5_000 })
+    const digestText = await digestError.innerText()
+    assert.ok(digestText.includes(`章节理解失败：《${lockedTitle}》正在小黑屋中`), `理解本章报错应带书名且无前缀，实际 ${digestText}`)
+    assert.doesNotMatch(digestText, /FocusLockError|Error invoking/)
+    await page.getByPlaceholder('和同行者聊聊这部作品…').fill('锁定时在另一本书里提问')
+    await page.getByRole('button', { name: '发送' }).click()
+    const chatError = page.locator('.message-content', { hasText: '正在小黑屋中' }).last()
+    await page.waitForFunction(() => [...document.querySelectorAll('.message-content')].filter((node) => node.textContent?.includes('正在小黑屋中')).length >= 2, null, { timeout: 5_000 })
+    const chatText = await chatError.innerText()
+    assert.ok(chatText.startsWith(`《${lockedTitle}》正在小黑屋中`), `对话报错应带书名且无前缀，实际 ${chatText}`)
+    assert.doesNotMatch(chatText, /FocusLockError|FOCUS_LOCKED/)
+    // 回去入口：跳回被锁那本书的小黑屋，在那里出屋
+    await page.getByTestId('focus-lock-return').click()
+    await page.getByTestId('blackroom-bar').waitFor()
+    assert.equal(await page.getByTestId('focus-lock-notice').count(), 0)
+    assert.equal(await page.locator('.assistant-panel').count(), 0)
+    await page.getByRole('button', { name: '紧急出口' }).click()
+    await page.getByLabel('紧急出屋确认').fill('我要出屋')
+    await addLockedDelta(page, before)
+    await page.getByRole('button', { name: '确认出屋' }).click()
+    await page.locator('.assistant-panel').waitFor()
+    assert.deepEqual(await page.evaluate(() => window.workspace.focus.lockedProjects()), [])
+    await page.evaluate((id) => window.workspace.projects.archive(id, true), other.id)
   })
 
   await record('F15 ⑩ 锁定期间网络请求为 0（主进程 fixture 命中 / 渲染进程请求 / 拦截日志）', async () => {

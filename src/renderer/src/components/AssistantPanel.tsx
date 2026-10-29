@@ -1,3 +1,4 @@
+import { userErrorMessage } from '../../../shared/user-error'
 import { Bot, Check, ChevronRight, Copy, FileSearch, MessageSquarePlus, PenLine, RefreshCw, Send, Sparkles, Square, Trash2 } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { AIMode, ChatThread, ContextBundle, ContextOverflow, DigestStatus, DocumentTaskTarget, MemoryProposal, ModelConfig, Project, RoutedTask } from '../../../shared/domain'
@@ -241,7 +242,7 @@ export function AssistantPanel({ project, documentId, documentText, documentRevi
       setMessages((current) => [...current, { id: crypto.randomUUID(), role: 'assistant', createdAt: Date.now(),
         content: result.repaired ? '来源章节的理解已修复并更新；记忆候选仍需你确认。' : '来源章节的理解已更新；记忆候选仍需你确认。' }])
     } catch (error) { setMessages((current) => [...current, { id: crypto.randomUUID(), role: 'assistant', createdAt: Date.now(),
-      content: `章节理解失败：${error instanceof Error ? error.message : String(error)} 正文没有被修改，可以重试。`, status: 'error' }]) }
+      content: `章节理解失败：${userErrorMessage(error)} 正文没有被修改，可以重试。`, status: 'error' }]) }
     finally { if (digestRequest.current === requestId) setDigestBusy(false) }
   }
 

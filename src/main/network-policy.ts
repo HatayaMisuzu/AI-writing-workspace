@@ -78,10 +78,12 @@ export class NetworkGate {
   private readonly blocked: BlockedNetworkEntry[] = []
   private readonly isDev: boolean
   private readonly onBlocked?: (entry: BlockedNetworkEntry) => void
+  private readonly isFocusLocked: () => boolean
 
-  constructor(options?: { isDev?: boolean; onBlocked?: (entry: BlockedNetworkEntry) => void }) {
+  constructor(options?: { isDev?: boolean; onBlocked?: (entry: BlockedNetworkEntry) => void; isFocusLocked?: () => boolean }) {
     this.isDev = Boolean(options?.isDev)
     this.onBlocked = options?.onBlocked
+    this.isFocusLocked = options?.isFocusLocked ?? (() => false)
   }
 
   setSavedOrigins(origins: Iterable<string>): void {
@@ -100,6 +102,8 @@ export class NetworkGate {
   }
 
   decide(rawUrl: string): NetworkDecision {
+    // F15：小黑屋锁定期间，渲染进程（session.webRequest）的 http/https/ws 一律拒绝，已保存 origin 也不例外。
+    if (/^(https?|wss?):/i.test(rawUrl.trim()) && this.isFocusLocked()) return { allow: false, reason: 'focus-locked' }
     return decideNetworkRequest(rawUrl, {
       savedOrigins: this.savedOrigins,
       temporaryOrigins: this.temporaryOrigins,

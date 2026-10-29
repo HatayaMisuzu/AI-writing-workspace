@@ -24,9 +24,19 @@ let rawFetch: typeof fetch = (...args) => globalThis.fetch(...args)
 /** 由 main/index.ts 在启动时安装（与 webRequest 共用同一个 NetworkGate）。传 undefined 卸载。 */
 export function installEgressGate(gate: EgressDecider | undefined): void { installed = gate }
 
-let focusLocked: () => boolean = () => false
+/** 返回 true / 非空书名列表 = 锁定中。 */
+type FocusLockCheck = () => boolean | readonly string[]
+let focusLocked: FocusLockCheck = () => false
 /** F15：小黑屋锁定期间主进程一律不出站（与 IPC 层 FOCUS_LOCKED 双保险）。传 undefined 卸载。 */
-export function installFocusEgressLock(check: (() => boolean) | undefined): void { focusLocked = check ?? (() => false) }
+export function installFocusEgressLock(check: FocusLockCheck | undefined): void { focusLocked = check ?? (() => false) }
+/** 锁定中的书名（未锁定 → undefined；锁定但无书名 → []）。供 webRequest / openExternal 共用。 */
+export function focusLockedTitles(): readonly string[] | undefined {
+  const value = focusLocked()
+  if (value === true) return []
+  if (Array.isArray(value) && value.length) return value
+  return undefined
+}
+export const isFocusEgressLocked = (): boolean => focusLockedTitles() !== undefined
 
 /** 仅测试用：替换底层 fetch。 */
 export function setRawFetchForTests(fetcher: typeof fetch | undefined): void {
@@ -43,7 +53,11 @@ export function checkEgress(rawUrl: string): void {
     throw new EgressBlockedError('出站请求被拒绝：仅允许 http/https 服务地址。', `blocked-scheme:${parsed.protocol}`)
   }
   if (!installed) throw new EgressBlockedError('出站请求被拒绝：网络守门未就绪。', 'gate-not-installed')
-  if (focusLocked()) throw new EgressBlockedError('出站请求被拒绝：小黑屋锁定中，不发起任何网络请求。', 'focus-locked')
+  const lockedTitles = focusLockedTitles()
+  if (lockedTitles) {
+    const named = lockedTitles.length ? lockedTitles.map((title) => `《${title}》`).join('、') : '某部作品'
+    throw new EgressBlockedError(`出站请求被拒绝：${named}正在小黑屋中，锁定期间不发起任何网络请求。`, 'focus-locked')
+  }
   const decision = installed.decide(parsed.href)
   if (!decision.allow) {
     console.warn(`[egress-guard] blocked ${decision.reason}: ${parsed.origin}`)
