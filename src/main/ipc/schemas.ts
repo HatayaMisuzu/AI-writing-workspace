@@ -77,7 +77,7 @@ export const contextSourceIdSchema = z.string().min(1).max(300)
 export const aiTaskSchema = z.object({
   mode: z.enum(['discussion','brainstorm','generation','editing','organization','chapter_digest','proofreading','reader_review']),
   writePermission: z.enum(['none','proposal','authorized']), userIntent: z.string().min(1).max(200_000),
-  projectId: idSchema, documentId: idSchema.optional(), throughChapterId: idSchema.optional(),
+  projectId: idSchema, documentId: idSchema.optional(), throughChapterId: idSchema.optional(), throughChapterNumber: z.number().optional(),
   selection: z.object({ from: z.number().int().nonnegative(), to: z.number().int().nonnegative(), text: z.string().max(200_000) }).optional(),
   target: z.object({ requestId: idSchema, projectId: idSchema, documentId: idSchema, sourceRevision: z.number().int().nonnegative(),
     selection: z.object({ fromPm: z.number().int().nonnegative(), toPm: z.number().int().nonnegative(), text: z.string().max(200_000), originalHash: z.string().min(1).max(200) }).optional() }).optional(),

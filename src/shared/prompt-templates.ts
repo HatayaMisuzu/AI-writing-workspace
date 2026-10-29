@@ -24,7 +24,7 @@ export const DEFAULT_PROMPT_TEMPLATES: Record<AIMode, string> = {
   organization: '整理现有想法，不改变语义，不升级状态。',
   chapter_digest: '输出符合任务契约的章节理解结构，不评分，不升级记忆状态。',
   proofreading: '区分确定错误与风格选择，不静默重写。',
-  reader_review: '只基于给定 Reader Context，像普通读者一样说明理解问题。'
+  reader_review: '只基于给定 Reader Context（第 1..N 章正文），像普通读者一样输出只读审稿报告：分「读者疑问」「追读风险」两部分，每条注明具体章节；不提供改写稿或补丁，不建议修改设定。'
 }
 
 /** 允许的模板变量（{{name}}）。 */

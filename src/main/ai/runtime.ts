@@ -155,10 +155,17 @@ export class AICreativeRuntime {
       const messages = composeProviderMessages({ task, context, history: fittedHistory, roleTemplate })
       const overflow = this.messageTokens(messages) - limit
       if (overflow <= 0) return { messages, context }
-      const last = context.items.at(-1)!
+      // P1-5：读者审稿按章序排列，优先裁最早的章节（保留靠近第 N 章的正文，且保留章节末尾）
+      const reader = task.mode === 'reader_review'
+      const last = (reader ? context.items[0] : context.items.at(-1))!
       const keepTokens = estimateTokens(last.content) - overflow - 8
-      if (keepTokens <= 0) { context.items.pop(); context.metadata.omitted!.push({ id: last.id, kind: last.kind, title: last.title, reason: 'budget' }) }
-      else { last.content = last.content.slice(0, Math.floor(keepTokens * 2.2)); last.truncated = true }
+      if (keepTokens <= 0) {
+        if (reader) context.items.shift(); else context.items.pop()
+        context.metadata.omitted!.push({ id: last.id, kind: last.kind, title: last.title, reason: 'budget' })
+      } else {
+        const keep = Math.floor(keepTokens * 2.2)
+        last.content = reader ? last.content.slice(-keep) : last.content.slice(0, keep); last.truncated = true
+      }
       context.metadata.estimatedTokens = context.items.reduce((sum, item) => sum + estimateTokens(item.content), 0)
       context.metadata.sourceIds = context.items.map((item) => item.id)
     }

@@ -39,12 +39,16 @@ const trustedSender = (event: IpcMainInvokeEvent | IpcMainEvent): void => {
 }
 
 const handle = <T extends unknown[], R>(channel: string, fn: (...args: T) => R | Promise<R>): void => {
-  ipcMain.handle(channel, (event, ...args: T) => { trustedSender(event); return fn(...args) })
+  ipcMain.handle(channel, async (event, ...args: T) => {
+    trustedSender(event)
+    try { return await fn(...args) } catch (error) { throw toUserFacingIpcError(error) }
+  })
 }
 
 import {
   idSchema, shortTextSchema, contentSchema, nonNegativeIntSchema, projectCreateSchema, documentCreateSchema, documentSaveSchema, noteSaveSchema, characterSaveSchema, providerInputSchema, modelSchema, routeSchema, patchProposalSchema, snapshotReasonSchema, aiStartSchema, aiPreviewContextSchema, noteSectionSchema, outlineSaveSchema, batchCreateChaptersSchema, writingGoalsInputSchema, chapterStatusSchema, foreshadowRegisterSchema, foreshadowSetStateSchema, foreshadowUpdateMetaSchema, timelineSortModeSchema, timelineEventSaveSchema, chapterWordRangeSchema, promptTemplateModeSchema, promptTemplateTextSchema
 } from './schemas'
+import { toUserFacingIpcError } from './validation-error'
 const parse = <T>(schema: z.ZodType<T>, value: unknown): T => schema.parse(value)
 
 export type NetworkHooks = {
@@ -268,7 +272,7 @@ export function registerIpc(db: AppDatabase, codec: SecretCodec, network?: Netwo
       }
       if (!event.sender.isDestroyed()) event.sender.send('ai:event', { type: 'done', requestId: request.requestId, candidates })
     } catch (error) {
-      const shaped = error as Error & { code?: string }
+      const shaped = toUserFacingIpcError(error) as Error & { code?: string }
       if (!event.sender.isDestroyed()) event.sender.send('ai:event', { type: 'error', requestId: request?.requestId ?? 'invalid', message: shaped.message, code: shaped.code })
     }
   })

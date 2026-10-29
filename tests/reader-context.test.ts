@@ -31,12 +31,13 @@ describe('reader context isolation', () => {
     expect(bundle.items.every((item) => item.projectId === project.id)).toBe(true)
   })
 
-  it('allows only explicitly reader-visible memory through the requested chapter', () => {
+  it('P1-5: reader context carries chapter text only, not even reader-visible memory', () => {
     const db = createTestDb()
     const project = new ProjectService(db).create({ title: '可见性', projectType: 'novel' })
     const chapter = new DocumentService(db).listTree(project.id).find((node) => node.type === 'chapter')!
     new MemoryService(db).create({ projectId: project.id, type: 'fact', content: '读者看到红伞', status: 'observed', sourceType: 'chapter', sourceId: chapter.id, readerVisibleFrom: 1 })
     const bundle = new ContextEngine(db).buildReader(project.id, chapter.id)
-    expect(JSON.stringify(bundle)).toContain('读者看到红伞')
+    expect(JSON.stringify(bundle)).not.toContain('读者看到红伞')
+    expect(bundle.items.every((item) => item.kind === 'document')).toBe(true)
   })
 })
