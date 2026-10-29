@@ -1,5 +1,5 @@
 import type { PromptTemplateEntry } from './prompt-templates'
-import type { AIMode } from './domain'
+import type { AIMode, ProviderType } from './domain'
 import type { ExportChapterRange } from './export-range'
 import type {
   ContextBundle,
@@ -118,7 +118,7 @@ export interface WorkspaceApi {
     setRoute(route: TaskModelRoute): Promise<void>
     test(providerId: string, modelId: string): Promise<{ ok: boolean; message?: string }>
     /** S2：未保存地址的临时测连（仅临时放行 origin，不写入白名单） */
-    testUrl(input: { baseUrl: string; apiKey?: string; modelId: string }): Promise<{ ok: boolean; message?: string }>
+    testUrl(input: { baseUrl: string; apiKey?: string; modelId: string; providerType?: ProviderType }): Promise<{ ok: boolean; message?: string }>
   }
   /** S2 e2e：读取 webRequest 拦截日志 */
   network: { blockedLog(): Promise<Array<{ url: string; reason: string; at: number }>> }

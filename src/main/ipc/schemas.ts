@@ -44,7 +44,7 @@ export const characterSaveSchema = z.object({
   fields: z.record(z.string().max(500), contentSchema).optional()
 })
 export const providerInputSchema = z.object({
-  id: idSchema, providerType: z.literal('openai-compatible'), displayName: z.string().trim().min(1).max(500),
+  id: idSchema, providerType: z.enum(['openai-compatible', 'anthropic']), displayName: z.string().trim().min(1).max(500),
   baseUrl: z.string().superRefine((value, ctx) => {
     const check = checkBaseUrl(value)
     if (!check.ok) ctx.addIssue({ code: 'custom', message: check.message })

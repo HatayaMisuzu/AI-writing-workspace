@@ -203,9 +203,12 @@ export interface Snapshot {
   createdAt: number
 }
 
+/** P1-7：协议/供应商类型。 */
+export type ProviderType = 'openai-compatible' | 'anthropic'
+
 export interface ProviderConfig {
   id: string
-  providerType: 'openai-compatible'
+  providerType: ProviderType
   displayName: string
   baseUrl: string
   /** S1c：存量配置的地址不合法时给出原因；此时不会发起任何请求，需作者修正。 */

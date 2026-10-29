@@ -1,8 +1,9 @@
-import type { AppErrorShape, ModelConfig, ProviderCapabilities, ProviderConfig, ProviderInput, RoutedTask } from '../../shared/domain'
+import type { AppErrorShape, ModelConfig, ProviderCapabilities, ProviderConfig, ProviderInput, ProviderType, RoutedTask } from '../../shared/domain'
 import { checkBaseUrl, displayBaseUrl, sameEndpoint, redactSecretsInText, restoreRedactedSecrets } from '../../shared/base-url'
 import { defaultTimeoutsForBaseUrl, isLocalBaseUrl, localConnectionErrorMessage } from '../../shared/provider-presets'
 import type { AppDatabase } from '../database/database'
 import { randomUUID } from 'node:crypto'
+import { AnthropicAdapter } from './anthropic-adapter'
 
 export interface SecretCodec {
   encrypt(value: string): Buffer
@@ -11,18 +12,18 @@ export interface SecretCodec {
 
 export const ADDRESS_CHANGED_KEY = '地址已变更，为防止密钥发往新地址，请重新填写 Key。'
 export const ADDRESS_CHANGED_QUERY_SECRET = '地址已变更，为防止密钥发往新地址，请重新填写地址中的密钥。'
-type ProviderRow = { id: string; provider_type: 'openai-compatible'; display_name: string; base_url: string; encrypted_api_key: Buffer | null; created_at: number; updated_at: number; first_token_timeout_ms: number | null; total_timeout_ms: number | null }
+type ProviderRow = { id: string; provider_type: ProviderType; display_name: string; base_url: string; encrypted_api_key: Buffer | null; created_at: number; updated_at: number; first_token_timeout_ms: number | null; total_timeout_ms: number | null }
 
 const baseUrlIssue = (url: string): { baseUrlError?: string } => { const check = checkBaseUrl(url); return check.ok ? {} : { baseUrlError: check.message } }
 /** 在 path 上追加端点，query（含作者放在地址里的密钥参数）原样保留在末尾。 */
-const endpointUrl = (base: string, endpoint: string): string => {
+export const endpointUrl = (base: string, endpoint: string): string => {
   const q = base.indexOf('?')
   const path = q < 0 ? base : base.slice(0, q); const query = q < 0 ? '' : base.slice(q)
   return `${normalizeBaseUrl(path)}/${endpoint}${query}`
 }
 const normalizeBaseUrl = (url: string): string => url.trim().replace(/\/+$/, '')
 /** S1c：任何请求前都校验 Base URL；不合法则抛错且不调用 fetch、不解密密钥。 */
-const requireValidBaseUrl = (url: string): string => {
+export const requireValidBaseUrl = (url: string): string => {
   const check = checkBaseUrl(url)
   if (!check.ok) throw Object.assign(new Error(`服务地址需要修正：${check.message}`), { code: 'PROVIDER_BASE_URL_INVALID' })
   return check.url
@@ -36,7 +37,7 @@ export class ProviderService {
 
   list(): ProviderConfig[] {
     const rows = this.db.raw.prepare('SELECT * FROM provider_configs ORDER BY updated_at DESC').all() as ProviderRow[]
-    return rows.map((row) => ({ id: row.id, providerType: row.provider_type, displayName: row.display_name,
+    return rows.map((row) => ({ id: row.id, providerType: normalizeProviderType(row.provider_type), displayName: row.display_name,
       baseUrl: displayBaseUrl(row.base_url), ...baseUrlIssue(row.base_url), hasApiKey: Boolean(row.encrypted_api_key),
       firstTokenTimeoutMs: row.first_token_timeout_ms ?? undefined, totalTimeoutMs: row.total_timeout_ms ?? undefined,
       createdAt: row.created_at, updatedAt: row.updated_at }))
@@ -74,7 +75,7 @@ export class ProviderService {
     if (!row) throw new Error('PROVIDER_NOT_FOUND')
     const baseUrl = requireValidBaseUrl(row.base_url)
     const config: ProviderConfig = {
-      id: row.id, providerType: row.provider_type, displayName: row.display_name, baseUrl,
+      id: row.id, providerType: normalizeProviderType(row.provider_type), displayName: row.display_name, baseUrl,
       hasApiKey: Boolean(row.encrypted_api_key),
       firstTokenTimeoutMs: row.first_token_timeout_ms ?? undefined,
       totalTimeoutMs: row.total_timeout_ms ?? undefined,
@@ -176,10 +177,30 @@ export class ProviderService {
 
 export interface ProviderMessage { role: 'system' | 'user' | 'assistant' | 'tool'; content: string }
 
-const providerError = (code: string, message: string): AppErrorShape & Error =>
+/** P1-7：旧数据/未知值一律按 openai-compatible 处理（与 v10 及之前行为一致）。 */
+export const normalizeProviderType = (value: unknown): ProviderType => value === 'anthropic' ? 'anthropic' : 'openai-compatible'
+
+export interface ProviderUsage { inputTokens?: number; outputTokens?: number }
+export interface ProviderChatInput {
+  model: string; messages: ProviderMessage[]; signal?: AbortSignal
+  timeoutMs?: number; firstTokenTimeoutMs?: number
+  /** 输出上限；Anthropic 必填（取模型 max_output），OpenAI 兼容协议不发送（保持原行为）。 */
+  maxTokens?: number
+  /** 供应商回报的用量（若有）。 */
+  onUsage?: (usage: ProviderUsage) => void
+}
+/** P1-7：供应商适配器统一接口：流式、取消（signal）、错误归一（code+中文 message）、用量回调。 */
+export interface ProviderAdapter {
+  readonly providerType: ProviderType
+  chat(input: ProviderChatInput): AsyncIterable<string>
+  complete(input: ProviderChatInput): Promise<string>
+  testConnection(model: string, signal?: AbortSignal): Promise<{ ok: boolean; message?: string }>
+}
+
+export const providerError = (code: string, message: string): AppErrorShape & Error =>
   Object.assign(new Error(message), { code, recoverable: true })
 
-function deadlineSignal(external?: AbortSignal, timeoutMs = 60_000): {
+export function deadlineSignal(external?: AbortSignal, timeoutMs = 60_000): {
   signal: AbortSignal; dispose(): void; fail(error: Error): void
 } {
   const controller = new AbortController()
@@ -194,7 +215,8 @@ function deadlineSignal(external?: AbortSignal, timeoutMs = 60_000): {
   }
 }
 
-export class OpenAICompatibleAdapter {
+export class OpenAICompatibleAdapter implements ProviderAdapter {
+  readonly providerType = 'openai-compatible' as const
   private readonly baseUrl: string
   constructor(baseUrl: string, private readonly apiKey: string, private readonly fetcher: typeof fetch = fetch) { this.baseUrl = requireValidBaseUrl(baseUrl) }
 
@@ -205,10 +227,7 @@ export class OpenAICompatibleAdapter {
     return headers
   }
 
-  async *chat(input: {
-    model: string; messages: ProviderMessage[]; signal?: AbortSignal
-    timeoutMs?: number; firstTokenTimeoutMs?: number
-  }): AsyncIterable<string> {
+  async *chat(input: ProviderChatInput): AsyncIterable<string> {
     const defaults = defaultTimeoutsForBaseUrl(this.baseUrl)
     const request = deadlineSignal(input.signal, input.timeoutMs ?? defaults.totalTimeoutMs)
     const firstTokenMs = input.firstTokenTimeoutMs ?? defaults.firstTokenTimeoutMs
@@ -287,7 +306,7 @@ export class OpenAICompatibleAdapter {
     }
   }
 
-  async complete(input: { model: string; messages: ProviderMessage[]; signal?: AbortSignal; timeoutMs?: number; firstTokenTimeoutMs?: number }): Promise<string> {
+  async complete(input: ProviderChatInput): Promise<string> {
     const defaults = defaultTimeoutsForBaseUrl(this.baseUrl)
     const request = deadlineSignal(input.signal, input.timeoutMs ?? defaults.totalTimeoutMs)
     let response: Response
@@ -319,15 +338,7 @@ export class OpenAICompatibleAdapter {
   }
 
   private toNetworkError(error: unknown, signal?: AbortSignal): AppErrorShape & Error {
-    if (signal?.aborted && signal.reason instanceof Error && typeof (signal.reason as Error & { code?: unknown }).code === 'string') return signal.reason as AppErrorShape & Error
-    if (signal?.aborted || (error instanceof DOMException && error.name === 'AbortError')) {
-      const reason = signal?.reason
-      if (reason instanceof Error && typeof (reason as Error & { code?: unknown }).code === 'string') return reason as AppErrorShape & Error
-      return Object.assign(new Error('请求已取消。'), { code: 'PROVIDER_CANCELLED', recoverable: true })
-    }
-    const details = redactSecretsInText(error instanceof Error ? error.message : String(error))
-    const localMsg = localConnectionErrorMessage(this.baseUrl)
-    return Object.assign(new Error(localMsg ?? '无法连接模型服务，请检查网络与 Base URL。'), { code: 'PROVIDER_NETWORK_ERROR', recoverable: true, details })
+    return toNetworkError(this.baseUrl, error, signal)
   }
 
   private toError(status: number): AppErrorShape & Error {
@@ -338,4 +349,33 @@ export class OpenAICompatibleAdapter {
     const [code, message] = table[status] ?? ['PROVIDER_HTTP_ERROR', `模型服务返回 HTTP ${status}。`]
     return Object.assign(new Error(message), { code, recoverable: true })
   }
+}
+
+/** 网络/取消错误归一（各适配器共用）。 */
+export function toNetworkError(baseUrl: string, error: unknown, signal?: AbortSignal): AppErrorShape & Error {
+  if (signal?.aborted && signal.reason instanceof Error && typeof (signal.reason as Error & { code?: unknown }).code === 'string') return signal.reason as AppErrorShape & Error
+  if (signal?.aborted || (error instanceof DOMException && error.name === 'AbortError')) {
+    const reason = signal?.reason
+    if (reason instanceof Error && typeof (reason as Error & { code?: unknown }).code === 'string') return reason as AppErrorShape & Error
+    return Object.assign(new Error('请求已取消。'), { code: 'PROVIDER_CANCELLED', recoverable: true })
+  }
+  const details = redactSecretsInText(error instanceof Error ? error.message : String(error))
+  const localMsg = localConnectionErrorMessage(baseUrl)
+  return Object.assign(new Error(localMsg ?? '无法连接模型服务，请检查网络与 Base URL。'), { code: 'PROVIDER_NETWORK_ERROR', recoverable: true, details })
+}
+
+/** P1-7：按作者配置的协议类型创建适配器；只发往作者配置的 Base URL。 */
+export function createProviderAdapter(providerType: ProviderType | undefined, baseUrl: string, apiKey: string, fetcher: typeof fetch = fetch): ProviderAdapter {
+  return normalizeProviderType(providerType) === 'anthropic' ? new AnthropicAdapter(baseUrl, apiKey, fetcher) : new OpenAICompatibleAdapter(baseUrl, apiKey, fetcher)
+}
+
+/**
+ * P1-7：Anthropic 的 max_tokens 必填，取模型配置的 max_output；OpenAI 兼容协议原样返回（请求体不变）。
+ */
+export function withModelMaxTokens<T extends Partial<Pick<ProviderAdapter, 'chat' | 'complete'>>>(adapter: T, providerType: ProviderType | undefined, maxOutput: number | undefined): T {
+  if (normalizeProviderType(providerType) !== 'anthropic' || !maxOutput) return adapter
+  const wrapped = Object.create(adapter) as T & Record<string, unknown>
+  if (adapter.chat) wrapped.chat = (input: ProviderChatInput) => adapter.chat!.call(adapter, { ...input, maxTokens: input.maxTokens ?? maxOutput })
+  if (adapter.complete) wrapped.complete = (input: ProviderChatInput) => adapter.complete!.call(adapter, { ...input, maxTokens: input.maxTokens ?? maxOutput })
+  return wrapped
 }

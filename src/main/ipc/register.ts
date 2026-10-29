@@ -10,14 +10,14 @@ import { IdeaService, MemoryService } from '../services/memory-service'
 import { PatchService } from '../services/patch-service'
 import { lintChineseText } from '../services/local-linter'
 import { BackupService } from '../services/backup-service'
-import { OpenAICompatibleAdapter, ProviderService, type SecretCodec } from '../ai/provider'
+import { createProviderAdapter, ProviderService, type SecretCodec } from '../ai/provider'
 import { originFromBaseUrl } from '../network-policy'
 import { checkBaseUrl } from '../../shared/base-url'
 import { AICreativeRuntime } from '../ai/runtime'
 import { ChapterDigestService } from '../ai/chapter-digest-service'
 import { ChapterDigestRunner } from '../ai/digest-runner'
 import { ProjectContentService } from '../services/project-content-service'
-import type { ChatCursor, ModelConfig, ProviderInput, TaskModelRoute } from '../../shared/domain'
+import type { ChatCursor, ModelConfig, ProviderInput, ProviderType, TaskModelRoute } from '../../shared/domain'
 import type { AIPreviewContextRequest, AIStartRequest } from '../../shared/ipc'
 import { cancelClose, confirmClose } from '../window-close'
 import { ChatService } from '../services/chat-service'
@@ -199,17 +199,18 @@ export function registerIpc(db: AppDatabase, codec: SecretCodec, network?: Netwo
       const { config, apiKey } = providers.getWithSecret(providerId)
       const origin = originFromBaseUrl(config.baseUrl)
       const revoke = origin && network ? network.allowOriginTemporarily(origin) : () => {}
-      try { return await new OpenAICompatibleAdapter(config.baseUrl, apiKey).testConnection(modelId) }
+      try { return await createProviderAdapter(config.providerType, config.baseUrl, apiKey).testConnection(modelId) }
       finally { revoke() }
     } catch (error) { return { ok: false, message: error instanceof Error ? error.message : '服务配置不可用' } }
   })
   // S2 / 决策 11：未保存地址仅在测试连接时临时放行（不写入白名单）
-  handle('providers:test-url', async (input: { baseUrl: string; apiKey?: string; modelId: string }) => {
+  handle('providers:test-url', async (input: { baseUrl: string; apiKey?: string; modelId: string; providerType?: ProviderType }) => {
     try {
       const body = z.object({
         baseUrl: z.string().min(1).max(2000),
         apiKey: z.string().max(4000).optional(),
-        modelId: z.string().min(1).max(200)
+        modelId: z.string().min(1).max(200),
+        providerType: z.enum(['openai-compatible', 'anthropic']).optional()
       }).parse(input)
       const checked = checkBaseUrl(body.baseUrl)
       if (!checked.ok) return { ok: false, message: checked.message }
@@ -217,7 +218,7 @@ export function registerIpc(db: AppDatabase, codec: SecretCodec, network?: Netwo
       if (!origin) return { ok: false, message: '无法解析服务地址' }
       const revoke = network ? network.allowOriginTemporarily(origin) : () => {}
       try {
-        return await new OpenAICompatibleAdapter(checked.url, body.apiKey ?? '').testConnection(body.modelId)
+        return await createProviderAdapter(body.providerType, checked.url, body.apiKey ?? '').testConnection(body.modelId)
       } finally { revoke() }
     } catch (error) { return { ok: false, message: error instanceof Error ? error.message : '服务配置不可用' } }
   })
