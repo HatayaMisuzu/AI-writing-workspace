@@ -167,7 +167,6 @@ export function characterHoverPlugin(options: CharacterHoverOptions = {}): Plugi
     view: (view) => {
       let timer: ReturnType<typeof setTimeout> | undefined
       let frame = 0
-      const scroller = view.dom.closest('.writing-scroll') ?? window
       const reportViewport = (): void => {
         frame = 0
         const state = characterHoverKey.getState(view.state)
@@ -185,7 +184,8 @@ export function characterHoverPlugin(options: CharacterHoverOptions = {}): Plugi
         view.dispatch(view.state.tr.setMeta(characterHoverKey, { type: 'viewport', range } satisfies CharacterHoverMeta).setMeta('addToHistory', false))
       }
       const onScroll = (): void => { if (!frame) frame = requestAnimationFrame(reportViewport) }
-      scroller.addEventListener('scroll', onScroll, { passive: true })
+      // 滚动事件不冒泡：在 document 捕获阶段监听，任何滚动容器都能触发
+      document.addEventListener('scroll', onScroll, { capture: true, passive: true })
       return {
         update: (current, previous) => {
           const state = characterHoverKey.getState(current.state)
@@ -198,7 +198,7 @@ export function characterHoverPlugin(options: CharacterHoverOptions = {}): Plugi
             if (!view.isDestroyed) view.dispatch(view.state.tr.setMeta(characterHoverKey, { type: 'recompute' } satisfies CharacterHoverMeta).setMeta('addToHistory', false))
           }, options.debounceMs ?? HOVER_DEBOUNCE_MS)
         },
-        destroy: () => { if (timer) clearTimeout(timer); if (frame) cancelAnimationFrame(frame); scroller.removeEventListener('scroll', onScroll) }
+        destroy: () => { if (timer) clearTimeout(timer); if (frame) cancelAnimationFrame(frame); document.removeEventListener('scroll', onScroll, { capture: true }) }
       }
     }
   })
