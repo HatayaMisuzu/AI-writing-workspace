@@ -6,7 +6,7 @@ import { inputForQuickMode, inputForReaderThrough } from '../services/quick-mode
 import { CONSISTENCY_DEFAULT_INTENT, consistencyCoverage } from '../../../shared/consistency-check'
 import { ConsistencyReportView } from './ConsistencyReportView'
 import type { EditorSelection } from './EditorSurface'
-import { clearedExclusionState, isRowChecked, omittedLabel, toContextSourceRows, toggleExcludedId, toggleIncludedId, type ContextSourceRow } from '../services/context-sources'
+import { basisLabel, clearedExclusionState, isPinnable, isRowChecked, omittedLabel, toContextSourceRows, toggleExcludedId, toggleIncludedId, type ContextSourceRow } from '../services/context-sources'
 import { activeCandidateText, canProposeGenerationPatch, mapChatHistory, resolveDisplayedModelMode, resolveModelDisplayName, retryInputForMessage, type AssistantHistoryMessage } from '../services/assistant-history'
 
 type ContextSummary = { count: number; tokens: number; items: ContextSourceRow[] }
@@ -276,7 +276,7 @@ export function AssistantPanel({ project, documentId, documentText, documentRevi
             disabled={Boolean(message.inserted)}
             onClick={() => setMessages((current) => current.map((item) => item.id === message.id ? { ...item, activeCandidateIndex: index } : item))}>候选 {index + 1}</button>)}
         </div>}
-        {message.context && <details className="context-inspector"><summary>使用 {message.context.count} 条作品上下文 · 约 {message.context.tokens} tokens</summary><ul>{message.context.items.map((item, index) => <li key={`${item.kind}-${index}`} className={item.included ? '' : 'omitted'}><strong>{item.title}</strong>{item.included ? <><span>{item.preview}{item.truncated ? '…（已截断）' : ''}</span><small>{item.reason}</small></> : <small>{omittedLabel(item.omittedReason)}</small>}</li>)}</ul></details>}
+        {message.context && <details className="context-inspector"><summary>使用 {message.context.count} 条作品上下文 · 约 {message.context.tokens} tokens</summary><ul>{message.context.items.map((item, index) => <li key={`${item.kind}-${index}`} className={item.included ? '' : 'omitted'}><strong>{item.title}</strong>{item.included ? <><span>{item.preview}{item.truncated ? '…（已截断）' : ''}</span><small>{item.reason}</small></> : <small>{omittedLabel(item.omittedReason)}</small>}{basisLabel(item) && <small className="context-basis">{basisLabel(item)}</small>}</li>)}</ul></details>}
         {message.proposals?.map((proposal) => <div className="memory-proposal" key={proposal.id}><strong>记忆提案 · {proposal.type}</strong><p>{proposal.content}</p><span>尚未写入长期设定，需要你确认</span><div><button onClick={() => void resolveProposal(message.id, proposal.id, 'reject')}><Trash2 size={13} />忽略</button><button className="primary" onClick={() => void resolveProposal(message.id, proposal.id, 'confirm')}><Check size={13} />记录这条</button></div></div>)}
         {message.recorded && !message.proposals?.length && <div className="recorded-note"><Check size={13} />已记录到 Story Memory</div>}
         {message.proposalError && <div className="inline-error" role="alert">{message.proposalError}</div>}
@@ -297,7 +297,9 @@ export function AssistantPanel({ project, documentId, documentText, documentRevi
                 if (row.kind === 'outline' || row.omittedReason === 'default_excluded') setIncludedIds((current) => toggleIncludedId(current, row.id))
                 else setExcludedIds((current) => toggleExcludedId(current, row.id))
               }} />
-                <strong>{row.title}</strong>{row.included ? <span>{row.preview}{row.truncated ? '…（已截断，部分已省略）' : ''}</span> : <small>{omittedLabel(row.omittedReason)}</small>}</label></li>)}</ul></>}
+                <strong>{row.title}</strong>{row.included ? <span>{row.preview}{row.truncated ? '…（已截断，部分已省略）' : ''}</span> : <small>{omittedLabel(row.omittedReason)}</small>}
+                {basisLabel(row) && <small className="context-basis">{basisLabel(row)}</small>}</label>
+              {isPinnable(row) && <button type="button" className="context-pin" aria-pressed={includedIds.includes(row.id)} onClick={() => setIncludedIds((current) => toggleIncludedId(current, row.id))}>{includedIds.includes(row.id) ? '取消钉住' : '钉住'}</button>}</li>)}</ul></>}
       </div>}
       {selection && <div className="selection-chip">已选择 {selection.text.length} 字</div>}
       <textarea value={input} disabled={loadingHistory} onChange={(event) => setInput(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void submit() } }} placeholder="和同行者聊聊这部作品…" />

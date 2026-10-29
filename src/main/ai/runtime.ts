@@ -116,11 +116,11 @@ export class AICreativeRuntime {
   }
 
 
-  private contextSnapshot(context: ContextBundle): { sources: Array<{ id: string; kind: string; truncated?: true }>; omitted: Array<{ id: string; kind: string; reason: string }> } {
+  private contextSnapshot(context: ContextBundle): { sources: Array<{ id: string; kind: string; truncated?: true; basis?: string[] }>; omitted: Array<{ id: string; kind: string; reason: string; basis?: string[] }> } {
     return {
-      // 修复 3：snapshot 记录哪些来源（如哪章）被截断
-      sources: context.items.map((item) => ({ id: item.id, kind: item.kind, ...(item.truncated ? { truncated: true as const } : {}) })),
-      omitted: (context.metadata.omitted ?? []).map((item) => ({ id: item.id, kind: item.kind, reason: item.reason }))
+      // 修复 3：snapshot 记录哪些来源（如哪章）被截断；P3-e：并记录入选/省略依据（与发送内容同一份 context）
+      sources: context.items.map((item) => ({ id: item.id, kind: item.kind, ...(item.truncated ? { truncated: true as const } : {}), ...(item.basis ? { basis: item.basis } : {}) })),
+      omitted: (context.metadata.omitted ?? []).map((item) => ({ id: item.id, kind: item.kind, reason: item.reason, ...(item.basis ? { basis: [...item.basis, ...(item.reason === 'budget' ? ['预算不足省略'] : [])] } : {}) }))
     }
   }
 
@@ -168,7 +168,7 @@ export class AICreativeRuntime {
       const keepTokens = estimateTokens(last.content) - overflow - 8
       if (keepTokens <= 0) {
         if (reader) context.items.shift(); else context.items.pop()
-        context.metadata.omitted!.push({ id: last.id, kind: last.kind, title: last.title, reason: 'budget' })
+        context.metadata.omitted!.push({ id: last.id, kind: last.kind, title: last.title, reason: 'budget', ...(last.basis ? { basis: last.basis } : {}) })
       } else {
         const keep = Math.floor(keepTokens * 2.2)
         // P2-1：保留端与 context-engine 同源（truncationSideFor），两次截断叠加后仍保留同一端
@@ -215,7 +215,7 @@ export class AICreativeRuntime {
         const keepTokens = estimateTokens(last.content) - overflow - 8
         if (keepTokens <= 0) {
           context.items.splice(context.items.indexOf(last), 1)
-          context.metadata.omitted!.push({ id: last.id, kind: last.kind, title: last.title, reason: 'budget' })
+          context.metadata.omitted!.push({ id: last.id, kind: last.kind, title: last.title, reason: 'budget', ...(last.basis ? { basis: last.basis } : {}) })
         } else { last.content = truncateBySide(last.content, keepTokens * 2.2, side); last.truncated = true }
       } else if (history.length) history.shift()
       else throw tooSmall()

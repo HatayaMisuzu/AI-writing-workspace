@@ -316,6 +316,8 @@ export interface ContextItem {
   reason: string
   /** 因预算被截断（只发送了部分内容）。 */
   truncated?: boolean
+  /** P3-e：同类设定的排序依据（如「钉住」「已确认」「本章提及」），清单与 snapshot 显示。 */
+  basis?: string[]
 }
 
 /** 未发送的候选来源。reason：作者排除 / 超出预算被省略（S7 的“已省略”标注复用此结构）。 */
@@ -324,6 +326,8 @@ export interface ContextOmission {
   kind: ContextItem['kind']
   title: string
   reason: 'user_excluded' | 'budget' | 'default_excluded'
+  /** P3-e：被省略条目的排序依据（与入选条目同一套标签）。 */
+  basis?: string[]
 }
 
 export interface ContextBundle {

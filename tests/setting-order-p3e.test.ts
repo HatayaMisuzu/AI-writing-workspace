@@ -1,0 +1,171 @@
+import { describe, expect, it } from 'vitest'
+import { createTestDb, testCodec } from './helpers'
+import { ProjectService } from '../src/main/services/project-service'
+import { DocumentService } from '../src/main/services/document-service'
+import { MemoryService } from '../src/main/services/memory-service'
+import { ChatService } from '../src/main/services/chat-service'
+import { ProviderService, type ProviderMessage } from '../src/main/ai/provider'
+import { AICreativeRuntime } from '../src/main/ai/runtime'
+import { compareSettingRank, memoryEntryNames, rankSetting, settingBasis } from '../src/shared/setting-order'
+import { basisLabel, toContextSourceRows } from '../src/renderer/src/services/context-sources'
+import type { AIMode, AITaskEnvelope, ContextBundle } from '../src/shared/domain'
+
+const REPORT = JSON.stringify({ conflicts: [] })
+const RELEVANT = ['灵脉', '赤霄剑', '青岚宗']
+const FILLER = ['杂项甲', '杂项乙', '杂项丙', '杂项丁', '杂项戊', '杂项己', '杂项庚', '杂项辛', '杂项壬']
+const longBody = (name: string): string => `${name}：${'这是一段很长的设定描述，用来占满上下文预算。'.repeat(28)}`
+
+/** 12 条长设定：3 条与本章相关（较旧），9 条填充（较新，改前会因「最近更新」排在前面而挤掉相关设定）。 */
+const setup = (opts: { long?: boolean; mention?: boolean; status?: (name: string) => 'confirmed' | 'observed' } = {}) => {
+  const { long = true, mention = true, status = () => 'confirmed' as const } = opts
+  const db = createTestDb()
+  const project = new ProjectService(db).create({ title: '排序', projectType: 'novel' })
+  const docs = new DocumentService(db)
+  const chapter = docs.listOrderedChapters(project.id)[0]
+  docs.saveContent({ projectId: project.id, documentId: chapter.id, editorJson: { type: 'doc' },
+    plainText: mention ? '林舟握紧赤霄剑，感到灵脉翻涌，青岚宗的钟声传来。' : '林舟独自走在雪夜里。' })
+  const memories = new MemoryService(db)
+  const ids: Record<string, string> = {}
+  ;[...RELEVANT, ...FILLER].forEach((name, index) => {
+    const content = long ? longBody(name) : `${name}：短设定。`
+    const created = memories.create({ projectId: project.id, type: 'fact', content, status: 'suggested', sourceType: 'author', sourceId: 'a' })
+    if (status(name) === 'confirmed') memories.confirm(project.id, created.id, 'user')
+    else db.raw.prepare("UPDATE memories SET status = 'observed' WHERE id = ?").run(created.id)
+    db.raw.prepare('UPDATE memories SET updated_at = ? WHERE id = ?').run(1_000 + index, created.id)
+    ids[name] = created.id
+  })
+  return { db, project, chapterId: chapter.id, ids }
+}
+
+const runtimeWith = (db: ReturnType<typeof createTestDb>, contextWindow?: number) => {
+  const providers = new ProviderService(db, testCodec)
+  providers.save({ id: 'p', providerType: 'openai-compatible', displayName: 'mock', baseUrl: 'http://localhost:11434/v1', apiKey: '' })
+  providers.saveModel({ id: 'm', providerId: 'p', modelId: 'mock', displayName: 'mock', enabled: true, isDefault: true, contextWindow, maxOutput: contextWindow ? 64 : undefined,
+    capabilities: { streaming: true, tools: false, structuredOutput: false, cancellation: true } })
+  const sent: ProviderMessage[][] = []
+  let calls = 0
+  const runtime = new AICreativeRuntime(db, providers, () => ({ chat: async function* (input: { messages: ProviderMessage[] }) { calls += 1; sent.push(input.messages); yield REPORT } }))
+  return { runtime, sent, calls: () => calls }
+}
+
+const task = (projectId: string, documentId: string, mode: AIMode = 'consistency_check', extra: Partial<AITaskEnvelope> = {}): AITaskEnvelope =>
+  ({ mode, writePermission: mode === 'editing' || mode === 'generation' ? 'proposal' : 'none', userIntent: mode === 'consistency_check' ? '检查一致性' : '这些设定怎么用', projectId, documentId, ...extra })
+
+const runOnce = async (runtime: AICreativeRuntime, db: ReturnType<typeof createTestDb>, t: AITaskEnvelope, tag: string) => {
+  const thread = new ChatService(db).createThread(t.projectId, tag)
+  const chunks: Array<{ context?: ContextBundle }> = []
+  for await (const chunk of runtime.run(`r-${tag}`, t, thread.id, `u-${tag}`, `a-${tag}`)) chunks.push(chunk)
+  const context = chunks.find((chunk) => chunk.context)!.context!
+  const row = db.raw.prepare('SELECT context_snapshot_json FROM chat_messages WHERE id = ?').get(`u-${tag}`) as { context_snapshot_json: string | null } | undefined
+    ?? db.raw.prepare('SELECT context_snapshot_json FROM chat_messages WHERE id = ?').get(`a-${tag}`) as { context_snapshot_json: string | null }
+  return { context, snapshot: JSON.parse(row.context_snapshot_json ?? '{}') as { sources: Array<{ id: string; basis?: string[] }>; omitted: Array<{ id: string; reason: string; basis?: string[] }> } }
+}
+
+describe('P3-e setting-order rules (pure)', () => {
+  it('pinned > confirmed > mentioned > updatedAt desc > id asc', () => {
+    const r = (id: string, o: Partial<{ pinned: boolean; confirmed: boolean; names: string[]; updatedAt: number }>) =>
+      rankSetting({ id, pinned: false, confirmed: false, names: [], updatedAt: 0, ...o }, '本章提到灵脉')
+    const list = [r('e', { updatedAt: 5 }), r('d', { updatedAt: 9 }), r('c', { names: ['灵脉'] }), r('b', { confirmed: true }), r('a', { pinned: true }), r('f', { updatedAt: 5 })]
+    expect(list.toSorted(compareSettingRank).map((x) => x.id)).toEqual(['a', 'b', 'c', 'd', 'e', 'f'])
+    expect(settingBasis(r('x', { pinned: true, confirmed: true, names: ['灵脉'] }))).toEqual(['钉住', '已确认', '本章提及'])
+    expect(settingBasis(r('y', {}))).toEqual(['按最近更新'])
+    expect(memoryEntryNames('赤霄剑：上古名剑')).toEqual(['赤霄剑'])
+    expect(memoryEntryNames('没有冒号的一句话设定')).toEqual([])
+  })
+})
+
+describe('P3-e consistency_check: 12 long settings', () => {
+  for (const window of [3000, 1600]) {
+    it(`window ${window}: chapter-mentioned confirmed settings kept, fillers omitted first; wire = preview = snapshot`, async () => {
+      const { db, project, chapterId, ids } = setup()
+      const { runtime, sent, calls } = runtimeWith(db, window)
+      const preview = runtime.previewContext(task(project.id, chapterId), 'none')
+      const { context, snapshot } = await runOnce(runtime, db, task(project.id, chapterId), `w${window}`)
+      expect(calls()).toBe(1)
+      const sentIds = context.items.filter((item) => item.kind === 'memory').map((item) => item.id)
+      for (const name of RELEVANT) expect(sentIds).toContain(ids[name])
+      // 省略的都是填充；任何被省略的填充都不早于入选的相关设定
+      const omitted = (context.metadata.omitted ?? []).filter((item) => item.kind === 'memory')
+      expect(omitted.length).toBeGreaterThan(0)
+      expect(omitted.every((item) => FILLER.some((name) => ids[name] === item.id))).toBe(true)
+      expect(sentIds.slice(0, 3)).toEqual(RELEVANT.toReversed().map((name) => ids[name]))
+      // 实际发送内容 = 清单 = snapshot
+      const wire = JSON.stringify(sent[0])
+      for (const item of context.items) expect(wire).toContain(item.content.slice(0, 20))
+      for (const item of omitted) expect(wire).not.toContain(longBody(FILLER.find((name) => ids[name] === item.id)!).slice(0, 24))
+      expect(preview.items.map((item) => item.id)).toEqual(context.items.map((item) => item.id))
+      expect(snapshot.sources.map((item) => item.id)).toEqual(context.items.map((item) => item.id))
+      expect(snapshot.sources.find((item) => item.id === ids['灵脉'])!.basis).toEqual(['已确认', '本章提及'])
+      const omittedSnap = snapshot.omitted.find((item) => item.id === omitted[0].id)!
+      expect(omittedSnap).toMatchObject({ reason: 'budget', basis: ['已确认', '预算不足省略'] })
+      const rows = toContextSourceRows(preview)
+      expect(basisLabel(rows.find((row) => row.id === ids['赤霄剑'])!)).toBe('已确认 · 本章提及')
+      expect(basisLabel(rows.find((row) => row.id === omitted[0].id)!)).toBe('已确认 · 预算不足省略')
+    })
+  }
+
+  it('pinned filler is always first and kept; basis shows 钉住', () => {
+    const { db, project, chapterId, ids } = setup()
+    const { runtime } = runtimeWith(db, 1600)
+    const bundle = runtime.previewContext(task(project.id, chapterId, 'consistency_check', { includedIds: [ids['杂项甲']] }), 'none')
+    expect(bundle.items[0].id).toBe(ids['杂项甲'])
+    expect(bundle.items[0].basis).toEqual(['钉住', '已确认'])
+  })
+
+  it('deterministic: same input → same output', () => {
+    const a = setup(); const b = runtimeWith(a.db, 3000)
+    const first = JSON.stringify(b.runtime.previewContext(task(a.project.id, a.chapterId), 'none'))
+    const second = JSON.stringify(b.runtime.previewContext(task(a.project.id, a.chapterId), 'none'))
+    expect(second).toBe(first)
+  })
+
+  it('short settings + big window: everything sent, same order as before (updated_at desc), no omissions', () => {
+    const { db, project, chapterId, ids } = setup({ long: false, mention: false })
+    const { runtime } = runtimeWith(db)
+    const bundle = runtime.previewContext(task(project.id, chapterId), 'none')
+    expect(bundle.metadata.omitted ?? []).toEqual([])
+    expect(bundle.items.filter((item) => item.kind === 'memory').map((item) => item.id)).toEqual([...RELEVANT, ...FILLER].toReversed().map((name) => ids[name]))
+    expect(bundle.items.every((item) => !item.truncated)).toBe(true)
+  })
+})
+
+describe('P3-e creative modes', () => {
+  it('discussion, window 1600: confirmed beats observed even if observed is mentioned; mentioned confirmed beat newer fillers', () => {
+    // 灵脉 observed（被提及），其余 confirmed
+    const { db, project, chapterId, ids } = setup({ status: (name) => name === '灵脉' ? 'observed' : 'confirmed' })
+    const { runtime } = runtimeWith(db, 1600)
+    const bundle = runtime.previewContext(task(project.id, chapterId, 'discussion'), 'none')
+    const memIds = bundle.items.filter((item) => item.kind === 'memory').map((item) => item.id)
+    expect(memIds[0]).toBe(ids['青岚宗'])
+    expect(memIds[1]).toBe(ids['赤霄剑'])
+    expect(memIds).not.toContain(ids['灵脉'])
+    expect(bundle.items.find((item) => item.id === ids['赤霄剑'])!.basis).toEqual(['已确认', '本章提及'])
+  })
+
+  it('selection mention counts as 本章相关', () => {
+    const { db, project, chapterId, ids } = setup({ mention: false })
+    const { runtime } = runtimeWith(db, 1600)
+    const bundle = runtime.previewContext(task(project.id, chapterId, 'discussion', { selection: { from: 1, to: 3, text: '赤霄剑' } }), 'none')
+    expect(bundle.items.filter((item) => item.kind === 'memory')[0].id).toBe(ids['赤霄剑'])
+  })
+
+  it('pinned memory comes right after selection in creative modes, even if not keyword-relevant', () => {
+    const { db, project, chapterId, ids } = setup()
+    db.raw.prepare("UPDATE memories SET content = '冷门：与本问题无关' WHERE id = ?").run(ids['杂项乙'])
+    const { runtime } = runtimeWith(db, 3000)
+    const bundle = runtime.previewContext(task(project.id, chapterId, 'generation', { includedIds: [ids['杂项乙']] }), 'none')
+    expect(bundle.items[0].id).toBe(ids['杂项乙'])
+    expect(bundle.items[0].basis).toEqual(['钉住', '已确认'])
+  })
+
+  it('no extra API calls: preview makes none, run makes exactly one per mode', async () => {
+    for (const mode of ['discussion', 'organization', 'editing', 'proofreading'] as AIMode[]) {
+      const { db, project, chapterId } = setup()
+      const { runtime, calls } = runtimeWith(db, 3000)
+      runtime.previewContext(task(project.id, chapterId, mode), 'none')
+      expect(calls()).toBe(0)
+      await runOnce(runtime, db, task(project.id, chapterId, mode), mode)
+      expect(calls()).toBe(1)
+    }
+  })
+})

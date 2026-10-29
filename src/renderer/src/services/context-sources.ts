@@ -11,13 +11,22 @@ export interface ContextSourceRow {
   truncated: boolean
   /** S7 “已省略”标注接口：user_excluded = 作者排除；budget = 超出预算；default_excluded = 默认不带（如大纲）。 */
   omittedReason?: ContextOmission['reason']
+  /** P3-e：入选/省略依据标签，如「钉住」「已确认」「本章提及」「预算不足省略」。 */
+  basis?: string[]
 }
+
+/** P3-e：可被作者钉住的同类设定（钉住 = 加入 includedIds，排序永远最前）。 */
+export const PINNABLE_KINDS: ReadonlyArray<ContextItem['kind']> = ['memory', 'character', 'timeline']
+export const isPinnable = (row: Pick<ContextSourceRow, 'kind'>): boolean => PINNABLE_KINDS.includes(row.kind)
+
+const omittedBasis = (item: ContextOmission): string[] =>
+  item.basis ? [...item.basis, ...(item.reason === 'budget' ? ['预算不足省略'] : [])] : []
 
 export const toContextSourceRows = (bundle: ContextBundle): ContextSourceRow[] => [
   ...bundle.items.map((item) => ({ id: item.id, kind: item.kind, title: item.title, reason: item.reason,
-    preview: item.content.replace(/\s+/g, ' ').slice(0, 90), included: true, truncated: Boolean(item.truncated) })),
+    preview: item.content.replace(/\s+/g, ' ').slice(0, 90), included: true, truncated: Boolean(item.truncated), basis: item.basis ?? [] })),
   ...(bundle.metadata.omitted ?? []).map((item) => ({ id: item.id, kind: item.kind, title: item.title, reason: '',
-    preview: '', included: false, truncated: false, omittedReason: item.reason }))
+    preview: '', included: false, truncated: false, omittedReason: item.reason, basis: omittedBasis(item) }))
 ]
 
 export const toggleExcludedId = (excluded: string[], id: string): string[] =>
@@ -25,6 +34,8 @@ export const toggleExcludedId = (excluded: string[], id: string): string[] =>
 
 export const toggleIncludedId = (included: string[], id: string): string[] =>
   included.includes(id) ? included.filter((item) => item !== id) : [...included, id]
+
+export const basisLabel = (row: Pick<ContextSourceRow, 'basis'>): string => (row.basis ?? []).join(' · ')
 
 /** 大纲等默认不发送的条目：勾选 = 加入 includedIds；其余：勾选 = 不在 excludedIds。 */
 export const isRowChecked = (row: ContextSourceRow, excludedIds: string[], includedIds: string[]): boolean =>
