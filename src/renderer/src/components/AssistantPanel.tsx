@@ -20,8 +20,10 @@ const inferMode = (text: string, explicit: AIMode): AIMode => {
 }
 const digestLabel = (status?: DigestStatus): string => !status || status.state === 'missing' ? 'AI理解：未更新'
   : status.state === 'fresh' ? 'AI理解：已更新' : 'AI理解：正文已变化'
-export function AssistantPanel({ project, documentId, documentText, documentRevision, selection, collapsed, onCollapse, onCreatePatch, onBeforeAI, onEnsureSaved, onOpenDocument, onOpenSettings }: {
+export function AssistantPanel({ project, documentId, documentText, documentRevision, selection, collapsed, onCollapse, onCreatePatch, onBeforeAI, onEnsureSaved, onOpenDocument, onOpenSettings, drawer = false, narrow = false }: {
   project: Project; documentId?: string; documentText?: string; documentRevision?: number; selection?: EditorSelection; collapsed: boolean; onCollapse(): void
+  /** 窄屏（≤1080px）：面板以抽屉覆盖在编辑区上方；narrow = 处于窄屏，drawer = 抽屉已打开。 */
+  drawer?: boolean; narrow?: boolean
   /** @deprecated S8 起执笔走 onCreatePatch；保留可选以免旧调用方断裂。 */
   onInsertCandidate?: (target: DocumentTaskTarget, text: string) => Promise<void>
   onCreatePatch(target: DocumentTaskTarget, replacement: string): Promise<void>
@@ -258,9 +260,23 @@ export function AssistantPanel({ project, documentId, documentText, documentRevi
     }
   }
 
-  if (collapsed) return <button className="assistant-collapsed" onClick={onCollapse}><Bot size={18} /><span>同行者</span></button>
-  return <aside className="assistant-panel">
-    <header><div><h2>同行者</h2><span className="scope-notice">{modelName} · 仅使用《{project.title}》</span></div><div className="assistant-head-actions"><button className="icon-button" disabled={Boolean(runningId)} title="新对话" onClick={() => void newThread()}><MessageSquarePlus size={17} /></button><button className="icon-button" title="收起同行者" onClick={onCollapse}><ChevronRight size={18} /></button></div></header>
+  const drawerRef = useRef<HTMLElement>(null)
+  const openButtonRef = useRef<HTMLButtonElement>(null)
+  const wasDrawer = useRef(false)
+  useEffect(() => {
+    if (drawer) {
+      drawerRef.current?.focus()
+      const onKey = (event: KeyboardEvent): void => { if (event.key === 'Escape') { event.preventDefault(); onCollapse() } }
+      document.addEventListener('keydown', onKey)
+      wasDrawer.current = true
+      return () => document.removeEventListener('keydown', onKey)
+    }
+    if (wasDrawer.current) { wasDrawer.current = false; openButtonRef.current?.focus() }
+  }, [drawer, onCollapse])
+  const openButton = <button ref={openButtonRef} className="assistant-collapsed" aria-label={narrow ? '打开同行者' : undefined} aria-expanded={narrow ? drawer : undefined} onClick={onCollapse}><Bot size={18} /><span>同行者</span></button>
+  if (collapsed) return openButton
+  const panel = <aside ref={drawerRef} className={drawer ? 'assistant-panel assistant-drawer' : 'assistant-panel'} {...(drawer ? { role: 'dialog', 'aria-modal': true, 'aria-label': '同行者', tabIndex: -1 } : {})}>
+    <header><div><h2>同行者</h2><span className="scope-notice">{modelName} · 仅使用《{project.title}》</span></div><div className="assistant-head-actions"><button className="icon-button" disabled={Boolean(runningId)} title="新对话" onClick={() => void newThread()}><MessageSquarePlus size={17} /></button><button className="icon-button" title={drawer ? '关闭同行者' : '收起同行者'} aria-label={drawer ? '关闭同行者' : undefined} onClick={onCollapse}><ChevronRight size={18} /></button></div></header>
     <div className="thread-picker"><label htmlFor="assistant-thread">对话</label><select id="assistant-thread" value={threadId ?? ''} disabled={Boolean(runningId) || loadingHistory} onChange={(event) => void loadThread(event.target.value)}>{threads.map((thread) => <option key={thread.id} value={thread.id}>{thread.title} · {new Date(thread.updatedAt).toLocaleDateString()}</option>)}</select></div>
     <div className="assistant-tools"><button disabled={!documentId || digestBusy} onClick={() => void runDigest()}><FileSearch size={14} />{digestBusy ? '理解中…' : '理解本章'}</button><button disabled={!documentId || Boolean(runningId) || !threadId} title="只读冲突报告：本章正文 vs 已确认设定、人物卡、时间线" onClick={() => void submit({ mode: 'consistency_check', text: CONSISTENCY_DEFAULT_INTENT })}><FileSearch size={14} />检查一致性</button><span className={digestStatus?.state === 'stale' ? 'stale' : ''}>{digestLabel(digestStatus)}</span></div>
     <div className="chat-scroll" ref={chatScroll} onScroll={(event) => {
@@ -331,4 +347,6 @@ export function AssistantPanel({ project, documentId, documentText, documentRevi
       </div>{runningId ? <button className="send-button" title="取消请求" onClick={() => void window.workspace.ai.cancel(runningId)}><Square size={14} /></button> : <button className="send-button" disabled={!input.trim() || !threadId} aria-label="发送" onClick={() => void submit()}><Send size={15} /></button>}</div>
     </div>
   </aside>
+  // 窄屏抽屉：打开按钮仍占原来的 48px 列（编辑区宽度不变），遮罩与抽屉为 fixed 覆盖层，不占布局宽度
+  return drawer ? <>{openButton}<div className="assistant-backdrop" data-testid="assistant-backdrop" onClick={onCollapse} />{panel}</> : panel
 }

@@ -18,6 +18,7 @@ const renderSnippet = (snippet: string): React.ReactNode[] => {
   return parseSearchSnippet(snippet).map((segment, index) => segment.highlighted ? <mark key={index}>{segment.text}</mark> : segment.text)
 }
 
+const NARROW_QUERY = '(max-width: 1080px)'
 export function WorkspaceScreen({ project, onProjectChanged, onSettings, onRegisterBeforeLeave }: {
   project: Project; onProjectChanged(): void; onSettings(): void; onRegisterBeforeLeave(handler?: () => Promise<void>): void
 }): React.JSX.Element {
@@ -35,6 +36,16 @@ export function WorkspaceScreen({ project, onProjectChanged, onSettings, onRegis
   const [timelineFocus, setTimelineFocus] = useState<string>()
   const [characterFocus, setCharacterFocus] = useState<string>()
   const [assistantCollapsed, setAssistantCollapsed] = useState(false)
+  // 窄屏（≤1080px，与 styles.css 断点一致）：同行者默认收起，点按钮以抽屉打开
+  const [narrow, setNarrow] = useState(() => window.matchMedia(NARROW_QUERY).matches)
+  const [drawerOpen, setDrawerOpen] = useState(false)
+  useEffect(() => {
+    const query = window.matchMedia(NARROW_QUERY)
+    const onChange = (): void => { setNarrow(query.matches); if (!query.matches) setDrawerOpen(false) }
+    query.addEventListener('change', onChange)
+    return () => query.removeEventListener('change', onChange)
+  }, [])
+  const toggleDrawer = useCallback(() => setDrawerOpen((open) => !open), [])
   const [focusMode, setFocusMode] = useState(false)
   const [selection, setSelection] = useState<EditorSelection>()
   const [ideaOpen, setIdeaOpen] = useState(false)
@@ -226,7 +237,7 @@ export function WorkspaceScreen({ project, onProjectChanged, onSettings, onRegis
         : <section className="project-view placeholder-view"><FilePlus2 size={34} /><h1>内容</h1><p>这是辅助层，不要求作者维护复杂结构。</p></section>}
       <footer className="workspace-status"><span className="saved-dot" />本地项目<span>本章 {content?.wordCount.toLocaleString() ?? 0} 字</span>{rangeHint && <span className={`word-range-hint ${rangeHint.state}`} data-testid="word-range-hint">{rangeHint.text}</span>}<span>全书 {totalWords.toLocaleString()} 字</span><span>项目内容严格隔离</span></footer>
     </div>
-    {!focusMode && <AssistantPanel project={project} documentId={selected?.id} documentText={content?.plainText} documentRevision={content?.revision} selection={selection} collapsed={assistantCollapsed} onCollapse={() => setAssistantCollapsed(!assistantCollapsed)} onCreatePatch={createPatch} onBeforeAI={freezeAITarget} onEnsureSaved={flushAll} onOpenDocument={openTargetDocument} onOpenSettings={onSettings} />}
+    {!focusMode && <AssistantPanel project={project} documentId={selected?.id} documentText={content?.plainText} documentRevision={content?.revision} selection={selection} collapsed={narrow ? !drawerOpen : assistantCollapsed} onCollapse={narrow ? toggleDrawer : () => setAssistantCollapsed(!assistantCollapsed)} narrow={narrow} drawer={narrow && drawerOpen} onCreatePatch={createPatch} onBeforeAI={freezeAITarget} onEnsureSaved={flushAll} onOpenDocument={openTargetDocument} onOpenSettings={onSettings} />}
     {ideaOpen && <div className="quick-idea-popover"><header><strong>快速记录灵感</strong><kbd>Ctrl J</kbd></header><textarea autoFocus value={ideaText} onChange={(event) => setIdeaText(event.target.value)} placeholder="记下一闪而过的想法…" /><div><button onClick={() => { setIdeaText(''); setIdeaOpen(false) }}>取消</button><button className="primary" onClick={async () => { if (ideaText.trim()) await window.workspace.ideas.create(project.id, ideaText); setIdeaText(''); setIdeaOpen(false) }}>保存并返回正文</button></div></div>}
     {searchOpen && <Modal title={`在《${project.title}》中检索`} onClose={() => setSearchOpen(false)} width={680}><div className="search-dialog"><div className="dialog-search"><input autoFocus value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') void runSearch() }} placeholder="输入关键词；只检索当前作品" /><button className="primary" onClick={() => void runSearch()}>搜索</button></div><div className="search-results">{searchResults.map((result) => <button key={result.documentId} onClick={async () => { const node = tree.find((item) => item.id === result.documentId); if (node) await openDocument(node); setSearchOpen(false) }}><strong>{result.title}</strong><p>{renderSnippet(result.snippet)}</p></button>)}</div></div></Modal>}
     {patchOpen && selected && <PatchDrawer projectId={project.id} documentId={selected.id} onClose={() => setPatchOpen(false)} onAccept={acceptPatch} />}
