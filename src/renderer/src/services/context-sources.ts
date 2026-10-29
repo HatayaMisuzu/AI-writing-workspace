@@ -85,3 +85,7 @@ export const updatePinsByScope = (state: PinsByScope, scope: PinScope, update: (
 /** 请求完成后只整理发出请求的那一组（清掉勾选大纲，保留钉住），另一组不动。 */
 export const pinsByScopeAfterRequest = (state: PinsByScope, scope: PinScope): PinsByScope =>
   updatePinsByScope(state, scope, (current) => stateAfterRequest({ excludedIds: [], includedIds: current }).includedIds)
+
+/** 排除也按模式分开（与钉住同结构）；「排除 N」只算当前清单里可见的已排除条目。 */
+export const visibleExcludedIds = (excludedIds: string[], rows: Pick<ContextSourceRow, 'id'>[] | undefined): string[] =>
+  excludedIds.filter((id) => (rows ?? []).some((row) => row.id === id))
