@@ -1,3 +1,4 @@
+import { installEgressGate } from './net/egress-guard'
 import { app, BrowserWindow, safeStorage, session, shell } from 'electron'
 import { join } from 'node:path'
 import { AppDatabase } from './database/database'
@@ -66,6 +67,8 @@ if (!app.requestSingleInstanceLock()) {
       }
     })
     refreshNetworkAllowlist()
+    // P3-1：主进程 Node fetch 不经 webRequest，统一经 egress-guard 同一门闸
+    installEgressGate(networkGate)
     session.defaultSession.webRequest.onBeforeRequest((details, callback) => {
       callback(networkGate!.filter(details.url))
     })
