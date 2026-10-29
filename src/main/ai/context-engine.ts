@@ -11,6 +11,9 @@ import { compareSettingRank, memoryEntryNames, rankSetting, settingBasis, BASIS_
 type Candidate = ContextItem & { priority: number; rank?: SettingRank }
 /** P3-e：钉住的设定在创作类模式中排在选区之后、其余一切之前。 */
 const PINNED_PRIORITY = 99
+export const CONSISTENCY_MEMORY_LIMIT = 60
+export const CONSISTENCY_CHARACTER_LIMIT = 40
+export const CREATIVE_MEMORY_LIMIT = 12
 
 const estimateTokens = (text: string): number => Math.ceil(text.length / 2.2)
 const settingName = (content: string): string => { const flat = content.replace(/\s+/g, ' ').trim(); return [...flat].length > 16 ? `${[...flat].slice(0, 16).join('')}…` : flat || '未命名' }
@@ -51,23 +54,29 @@ export class ContextEngine {
     // P3-e：本章相关 = 本章正文或当前选区出现条目名/别名（纯本地字符串匹配）
     const haystack = [chapter.plainText, task.selection?.text ?? ''].join('\n')
     const pinned = new Set(task.includedIds ?? [])
-    const memories = this.db.raw.prepare("SELECT id, type, content, updated_at FROM memories WHERE project_id = ? AND status = 'confirmed' AND type != 'foreshadowing' ORDER BY updated_at DESC, id LIMIT 60")
+    const memories = this.db.raw.prepare("SELECT id, type, content, updated_at FROM memories WHERE project_id = ? AND status = 'confirmed' AND type != 'foreshadowing' ORDER BY updated_at DESC, id")
       .all(projectId) as Array<{ id: string; type: string; content: string; updated_at: number }>
+    // P3-e M1：先对全部已确认设定按新规则排序，再截取上限（60 条），避免早期相关设定被 SQL LIMIT 先截掉
+    const memoryCandidates: Candidate[] = []
     memories.forEach((memory) => {
       const rank = rankSetting({ id: memory.id, pinned: pinned.has(memory.id), confirmed: true, names: memoryEntryNames(memory.content), updatedAt: memory.updated_at }, haystack)
-      candidates.push({ id: memory.id, kind: 'memory', title: `设定 · ${settingName(memory.content)}（${memory.type}）`, content: memory.content,
+      memoryCandidates.push({ id: memory.id, kind: 'memory', title: `设定 · ${settingName(memory.content)}（${memory.type}）`, content: memory.content,
         projectId, reason: '作者已确认的设定', priority: 80, rank, basis: settingBasis(rank) })
     })
-    const characters = this.db.raw.prepare('SELECT * FROM characters WHERE project_id = ? ORDER BY updated_at DESC, id LIMIT 40').all(projectId) as Array<Record<string, unknown>>
+    candidates.push(...memoryCandidates.toSorted((a, b) => compareSettingRank(a.rank!, b.rank!)).slice(0, CONSISTENCY_MEMORY_LIMIT))
+    const characters = this.db.raw.prepare('SELECT * FROM characters WHERE project_id = ? ORDER BY updated_at DESC, id').all(projectId) as Array<Record<string, unknown>>
+    // P3-e M1：人物卡同理，先排序再截取 40 条
+    const characterCandidates: Candidate[] = []
     characters.forEach((row) => {
       const aliases = JSON.parse(row.aliases_json as string) as string[]
       const fields = JSON.parse(row.fields_json as string) as Record<string, string>
       const content = [aliases.length ? `别名：${aliases.join('、')}` : '', row.notes as string,
         ...Object.entries(fields).filter(([, value]) => value).map(([key, value]) => `${key}：${value}`)].filter(Boolean).join('\n')
       const rank = rankSetting({ id: row.id as string, pinned: pinned.has(row.id as string), confirmed: false, names: [row.name as string, ...aliases], updatedAt: row.updated_at as number }, haystack)
-      candidates.push({ id: row.id as string, kind: 'character', title: `人物 · ${row.name as string}`, content: content || '（无更多信息）',
+      characterCandidates.push({ id: row.id as string, kind: 'character', title: `人物 · ${row.name as string}`, content: content || '（无更多信息）',
         projectId, reason: '人物卡', priority: rank.mentioned ? 79 : 70, rank, basis: settingBasis(rank) })
     })
+    candidates.push(...characterCandidates.toSorted((a, b) => compareSettingRank(a.rank!, b.rank!)).slice(0, CONSISTENCY_CHARACTER_LIMIT))
     const titles = new Map(this.documents.listTree(projectId).map((item) => [item.id, item.title]))
     const events = this.db.raw.prepare('SELECT id, story_time_label, title, chapter_id FROM timeline_events WHERE project_id = ? ORDER BY sort_key, created_at LIMIT 200')
       .all(projectId) as Array<{ id: string; story_time_label: string; title: string; chapter_id: string | null }>
@@ -121,10 +130,15 @@ export class ContextEngine {
     const haystack = [task.selection?.text ?? '', currentText].join('\n')
     const pinned = new Set(task.includedIds ?? [])
     const statuses = ['confirmed', 'observed', 'tentative', 'idea'] as const
-    const relevant = this.memories.searchRelevant(task.projectId, [...statuses], signal)
+    // P3-e M1：先取全部关键词相关记忆，按 状态权重 > 钉住/已确认/本章提及/更新/id 排序后再截取 12 条
+    const stateWeightOf = (status: string): number => status === 'confirmed' ? 85 : status === 'observed' ? 78 : status === 'tentative' ? 55 : 40
+    const relevant = this.memories.searchRelevant(task.projectId, [...statuses], signal, Number.MAX_SAFE_INTEGER)
+      .map((memory) => ({ memory, rank: rankSetting({ id: memory.id, pinned: pinned.has(memory.id), confirmed: memory.status === 'confirmed', names: memoryEntryNames(memory.content), updatedAt: memory.updatedAt }, haystack) }))
+      .toSorted((a, b) => Number(b.rank.pinned) - Number(a.rank.pinned) || stateWeightOf(b.memory.status) - stateWeightOf(a.memory.status) || compareSettingRank(a.rank, b.rank))
+      .slice(0, CREATIVE_MEMORY_LIMIT).map((item) => item.memory)
     const pinnedMemories = this.memories.list(task.projectId, [...statuses]).filter((memory) => pinned.has(memory.id) && !relevant.some((item) => item.id === memory.id))
     for (const memory of [...relevant, ...pinnedMemories]) {
-      const stateWeight = memory.status === 'confirmed' ? 85 : memory.status === 'observed' ? 78 : memory.status === 'tentative' ? 55 : 40
+      const stateWeight = stateWeightOf(memory.status)
       const rank = rankSetting({ id: memory.id, pinned: pinned.has(memory.id), confirmed: memory.status === 'confirmed', names: memoryEntryNames(memory.content), updatedAt: memory.updatedAt }, haystack)
       candidates.push({ id: memory.id, kind: 'memory', title: `${memory.type} · ${memory.status}`, content: memory.content,
         projectId: task.projectId, reason: rank.pinned && !relevant.includes(memory) ? `作者钉住的长期记忆，状态为 ${memory.status}` : `关键词相关的长期记忆，状态为 ${memory.status}`,

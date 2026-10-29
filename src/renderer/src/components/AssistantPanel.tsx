@@ -6,7 +6,7 @@ import { inputForQuickMode, inputForReaderThrough } from '../services/quick-mode
 import { CONSISTENCY_DEFAULT_INTENT, consistencyCoverage } from '../../../shared/consistency-check'
 import { ConsistencyReportView } from './ConsistencyReportView'
 import type { EditorSelection } from './EditorSurface'
-import { basisLabel, clearedExclusionState, isPinnable, isRowChecked, omittedLabel, toContextSourceRows, toggleExcludedId, toggleIncludedId, type ContextSourceRow } from '../services/context-sources'
+import { basisLabel, clearedExclusionState, contextButtonLabel, PIN_SCOPE_HINT, stateAfterRequest, isPinnable, isRowChecked, omittedLabel, toContextSourceRows, toggleExcludedId, toggleIncludedId, type ContextSourceRow } from '../services/context-sources'
 import { activeCandidateText, canProposeGenerationPatch, mapChatHistory, resolveDisplayedModelMode, resolveModelDisplayName, retryInputForMessage, type AssistantHistoryMessage } from '../services/assistant-history'
 
 type ContextSummary = { count: number; tokens: number; items: ContextSourceRow[] }
@@ -179,7 +179,8 @@ export function AssistantPanel({ project, documentId, documentText, documentRevi
         const candidates = event.candidates?.length ? event.candidates : (requestedMode === 'generation' && finalText ? [finalText] : undefined)
         setRunningId(undefined)
         setActiveRequestMode(undefined)
-        { const cleared = clearedExclusionState(); setExcludedIds(cleared.excludedIds); setIncludedIds(cleared.includedIds) }
+        // P3-e M2：钉住在本次对话内保留；排除项与勾选大纲照旧清空
+        setExcludedIds([]); setIncludedIds((current) => stateAfterRequest({ excludedIds: [], includedIds: current }).includedIds)
         setMessages((current) => current.map((item) => item.id === assistantId ? {
           ...item,
           content: candidates?.[0] ?? finalText,
@@ -291,7 +292,7 @@ export function AssistantPanel({ project, documentId, documentText, documentRevi
       {sourcesOpen && <div className="context-sources" aria-label="将发送的上下文">
         {sourcePreview?.error ? <div className="inline-error" role="alert">上下文预览失败：{sourcePreview.error}</div>
           : !sourcePreview ? <div className="context-note">正在整理上下文…</div>
-          : <><div className="context-note">将发送 {sourcePreview.rows.filter((row) => row.included).length} 条 · 约 {sourcePreview.tokens} tokens（取消勾选即不发送）</div>
+          : <><div className="context-note">将发送 {sourcePreview.rows.filter((row) => row.included).length} 条 · 约 {sourcePreview.tokens} tokens（取消勾选即不发送）<small className="context-pin-hint">{PIN_SCOPE_HINT}</small></div>
             <ul>{sourcePreview.rows.map((row) => <li key={`${row.kind}:${row.id}`} className={row.included ? '' : 'omitted'}>
               <label><input type="checkbox" checked={isRowChecked(row, excludedIds, includedIds)} disabled={row.omittedReason === 'budget'} onChange={() => {
                 if (row.kind === 'outline' || row.omittedReason === 'default_excluded') setIncludedIds((current) => toggleIncludedId(current, row.id))
@@ -317,7 +318,7 @@ export function AssistantPanel({ project, documentId, documentText, documentRevi
         {mode === 'reader_review' && <label className="candidate-count-picker" title="读者读到第 N 章（按章树顺序）">读到第
           <input aria-label="读到第 N 章" type="number" min={1} step={1} style={{ width: 52 }} value={readerThrough} disabled={Boolean(runningId)}
             onChange={(event) => { const value = event.target.value; setReaderThrough(value); setInput((current) => inputForReaderThrough(current, value)) }} />章</label>}
-        <button className={sourcesOpen ? 'active' : ''} aria-expanded={sourcesOpen} onClick={() => setSourcesOpen((open) => !open)}>上下文{(excludedIds.length || includedIds.length) ? `（排除 ${excludedIds.length}·勾选大纲 ${includedIds.length}）` : ''}</button>
+        <button className={sourcesOpen ? 'active' : ''} aria-expanded={sourcesOpen} onClick={() => setSourcesOpen((open) => !open)}>{contextButtonLabel(excludedIds, includedIds)}</button>
       </div>{runningId ? <button className="send-button" title="取消请求" onClick={() => void window.workspace.ai.cancel(runningId)}><Square size={14} /></button> : <button className="send-button" disabled={!input.trim() || !threadId} aria-label="发送" onClick={() => void submit()}><Send size={15} /></button>}</div>
     </div>
   </aside>

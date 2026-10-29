@@ -169,3 +169,70 @@ describe('P3-e creative modes', () => {
     }
   })
 })
+
+describe('P3-e M1: rank all candidates before applying limits', () => {
+  const many = (count: number, mode: 'confirmed-only' | 'creative') => {
+    const db = createTestDb()
+    const project = new ProjectService(db).create({ title: '长篇', projectType: 'novel' })
+    const docs = new DocumentService(db)
+    const chapter = docs.listOrderedChapters(project.id)[0]
+    docs.saveContent({ projectId: project.id, documentId: chapter.id, editorJson: { type: 'doc' }, plainText: '林舟回到了旧城。' })
+    const memories = new MemoryService(db)
+    const make = (content: string, updatedAt: number): string => {
+      const created = memories.create({ projectId: project.id, type: 'fact', content, status: 'suggested', sourceType: 'author', sourceId: 'a' })
+      memories.confirm(project.id, created.id, 'user')
+      db.raw.prepare('UPDATE memories SET updated_at = ? WHERE id = ?').run(updatedAt, created.id)
+      return created.id
+    }
+    const oldRelevant = make(mode === 'creative' ? '林舟：设定 MARK_OLD_RELEVANT' : '林舟：MARK_OLD_RELEVANT 左手有疤', 1)
+    for (let i = 0; i < count - 1; i += 1) make(`杂项${String(i).padStart(2, '0')}：${mode === 'creative' ? '设定 ' : ''}填充内容`, 100 + i)
+    return { db, project, chapterId: chapter.id, oldRelevant }
+  }
+
+  it('consistency_check: 66 confirmed settings, the relevant one is the oldest → still selected and sent first', () => {
+    const { db, project, chapterId, oldRelevant } = many(66, 'confirmed-only')
+    const { runtime } = runtimeWith(db, 16000)
+    const bundle = runtime.previewContext(task(project.id, chapterId), 'none')
+    const mem = bundle.items.filter((item) => item.kind === 'memory')
+    expect(mem.length).toBe(60)
+    expect(mem[0].id).toBe(oldRelevant)
+    expect(mem[0].basis).toEqual(['已确认', '本章提及'])
+  })
+
+  it('creative (discussion): 15 keyword-relevant memories, the chapter-mentioned one is oldest → kept within the 12 cap', () => {
+    const { db, project, chapterId, oldRelevant } = many(15, 'creative')
+    const { runtime } = runtimeWith(db, 16000)
+    const bundle = runtime.previewContext(task(project.id, chapterId, 'discussion', { userIntent: '设定' }), 'none')
+    const mem = bundle.items.filter((item) => item.kind === 'memory')
+    expect(mem.length).toBe(12)
+    expect(mem[0].id).toBe(oldRelevant)
+  })
+})
+
+describe('P3-e M2: pin state within a conversation', () => {
+  it('request completion keeps pins, clears exclusions and outline checks; switching conversation resets', async () => {
+    const { stateAfterRequest, clearedExclusionState, contextButtonLabel, pinnedIdsOf, PIN_SCOPE_HINT } = await import('../src/renderer/src/services/context-sources')
+    const state = { excludedIds: ['x1'], includedIds: ['outline:ch1', 'mem-1', 'outline-note:n1', 'char-2'] }
+    const after = stateAfterRequest(state)
+    expect(after).toEqual({ excludedIds: [], includedIds: ['mem-1', 'char-2'] })
+    expect(stateAfterRequest(after)).toEqual(after) // 多次请求仍保留
+    expect(clearedExclusionState()).toEqual({ excludedIds: [], includedIds: [] }) // 切换/新建对话重置
+    expect(pinnedIdsOf(state.includedIds)).toEqual(['mem-1', 'char-2'])
+    expect(contextButtonLabel(state.excludedIds, state.includedIds)).toBe('上下文（排除 1·勾选大纲 2·钉住 2）')
+    expect(contextButtonLabel([], ['mem-1'])).toBe('上下文（钉住 1）')
+    expect(contextButtonLabel([], ['outline:a'])).toBe('上下文（勾选大纲 1）')
+    expect(contextButtonLabel([], [])).toBe('上下文')
+    expect(PIN_SCOPE_HINT).toBe('钉住仅在本次对话有效')
+  })
+
+  it('pins kept after a request still drive the next request', async () => {
+    const { db, project, chapterId, ids } = setup()
+    const { runtime } = runtimeWith(db, 1600)
+    const { stateAfterRequest } = await import('../src/renderer/src/services/context-sources')
+    const first = task(project.id, chapterId, 'consistency_check', { includedIds: [ids['杂项甲']] })
+    await runOnce(runtime, db, first, 'pin1')
+    const kept = stateAfterRequest({ excludedIds: [], includedIds: first.includedIds! })
+    const { context } = await runOnce(runtime, db, task(project.id, chapterId, 'consistency_check', { includedIds: kept.includedIds }), 'pin2')
+    expect(context.items[0].id).toBe(ids['杂项甲'])
+  })
+})

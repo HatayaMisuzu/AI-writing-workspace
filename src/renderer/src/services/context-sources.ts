@@ -49,6 +49,23 @@ export const omittedLabel = (reason?: ContextOmission['reason']): string =>
     : reason === 'default_excluded' ? '默认不发送（勾选后带上）'
     : ''
 
+/** 大纲条目的 id 前缀（勾选大纲 = includedIds 中的大纲 id；其余 includedIds 为钉住的设定）。 */
+export const isOutlineSourceId = (id: string): boolean => id.startsWith('outline:') || id.startsWith('outline-note:')
+export const pinnedIdsOf = (includedIds: string[]): string[] => includedIds.filter((id) => !isOutlineSourceId(id))
+export const PIN_SCOPE_HINT = '钉住仅在本次对话有效'
+
+/** P3-e M2：请求完成后排除项与勾选大纲照旧清空，钉住在本次对话内保留（不持久化）。 */
+export const stateAfterRequest = (state: { excludedIds: string[]; includedIds: string[] }): { excludedIds: string[]; includedIds: string[] } =>
+  ({ excludedIds: [], includedIds: pinnedIdsOf(state.includedIds) })
+
+/** 上下文按钮计数：排除 / 勾选大纲 / 钉住 分开显示，只列非零项。 */
+export const contextButtonLabel = (excludedIds: string[], includedIds: string[]): string => {
+  const pinned = pinnedIdsOf(includedIds).length
+  const outlines = includedIds.length - pinned
+  const parts = [excludedIds.length ? `排除 ${excludedIds.length}` : '', outlines ? `勾选大纲 ${outlines}` : '', pinned ? `钉住 ${pinned}` : ''].filter(Boolean)
+  return parts.length ? `上下文（${parts.join('·')}）` : '上下文'
+}
+
 /** 切换对话 / 新对话时共用：排除态不持久化，一律清空。 */
 export const clearedExclusionState = (): { excludedIds: string[]; includedIds: string[] } =>
   ({ excludedIds: [], includedIds: [] })

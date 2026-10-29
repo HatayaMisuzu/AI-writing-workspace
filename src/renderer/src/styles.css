@@ -512,3 +512,4 @@ button.link { border: 0; background: none; padding: 0; color: var(--accent, #2f6
 .settings-nav-hint { font-size: 12px; opacity: .75; margin: 4px 12px; line-height: 1.5; }
 .consistency-warning { margin-bottom: 6px; padding: 6px 8px; border-radius: 6px; background: #fff4e5; color: #8a4b00; font-size: 12px; }
 .consistency-unverified { opacity: .75; }
+.context-pin-hint { display: block; color: var(--muted); }
