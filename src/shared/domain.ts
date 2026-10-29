@@ -54,6 +54,12 @@ export interface WritingGoals {
   dailyChapterGoal: number | null
 }
 
+/** P1-3 F10：章节字数区间；两端均可空（null = 未设），全空即不提示。 */
+export interface ChapterWordRange {
+  min: number | null
+  max: number | null
+}
+
 /** S11：连载进度指针（可空）；存稿可撑天数见 StockpileSummary.daysRemaining */
 export interface SerialProgress {
   /** 已更新到的章节 id；null = 未设置，存稿从第 1 章起算 */

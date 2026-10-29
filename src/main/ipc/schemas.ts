@@ -103,6 +103,11 @@ export const writingGoalsInputSchema = z.object({
   dailyChapterGoal: z.number().int().nullable().optional()
 }).strict()
 
+// P1-3 F10：章节字数区间（正整数，可只设一端，下限≤上限）
+const optionalPositiveInt = z.number().int().positive().nullable()
+export const chapterWordRangeSchema = z.object({ min: optionalPositiveInt, max: optionalPositiveInt }).strict()
+  .refine((range) => range.min === null || range.max === null || range.min <= range.max, { message: '字数下限不能大于上限' })
+
 // S11：章节状态与连载进度指针
 export const chapterStatusSchema = z.enum(['outline', 'draft', 'final'])
 export const serialProgressSchema = z.object({

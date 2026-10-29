@@ -1,3 +1,4 @@
+import type { ChapterWordRange } from '../../shared/domain'
 import type { AppDatabase } from '../database/database'
 
 /** 本机时区 YYYY-MM-DD（跨午夜切分用）。 */
@@ -157,6 +158,28 @@ export class WritingDailyService {
         activeSeconds: row.active_seconds
       }
     })
+  }
+
+  /** F10：读取章节字数区间；settings_json 缺席 = 未设。 */
+  getChapterWordRange(projectId: string): ChapterWordRange {
+    const settings = this.readSettings(projectId)
+    const pick = (value: unknown): number | null => typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : null
+    return { min: pick(settings.chapterWordMin), max: pick(settings.chapterWordMax) }
+  }
+
+  /** F10：写入章节字数区间；null 删除该端（两端均 null = 关闭区间）。 */
+  setChapterWordRange(projectId: string, range: ChapterWordRange): ChapterWordRange {
+    this.ensureProject(projectId)
+    assertPositiveIntOrEmpty('chapterWordMin', range.min)
+    assertPositiveIntOrEmpty('chapterWordMax', range.max)
+    if (range.min !== null && range.max !== null && range.min > range.max) throw new Error('字数下限不能大于上限')
+    const settings = this.readSettings(projectId)
+    if (range.min === null) delete settings.chapterWordMin
+    else settings.chapterWordMin = range.min
+    if (range.max === null) delete settings.chapterWordMax
+    else settings.chapterWordMax = range.max
+    this.writeSettings(projectId, settings)
+    return this.getChapterWordRange(projectId)
   }
 
   /**
