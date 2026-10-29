@@ -170,3 +170,28 @@ export const hoverPrefsSchema = z.object({
   ignoredTerms: z.array(hoverTermRefSchema).max(10_000),
   enabledSingleTerms: z.array(hoverTermRefSchema).max(10_000)
 }).strict()
+
+/** F13 本地校对 / 词表 */
+export const lintRunSchema = z.tuple([idSchema, idSchema, contentSchema, z.number().int().min(-1).max(2_147_483_647).optional()])
+export const wordlistTextSchema = z.string().max(1_000_000, '词表超过 1MB')
+export const wordlistScopeSchema = z.enum(['global', 'project'])
+export const lintRulesSchema = z.object({
+  punctuation: z.boolean(), wordlist: z.boolean(), halfwidth: z.boolean(), repeatChar: z.boolean(),
+  repeatChars: z.array(z.string().min(1).max(2)).max(50),
+  reduplicationWhitelist: z.array(z.string().min(1).max(20)).max(2000)
+}).strict()
+export const lintIgnoreSchema = z.object({
+  documentId: idSchema, ruleKey: z.string().min(1).max(200), originalText: z.string().min(1).max(200), occurrence: z.number().int().min(1).max(1_000_000)
+}).strict()
+export const importTokenSchema = z.string().regex(/^[0-9a-f]{64}$/)
+export const patchRebaseSchema = z.object({
+  projectId: idSchema, patchId: idSchema, fromRevision: nonNegativeIntSchema, toRevision: nonNegativeIntSchema,
+  fromPm: nonNegativeIntSchema, toPm: nonNegativeIntSchema
+}).strict()
+export const patchPrepareBatchSchema = z.object({
+  projectId: idSchema, documentId: idSchema, documentRevision: nonNegativeIntSchema,
+  items: z.array(z.object({ patchId: idSchema, currentText: contentSchema }).strict()).min(1).max(500)
+}).strict()
+export const patchCompleteBatchSchema = z.object({
+  projectId: idSchema, savedRevision: nonNegativeIntSchema, acceptedIds: z.array(idSchema).max(500), staleIds: z.array(idSchema).max(500)
+}).strict()

@@ -3,7 +3,7 @@ import type { AIMode, ProviderType } from './domain'
 import type { ExportChapterRange } from './export-range'
 import type {
   ContextBundle,
-  AITaskEnvelope, Character, ChatCursor, ChatMessage, ChatThread, DigestStatus, DocumentContent, DocumentNode, Idea, LocalLintIssue,
+  AITaskEnvelope, Character, ChatCursor, ChatMessage, ChatThread, DigestStatus, DocumentContent, DocumentNode, Idea,
   MemoryItem, MemoryProposal, ModelConfig, NodeOutline, Project, ProjectNote, ProjectType, ProofreadIssue, ProviderConfig,
   ProviderInput, RoutedTask, SearchResult, Snapshot, TaskModelRoute, TextOrigin, TextPatch, WritingDailyRow, WritingGoals, ChapterWordRange, ChapterStatus, SerialProgress, StockpileSummary, ForeshadowEntry, ForeshadowState, TimelineEvent, TimelineSortMode, FocusLockInput, FocusLockStatus, FocusLastSession, FocusLockedProject, CharacterHoverPrefs
 } from './domain'
@@ -104,8 +104,31 @@ export interface WorkspaceApi {
     prepare(projectId: string, patchId: string, documentRevision: number, currentText: string): Promise<TextPatch>
     complete(projectId: string, patchId: string, savedRevision: number): Promise<TextPatch>
     reject(projectId: string, patchId: string): Promise<TextPatch>
+    rebase(input: { projectId: string; patchId: string; fromRevision: number; toRevision: number; fromPm: number; toPm: number }): Promise<TextPatch>
+    /** PR37 ②：整批一次校验、1 个快照 */
+    prepareBatch(input: { projectId: string; documentId: string; documentRevision: number; items: Array<{ patchId: string; currentText: string }> }): Promise<{ ready: TextPatch[]; stale: TextPatch[] }>
+    /** PR37 ②：整批 1 次保存后一次写回状态 */
+    completeBatch(input: { projectId: string; savedRevision: number; acceptedIds: string[]; staleIds: string[] }): Promise<{ accepted: number; stale: number }>
   }
-  linter: { run(text: string): Promise<LocalLintIssue[]> }
+  linter: { run(projectId: string, documentId: string, text: string, sourceRevision?: number): Promise<import('./domain').LintResult> }
+  lint: {
+    rules(projectId: string): Promise<import('./domain').LintRules>
+    setRules(projectId: string, rules: import('./domain').LintRules): Promise<import('./domain').LintRules>
+    ignore(projectId: string, input: { documentId: string; ruleKey: string; originalText: string; occurrence: number }): Promise<import('./domain').LintIgnore[]>
+    disableTerm(projectId: string, term: string): Promise<import('./domain').WordlistState>
+    checkBook(projectId: string, volumeId: string | undefined, runId: string, onProgress?: (done: number, total: number) => void): Promise<import('./domain').BookCheckResult>
+    cancelBookCheck(runId: string): Promise<null>
+  }
+  wordlist: {
+    get(projectId: string): Promise<import('./domain').WordlistState>
+    getGlobal(): Promise<{ text: string; count: number }>
+    saveProject(projectId: string, text: string): Promise<import('./domain').WordlistState>
+    saveGlobal(text: string): Promise<{ text: string; count: number }>
+    exportFile(scope: 'global' | 'project', projectId?: string): Promise<string | null>
+    previewImport(scope: 'global' | 'project', projectId?: string): Promise<import('./wordlist').WordlistImportPreview | null>
+    applyImport(token: string): Promise<string>
+    cancelImport(): Promise<null>
+  }
   digests: {
     run(projectId: string, chapterId: string): Promise<{ id: string; payload: unknown; repaired: boolean }>
     list(projectId: string, chapterId?: string): Promise<Array<{ id: string; chapterId: string; revision: number; summary: string; stale: boolean; createdAt: number }>>

@@ -7,6 +7,7 @@ import { AssistantPanel } from '../components/AssistantPanel'
 import { ChapterOutlineAside, CharactersView, HistoryView, IdeasView, MemoryView, NotesView, OutlineView, PatchDrawer } from './ProjectViews'
 import { DailyStatsView } from './DailyStatsView'
 import { PromptTemplatesView } from './PromptTemplatesView'
+import { ProofingView } from './ProofingView'
 import { StockpileView } from './StockpileView'
 import { ForeshadowView } from './ForeshadowView'
 import { RelatedTimelineEvents, TimelineView } from './TimelineView'
@@ -253,6 +254,12 @@ export function WorkspaceScreen({ project, onProjectChanged, onSettings, onRegis
     if (result.status === 'accepted') { await refreshTree(); onProjectChanged() }
     return result
   }, [onProjectChanged, refreshTree, selected?.id])
+  const acceptAllPatches = useCallback(async (list: TextPatch[]): Promise<{ accepted: number; stale: number }> => {
+    if (!editorController.current || list.some((patch) => patch.documentId !== selected?.id)) throw new Error('请先打开提案所属章节。')
+    const result = await editorController.current.applyPatches(list)
+    if (result.accepted) { await refreshTree(); onProjectChanged() }
+    return result
+  }, [onProjectChanged, refreshTree, selected?.id])
 
   return <div className={hideChrome ? `workspace-screen is-focus${locked ? ' is-blackroom' : ''}` : 'workspace-screen'}>
     {!hideChrome && <ProjectSidebar project={project} tree={tree} selectedId={selected?.id} section={section} onSection={(next) => { setTimelineFocus(undefined); setCharacterFocus(undefined); void changeSection(next) }} onSelect={(node) => void openDocument(node)} onNewVolume={() => void requestCreateNode('volume')} onNewChapter={(parent) => void requestCreateNode('chapter', parent)} onRename={(node) => setNodeEditor({ node, action: 'rename', title: node.title })} onDelete={(node) => setNodeEditor({ node, action: 'delete', title: node.title })} onReorder={async (documentId, parentId, orderIndex) => { try { await flushAll(); await window.workspace.documents.reorder(project.id, documentId, parentId, orderIndex); await refreshTree() } catch (error) { setNavigationError(String(error)) } }}  onSetStatus={async (node, status) => { try { await window.workspace.documents.setStatus(project.id, node.id, status); await refreshTree() } catch (error) { setNavigationError(String(error)) } }} />}
@@ -272,6 +279,7 @@ export function WorkspaceScreen({ project, onProjectChanged, onSettings, onRegis
         : section === 'references' ? <NotesView projectId={project.id} section="reference" onRegisterFlush={registerAuxiliaryFlush} />
         : section === 'characters' ? <CharactersView projectId={project.id} onRegisterFlush={registerAuxiliaryFlush} focusCharacterId={characterFocus} onOpenTimelineEvent={(id) => void openTimelineEvent(id)} />
         : section === 'prompts' ? <PromptTemplatesView project={project} />
+        : section === 'proofing' ? <ProofingView project={project} tree={tree} locked={locked} onOpenChapter={(id) => void openChapterById(id)} />
         : section === 'daily' ? <DailyStatsView project={project} />
         : section === 'stockpile' ? <StockpileView project={project} chapters={tree.filter((node) => node.type === 'chapter')} onProgressChanged={() => { onProjectChanged(); void refreshTree() }} />
         : section === 'timeline' ? <TimelineView project={project} chapters={tree.filter((node) => node.type === 'chapter')} focusEventId={timelineFocus} onOpenChapter={(id) => void openChapterById(id)} onOpenCharacter={(id) => void openCharacter(id)} />
@@ -284,7 +292,7 @@ export function WorkspaceScreen({ project, onProjectChanged, onSettings, onRegis
     {blackroomEntryOpen && !locked && <BlackroomEntryDialog onClose={() => setBlackroomEntryOpen(false)} onStart={startBlackroom} />}
     {blackroomExitOpen && locked && <BlackroomEmergencyDialog onClose={() => setBlackroomExitOpen(false)} onConfirm={emergencyExitBlackroom} />}
     {searchOpen && !locked && <Modal title={`在《${project.title}》中检索`} onClose={() => setSearchOpen(false)} width={680}><div className="search-dialog"><div className="dialog-search"><input autoFocus value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') void runSearch() }} placeholder="输入关键词；只检索当前作品" /><button className="primary" onClick={() => void runSearch()}>搜索</button></div><div className="search-results">{searchResults.map((result) => <button key={result.documentId} onClick={async () => { const node = tree.find((item) => item.id === result.documentId); if (node) await openDocument(node); setSearchOpen(false) }}><strong>{result.title}</strong><p>{renderSnippet(result.snippet)}</p></button>)}</div></div></Modal>}
-    {patchOpen && !locked && selected && <PatchDrawer projectId={project.id} documentId={selected.id} onClose={() => setPatchOpen(false)} onAccept={acceptPatch} />}
+    {patchOpen && !locked && selected && <PatchDrawer projectId={project.id} documentId={selected.id} onClose={() => setPatchOpen(false)} onAccept={acceptPatch} onAcceptAll={acceptAllPatches} />}
     {nodeCreator && <Modal title={nodeCreator.type === 'volume' ? '新建卷' : '新建章节'} onClose={() => setNodeCreator(undefined)}><form className="node-create-form" onSubmit={(event) => { event.preventDefault(); void createNode() }}><label><span>{nodeCreator.type === 'volume' ? '卷名' : '章节名'}</span><input autoFocus value={nodeCreator.title} onChange={(event) => setNodeCreator({ ...nodeCreator, title: event.target.value })} /></label><div className="modal-actions"><button type="button" onClick={() => setNodeCreator(undefined)}>取消</button><button className="primary" type="submit">创建</button></div></form></Modal>}
     {nodeEditor && <Modal title={nodeEditor.action === 'rename' ? `重命名${nodeEditor.node.type === 'volume' ? '卷' : '章节'}` : `删除${nodeEditor.node.type === 'volume' ? '卷' : '章节'}`} onClose={() => setNodeEditor(undefined)}><div className="node-create-form">{nodeEditor.action === 'rename' ? <label><span>名称</span><input autoFocus value={nodeEditor.title} onChange={(event) => setNodeEditor({ ...nodeEditor, title: event.target.value })} onKeyDown={(event) => { if (event.key === 'Enter') void updateNode() }} /></label> : <p>确定删除“{nodeEditor.node.title}”吗？{nodeEditor.node.type === 'volume' ? '卷内全部章节也会删除。' : '此操作无法撤销。'}</p>}<div className="modal-actions"><button onClick={() => setNodeEditor(undefined)}>取消</button><button className={nodeEditor.action === 'delete' ? 'danger-button' : 'primary'} onClick={() => void updateNode()}>{nodeEditor.action === 'rename' ? '保存' : '确认删除'}</button></div></div></Modal>}
   </div>
