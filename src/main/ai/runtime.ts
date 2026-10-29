@@ -46,7 +46,7 @@ export class AICreativeRuntime {
       const { config, apiKey } = this.providers.getWithSecret(model.providerId)
       const timeouts = this.providers.resolveTimeouts(model.providerId)
       const { messages, context } = this.plan(task, threadId, model)
-      this.chat.startTurn({ projectId: task.projectId, threadId, userMessageId, assistantMessageId, content: task.userIntent, mode: task.mode, target: task.target, contextSnapshot: this.contextSnapshot(context) })
+      this.chat.startTurn({ projectId: task.projectId, threadId, userMessageId, assistantMessageId, content: task.userIntent, mode: task.mode, target: task.target, contextSnapshot: { ...this.contextSnapshot(context), template: this.templates.resolve(task.projectId, task.mode) } })
       started = true
       const adapter = withModelMaxTokens(this.adapterFactory(config.baseUrl, apiKey, config.providerType), config.providerType, model.maxOutput)
       // S8：仅 generation 使用候选数；其余模式固定 1 次请求。

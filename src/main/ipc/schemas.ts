@@ -106,6 +106,8 @@ export const writingGoalsInputSchema = z.object({
 
 // P1-4：提示词模板（变量与长度由 validatePromptTemplate 校验，未知变量拒绝保存）
 export const promptTemplateModeSchema = z.enum(['discussion','brainstorm','generation','editing','organization','chapter_digest','proofreading','reader_review','consistency_check'])
+export const promptTemplateScopeSchema = z.enum(['global', 'project'])
+export const promptCopySourceSchema = z.discriminatedUnion('kind', [z.object({ kind: z.literal('global') }).strict(), z.object({ kind: z.literal('project'), projectId: z.string().min(1).max(200) }).strict()])
 export const promptTemplateTextSchema = z.string().max(PROMPT_TEMPLATE_MAX_LENGTH).superRefine((text, ctx) => {
   const check = validatePromptTemplate(text)
   if (!check.ok) ctx.addIssue({ code: 'custom', message: check.error })

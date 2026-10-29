@@ -66,7 +66,7 @@ describe('S3 node_outlines migration (v4 → v5)', () => {
     const reopened = new AppDatabase(path)
     expect(reopened.raw.prepare("SELECT value_json FROM app_settings WHERE key = 'schema_version'").get()).toEqual({ value_json: '10' })
     reopened.close()
-  })
+  }, 30_000) // Windows CI runner 上旧库迁移偶发 >5s，仅此用例放宽超时
 
   it('fresh database is created at v5 with outline support', () => {
     const db = createTestDb()

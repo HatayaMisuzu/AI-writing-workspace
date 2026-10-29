@@ -140,10 +140,20 @@ export interface WorkspaceApi {
     list(projectId: string): Promise<PromptTemplateEntry[]>
     set(projectId: string, mode: AIMode, text: string): Promise<PromptTemplateEntry[]>
     reset(projectId: string, mode: AIMode): Promise<PromptTemplateEntry[]>
+    setScope(projectId: string, scope: import('./prompt-templates').PromptTemplateScope, choice?: import('./prompt-templates').PromptScopeChoice): Promise<PromptTemplateEntry[]>
+    exportGlobal(): Promise<string | null>
+    previewGlobalImport(): Promise<import('./prompt-templates').GlobalImportPreview | null>
+    applyGlobalImport(token: string): Promise<import('./prompt-templates').GlobalPromptTemplateEntry[]>
+    cancelGlobalImport(): Promise<null>
+    listGlobal(): Promise<import('./prompt-templates').GlobalPromptTemplateEntry[]>
+    setGlobal(mode: AIMode, text: string): Promise<import('./prompt-templates').GlobalPromptTemplateEntry[]>
+    resetGlobal(mode: AIMode): Promise<import('./prompt-templates').GlobalPromptTemplateEntry[]>
+    previewCopy(projectId: string, source: import('./prompt-templates').PromptCopySource): Promise<import('./prompt-templates').PromptCopyPreview>
+    applyCopy(projectId: string, source: import('./prompt-templates').PromptCopySource, token: string): Promise<PromptTemplateEntry[]>
   }
   backup: {
     exportProject(projectId: string): Promise<string | null>
-    importProject(): Promise<Project | null>
+    importProject(): Promise<(Project & { importNotice?: string }) | null>
     importManuscript(): Promise<Project | null>
     exportManuscript(projectId: string, format: 'txt' | 'md' | 'docx', onlyFinal?: boolean, range?: ExportChapterRange): Promise<import('./export-range').ManuscriptExportResult>
   }

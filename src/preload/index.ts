@@ -80,7 +80,17 @@ const api: WorkspaceApi = {
   prompts: {
     list: (projectId) => invoke('prompts:list', projectId),
     set: (projectId, mode, text) => invoke('prompts:set', projectId, mode, text),
-    reset: (projectId, mode) => invoke('prompts:reset', projectId, mode)
+    reset: (projectId, mode) => invoke('prompts:reset', projectId, mode),
+    setScope: (projectId, scope, choice) => invoke('prompts:set-scope', projectId, scope, choice),
+    exportGlobal: () => invoke('prompts:global-export'),
+    previewGlobalImport: () => invoke('prompts:global-import-preview'),
+    applyGlobalImport: (token) => invoke('prompts:global-import-apply', token),
+    cancelGlobalImport: () => invoke('prompts:global-import-cancel'),
+    listGlobal: () => invoke('prompts:global-list'),
+    setGlobal: (mode, text) => invoke('prompts:global-set', mode, text),
+    resetGlobal: (mode) => invoke('prompts:global-reset', mode),
+    previewCopy: (projectId, source) => invoke('prompts:copy-preview', projectId, source),
+    applyCopy: (projectId, source, token) => invoke('prompts:copy-apply', projectId, source, token)
   },
   backup: {
     exportProject: (projectId) => invoke('backup:export-project', projectId), importProject: () => invoke('backup:import-project'),

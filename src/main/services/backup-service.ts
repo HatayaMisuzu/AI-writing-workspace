@@ -8,6 +8,8 @@ import type { Project } from '../../shared/domain'
 import type { AppDatabase } from '../database/database'
 import { ProjectService } from './project-service'
 import { DocumentService } from './document-service'
+import { PromptTemplateService } from './prompt-template-service'
+import { IMPORT_GLOBAL_SCOPE_NOTICE } from '../../shared/prompt-templates'
 
 type SqlValue = string | number | bigint | Uint8Array | null
 const sqlValue = (value: unknown): SqlValue => {
@@ -29,6 +31,8 @@ const decodeTextFile = (buf: Buffer): string => {
 interface BackupPayload {
   format: 'inkstone-project'
   version: 1
+  /** P3：源书沿用全局时，导出时源库全局模板的指纹（不含正文）。 */
+  promptGlobalSha256?: string
   exportedAt: number
   project: Record<string, unknown>
   nodes: Array<Record<string, unknown>>
@@ -55,6 +59,7 @@ const MAX_BACKUP_BYTES = 100 * 1024 * 1024
 const rowSchema = z.record(z.string(), z.unknown()).refine((row) => typeof row.id === 'string' && row.id.length > 0, 'row id required')
 const backupPayloadSchema = z.object({
   format: z.literal('inkstone-project'), version: z.literal(1), exportedAt: z.number().finite().nonnegative(),
+  promptGlobalSha256: z.string().regex(/^[0-9a-f]{64}$/).optional(),
   project: z.record(z.string(), z.unknown()).refine((row) => typeof row.id === 'string' && typeof row.title === 'string' &&
     ['novel','webnovel','screenplay','other'].includes(String(row.project_type)), 'invalid project'),
   nodes: z.array(rowSchema), contents: z.array(z.record(z.string(), z.unknown())), snapshots: z.array(rowSchema),
@@ -67,7 +72,7 @@ const backupPayloadSchema = z.object({
   timelineEvents: z.array(z.record(z.string(), z.unknown())).optional()
 })
 
-async function atomicWriteFile(path: string, data: string | Uint8Array): Promise<void> {
+export async function atomicWriteFile(path: string, data: string | Uint8Array): Promise<void> {
   const suffix = randomUUID()
   const temporary = join(dirname(path), `.${basename(path)}.${suffix}.tmp`)
   const previous = join(dirname(path), `.${basename(path)}.${suffix}.previous`)
@@ -264,10 +269,12 @@ export class BackupService {
       foreshadowMeta: rows(this.db, 'foreshadow_meta', projectId),
       timelineEvents: rows(this.db, 'timeline_events', projectId)
     }
+    const prompts = new PromptTemplateService(this.db)
+    if (prompts.getScope(projectId) === 'global') payload.promptGlobalSha256 = prompts.globalFingerprint() // 只存指纹，不存全局模板正文
     await atomicWriteFile(path, JSON.stringify(payload, (_key, value) => Buffer.isBuffer(value) ? value.toString('base64') : value, 2))
   }
 
-  async importProject(path: string): Promise<Project> {
+  async importProject(path: string): Promise<Project & { importNotice?: string }> {
     const bytes = await readFile(path)
     if (bytes.byteLength > MAX_BACKUP_BYTES) throw new Error('BACKUP_INVALID_TOO_LARGE')
     let payload: BackupPayload
@@ -392,7 +399,13 @@ export class BackupService {
       const patchInsert = this.db.raw.prepare(`INSERT INTO text_patches(id,project_id,document_id,block_id,document_revision,from_pos,to_pos,original_hash,original_text,replacement,status,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`)
       payload.patches.forEach((item) => patchInsert.run(...[idMap.get(item.id as string), projectId, idMap.get(item.document_id as string), item.block_id ?? 'pm-range', item.document_revision ?? -1, item.from_pos, item.to_pos, item.original_hash, item.original_text, item.replacement, item.document_revision === undefined && item.status === 'proposed' ? 'stale' : item.status, item.created_at].map(sqlValue)))
     })
-    return new ProjectService(this.db).get(projectId)
+    const imported = new ProjectService(this.db).get(projectId)
+    // M2：沿用全局的书换库后用本机全局。仅当与源库指纹不同，或旧备份无指纹（无法判断）时提示一行；指纹一致（含双方均为空/内置默认）不提示。
+    const prompts = new PromptTemplateService(this.db)
+    if (prompts.getScope(projectId) === 'global' && (!payload.promptGlobalSha256 || payload.promptGlobalSha256 !== prompts.globalFingerprint())) {
+      return { ...imported, importNotice: IMPORT_GLOBAL_SCOPE_NOTICE }
+    }
+    return imported
   }
 
   async importManuscript(path: string): Promise<Project> {

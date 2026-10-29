@@ -43,7 +43,7 @@ describe('S12 migration v9', () => {
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
-  })
+  }, 30_000) // Windows CI runner 上旧库迁移偶发 >5s，仅此用例放宽超时
 })
 
 describe('S12 F8 伏笔 · §3.4 ①②③④', () => {

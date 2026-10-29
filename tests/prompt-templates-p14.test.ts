@@ -66,14 +66,14 @@ describe('P1-4 提示词模板', () => {
     expect(templates.getOverride(project.id, 'generation')).toBeUndefined()
   })
 
-  it('覆盖 / 恢复默认：只存覆盖，恢复后 settings_json 回到 {}', () => {
+  it('覆盖 / 恢复默认：只存覆盖，恢复后只剩显式开关（P3：promptTemplateScope 固定为 project，不会被推导回沿用全局）', () => {
     const { db, project, templates } = setup()
     templates.set(project.id, 'editing', '只改选区，{{role}}')
     expect(templates.list(project.id).find((entry) => entry.mode === 'editing')!.override).toBe('只改选区，{{role}}')
     templates.reset(project.id, 'editing')
     expect(templates.list(project.id).every((entry) => entry.override === null)).toBe(true)
     const row = db.raw.prepare('SELECT settings_json FROM projects WHERE id = ?').get(project.id) as { settings_json: string }
-    expect(JSON.parse(row.settings_json)).toEqual({})
+    expect(JSON.parse(row.settings_json)).toEqual({ promptTemplateScope: 'project' })
   })
 
   it('R2/R4/隔离：模板写「直接改正文」，产出仍只是候选；正文不变、无补丁；上下文 preview = snapshot；不含他书内容', async () => {
