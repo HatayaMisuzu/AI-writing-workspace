@@ -180,7 +180,7 @@ try {
     running = await launch()
     await running.page.getByRole('button', { name: '继续写作' }).click()
     await running.page.locator('.manuscript-editor').waitFor()
-    assert.match(await running.page.locator('.manuscript-editor').innerText(), /最后一次输入会保存/)
+    assert.match(await running.page.locator('.manuscript-editor').textContent(), /最后一次输入会保存/)
   })
 
   // S2 / §6 ②：未配置 Provider 时完整写作旅程 — 拦截日志被拒=0，fixture 收 0 请求
@@ -1025,7 +1025,9 @@ try {
   await running.page.reload()
   await running.page.getByRole('button', { name: '继续写作' }).click()
   await running.page.locator('.manuscript-editor').waitFor()
-  const editorText = (page) => page.locator('.manuscript-editor').innerText().then((text) => text.replace(/\n+/g, '\n').trim())
+  // 段落带 content-visibility:auto（#36 M-1），首帧布局前 innerText 会把被跳过渲染的段落读成空串；
+  // 正文断言只关心文档内容，按段落 textContent 拼接，与布局时机无关
+  const editorText = (page) => page.locator('.manuscript-editor').evaluate((el) => Array.from(el.children, (block) => block.textContent ?? '').join('\n')).then((text) => text.replace(/\n+/g, '\n').trim())
   const localLintCount = (page) => page.getByTestId('local-lint').locator('h3 > span').innerText().then(Number)
   const openLint = async (page) => {
     await page.locator('.editor-toolbar button', { hasText: /^校对/ }).click()
