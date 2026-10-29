@@ -20,11 +20,15 @@ export type WordlistScope = 'global' | 'project'
 
 const codeError = (message: string, code: string): Error => Object.assign(new Error(message), { code })
 
+const formatBytes = (bytes: number): string => `${bytes.toLocaleString('en-US')} 字节`
+
 /** 读词表文件：先取大小（≤1MB）再读，必须是 UTF-8 文本。 */
 export async function readWordlistFile(path: string, io: { stat: typeof stat; readFile: (path: string, encoding: 'utf8') => Promise<string> } = { stat, readFile }): Promise<string> {
   const info = await io.stat(path)
   if (!info.isFile()) throw codeError('不是有效的词表文件：不是普通文件。', 'WORDLIST_FILE_INVALID')
-  if (info.size > WORDLIST_LIMITS.projectBytes) throw codeError('词表文件超过 1MB。', 'WORDLIST_FILE_INVALID')
+  if (info.size > WORDLIST_LIMITS.projectBytes) {
+    throw codeError(`词表文件太大，未导入：文件实际大小 ${formatBytes(info.size)}，上限 1MB（${formatBytes(WORDLIST_LIMITS.projectBytes)}）。`, 'WORDLIST_FILE_TOO_LARGE')
+  }
   const text = await io.readFile(path, 'utf8')
   if (text.includes('\u0000')) throw codeError('不是有效的词表文件：不是纯文本。', 'WORDLIST_FILE_INVALID')
   return text
