@@ -7,24 +7,13 @@ import { buildOutlineCards, noteSectionLabel, outlinePreviewText, parseBatchOutl
 import { CHARACTER_FIELD_KEYS, CHARACTER_FIELD_LABELS, type CharacterFieldKey } from '../../../shared/domain'
 import { normalizeCharacterFields, readFixedCharacterFields } from '../../../shared/character-fields'
 import { RelatedTimelineEvents } from './TimelineView'
+import { ConfirmAction } from '../components/ConfirmAction'
 
 const snapshotReason = (reason: Snapshot['reason']): string => ({
   interval: '定时保存', large_delete: '大段删除前', ai_edit: 'AI 修改前', manual: '手动快照', pre_restore: '恢复前备份'
 }[reason])
 const patchStatus = (status: TextPatch['status']): string => ({ proposed: '待审阅', accepted: '已接受', rejected: '已拒绝', stale: '已失效' }[status])
 
-function ConfirmAction({ title, message, onConfirm, children }: { title: string; message: string; onConfirm(): Promise<void>; children: React.ReactNode }): React.JSX.Element {
-  const [open, setOpen] = useState(false)
-  const [error, setError] = useState<string>()
-  const [busy, setBusy] = useState(false)
-  const confirmAction = async (): Promise<void> => {
-    setBusy(true); setError(undefined)
-    try { await onConfirm(); setOpen(false) }
-    catch (nextError) { setError(nextError instanceof Error ? nextError.message : String(nextError)) }
-    finally { setBusy(false) }
-  }
-  return <><button onClick={() => setOpen(true)}>{children}</button>{open && <Modal title={title} onClose={() => { if (!busy) setOpen(false) }}><p>{message}</p>{error && <div className="inline-error" role="alert">{error}</div>}<div className="modal-actions"><button disabled={busy} onClick={() => setOpen(false)}>取消</button><button className="primary" disabled={busy} onClick={() => void confirmAction()}>{busy ? '处理中…' : '确认'}</button></div></Modal>}</>
-}
 
 type FlushRegistration = { onRegisterFlush(handler?: () => Promise<void>): void }
 

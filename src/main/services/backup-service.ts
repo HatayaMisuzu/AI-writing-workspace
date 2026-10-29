@@ -2,6 +2,7 @@ import { readFile, rename, unlink, writeFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import { basename, dirname, extname, join } from 'node:path'
 import { Document, Packer, Paragraph, HeadingLevel } from 'docx'
+import { selectExportChapters, type ExportOptions } from '../../shared/export-range'
 import { z } from 'zod'
 import type { Project } from '../../shared/domain'
 import type { AppDatabase } from '../database/database'
@@ -471,8 +472,7 @@ export class BackupService {
     }
   }
 
-  async exportManuscript(projectId: string, path: string, format: 'txt' | 'md' | 'docx', options?: { onlyFinal?: boolean }): Promise<void> {
-    const onlyFinal = options?.onlyFinal === true
+  async exportManuscript(projectId: string, path: string, format: 'txt' | 'md' | 'docx', options?: ExportOptions): Promise<void> {
     const chapters = this.db.raw.prepare(`
       SELECT COALESCE(v.title, '') AS volume_title, c.title, dc.plain_text, c.status AS status
       FROM document_nodes c
@@ -483,7 +483,7 @@ export class BackupService {
       WHERE c.project_id = ? AND c.type = 'chapter'
       ORDER BY COALESCE(v.order_index, 2147483647), c.order_index, c.created_at
     `).all(projectId) as Array<{ volume_title: string; title: string; plain_text: string | null; status: string }>
-    const filtered = onlyFinal ? chapters.filter((chapter) => chapter.status === 'final') : chapters
+    const filtered = selectExportChapters(chapters, options)
     const MISSING_PLACEHOLDER = '［本章内容缺失：导出时正文数据不完整，请检查应用数据］'
     if (format === 'docx') {
       const children: Paragraph[] = []

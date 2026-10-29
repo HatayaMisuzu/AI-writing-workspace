@@ -78,7 +78,7 @@ const api: WorkspaceApi = {
   backup: {
     exportProject: (projectId) => invoke('backup:export-project', projectId), importProject: () => invoke('backup:import-project'),
     importManuscript: () => invoke('backup:import-manuscript'),
-    exportManuscript: (projectId, format, onlyFinal) => invoke('backup:export-manuscript', projectId, format, onlyFinal)
+    exportManuscript: (projectId, format, onlyFinal, range) => invoke('backup:export-manuscript', projectId, format, onlyFinal, range)
   },
   ai: {
     start: (request, onEvent) => {
