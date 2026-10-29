@@ -1180,6 +1180,66 @@ try {
     if (f13Viewport) await page.setViewportSize(f13Viewport)
   })
 
+  await record('F13 L2 命中 11704 条：抽屉分页（先 200 条 + 总数 +「更多」），打开与点击响应 ≤1s；批量应用单次最多 500 处并明确提示', async () => {
+    const page = running.page
+    // 作品词表（⑭ 保存）含「狠狠=>很」：5852 段 × 2 处 = 11704 条命中，约 6.4 万字（低于 20 万字长章节阈值，词表检查照常运行）
+    await page.evaluate(async ({ projectId }) => {
+      const tree = await window.workspace.documents.tree(projectId)
+      const volume = tree.find((item) => item.type === 'volume')
+      const lines = Array.from({ length: 5852 }, () => '他狠狠地看，狠狠地走。')
+      const node = await window.workspace.documents.create({ projectId, parentId: volume.id, type: 'chapter', title: '万条命中章' })
+      await window.workspace.documents.save({ projectId, documentId: node.id, editorJson: { type: 'doc', content: lines.map((text) => ({ type: 'paragraph', content: [{ type: 'text', text }] })) }, plainText: lines.join('\n\n'), expectedRevision: 0 })
+    }, { projectId: ids.projectId })
+    const viewport = page.viewportSize()
+    await page.setViewportSize({ width: 1600, height: 900 })
+    await page.reload()
+    await page.getByRole('button', { name: '继续写作' }).click()
+    await page.locator('.manuscript-editor').waitFor()
+    await openChapter(page, '万条命中章')
+    await page.locator('.editor-status .proofread-count', { hasText: '11704 条校对提示' }).waitFor({ timeout: 30_000 })
+    // 在页面内计时：点击 → 目标 DOM 出现 → 再等两帧（确保已绘制）
+    const timeClick = (selector, expectCount) => page.evaluate(async ({ selector, expectCount }) => {
+      const frame = () => new Promise((resolve) => requestAnimationFrame(() => resolve()))
+      const button = [...document.querySelectorAll('button')].find((item) => item.matches(selector.button) && item.textContent.includes(selector.text))
+      if (!button) throw new Error(`button not found: ${selector.text}`)
+      const started = performance.now()
+      button.click()
+      while (document.querySelectorAll('.proofread-drawer .proofread-issue').length !== expectCount) {
+        if (performance.now() - started > 15_000) throw new Error(`timeout waiting for ${expectCount} issues, got ${document.querySelectorAll('.proofread-drawer .proofread-issue').length}`)
+        await frame()
+      }
+      await frame(); await frame()
+      return performance.now() - started
+    }, { selector, expectCount })
+    const openMs = await timeClick({ button: '.editor-status .proofread-count', text: '11704 条校对提示' }, 200)
+    assert.equal(await page.getByTestId('lint-page-status').innerText(), '共 11704 条，已显示前 200 条')
+    assert.equal(await page.locator('[data-testid="local-lint"] h3 > span').innerText(), '11704')
+    const batch = page.getByRole('button', { name: '本章批量应用「狠狠→很」（前 500 处 / 共 11704 处，生成修改提案）' })
+    await batch.waitFor()
+    assert.match(await page.getByTestId('batch-limit-notice').innerText(), /单次最多 500 处：本次只为前 500 处生成提案，其余 11204 处/)
+    const moreMs = await timeClick({ button: '.proofread-drawer button', text: '更多（再显示 200 条，剩余 11504 条）' }, 400)
+    assert.equal(await page.getByTestId('lint-page-status').innerText(), '共 11704 条，已显示前 400 条')
+    // 「忽略这一处」：点击后列表仍保持 400 条（后面的顶上来），总数减 1
+    const ignoreMs = await page.evaluate(async () => {
+      const frame = () => new Promise((resolve) => requestAnimationFrame(() => resolve()))
+      const count = () => document.querySelector('[data-testid="local-lint"] h3 > span')?.textContent
+      const button = [...document.querySelectorAll('.proofread-drawer .proofread-issue button')].find((item) => item.textContent === '忽略这一处')
+      const started = performance.now()
+      button.click()
+      while (count() !== '11703') { if (performance.now() - started > 15_000) throw new Error(`ignore timeout, count=${count()}`); await frame() }
+      await frame(); await frame()
+      return performance.now() - started
+    })
+    process.stdout.write(`F13 L2 drawer (11704 hits): open ${openMs.toFixed(1)}ms, more ${moreMs.toFixed(1)}ms, ignore ${ignoreMs.toFixed(1)}ms (limit 1000ms)\n`)
+    assert.ok(openMs <= 1000, `抽屉打开 ${openMs.toFixed(1)}ms 应 ≤1000ms`)
+    assert.ok(moreMs <= 1000, `点「更多」响应 ${moreMs.toFixed(1)}ms 应 ≤1000ms`)
+    assert.ok(ignoreMs <= 1000, `点「忽略这一处」响应 ${ignoreMs.toFixed(1)}ms 应 ≤1000ms`)
+    await page.getByRole('button', { name: '关闭校对' }).click()
+    await openChapter(page, '词表批量章')
+    await page.locator('.manuscript-editor', { hasText: '他在坐一' }).waitFor()
+    if (viewport) await page.setViewportSize(viewport)
+  })
+
   await record('F15 ⑫ 锁定可见性：作品库 / 其他作品显示被锁书名与回去入口；AI 报错带书名无前缀；Esc 只关紧急出口对话框', async () => {
     const page = running.page
     const other = await page.evaluate(() => window.workspace.projects.create({ title: '旁边的书', projectType: 'novel', description: '' }))

@@ -11,6 +11,7 @@ import { findTextRange, findTextRanges, plainTextRangeToPm } from '../services/p
 import { LIVE_WORD_COUNT_DELAY_MS, liveWordCountOf } from '../services/live-word-count'
 import { averageBlockHeight, type BlockMetrics } from '../services/block-height-estimate'
 import { SaveCoordinator, type SaveState } from '../services/save-coordinator'
+import { BATCH_PROPOSE_LIMIT, LINT_PAGE_SIZE, batchSlice, pageLintGroups } from '../services/lint-drawer-paging'
 import { isStaleContent } from '../services/content-adoption'
 import { NameMatcher, termsFromCharacters } from '../../../shared/name-matcher'
 import { CHARACTERS_CHANGED_EVENT, HOVER_DEGRADE_NOTICE, characterHoverPlugin, hitAt, ignoreHoverAt, isHoverDegraded, setHoverMatcher, type DecoratedHit } from '../services/character-hover'
@@ -52,6 +53,8 @@ export function EditorSurface({ node, content, focusMode, onFocusMode, onSaved, 
   const [aiProofreadRan, setAiProofreadRan] = useState(false)
   const [proofreadError, setProofreadError] = useState<string>()
   const [ignoredIssues, setIgnoredIssues] = useState<Set<string>>(new Set())
+  const [lintShownLimit, setLintShownLimit] = useState(LINT_PAGE_SIZE)
+  useEffect(() => { setLintShownLimit(LINT_PAGE_SIZE) }, [localIssues])
   const [longChapter, setLongChapter] = useState(false)
   const blackroomRef = useRef(blackroomLocked)
   blackroomRef.current = blackroomLocked
@@ -390,11 +393,21 @@ export function EditorSurface({ node, content, focusMode, onFocusMode, onSaved, 
     onOpenPatches()
   }
 
-  const visibleLocalIssues = localIssues.filter((issue) => !ignoredIssues.has(issue.id))
-  const groupedIssues = LINT_GROUPS.map((group) => ({ group, issues: visibleLocalIssues.filter((issue) => (issue.group ?? 'punctuation') === group) })).filter((item) => item.issues.length > 0)
-  const batchGroups = [...visibleLocalIssues.filter((issue) => issue.group === 'wordlist_replace' && issue.replacement).reduce((map, issue) => {
-    const key = issue.ruleKey ?? issue.originalText; map.set(key, [...(map.get(key) ?? []), issue]); return map
-  }, new Map<string, LocalLintIssue[]>()).values()].filter((items) => items.length > 1)
+  const visibleLocalIssues = useMemo(() => localIssues.filter((issue) => !ignoredIssues.has(issue.id)), [localIssues, ignoredIssues])
+  const groupedIssues = useMemo(() => LINT_GROUPS.map((group) => ({ group, issues: visibleLocalIssues.filter((issue) => (issue.group ?? 'punctuation') === group) })).filter((item) => item.issues.length > 0), [visibleLocalIssues])
+  /** L2：抽屉只渲染前 lintShownLimit 条，点「更多」再加载下一批。 */
+  const pagedIssues = useMemo(() => pageLintGroups(groupedIssues, lintShownLimit), [groupedIssues, lintShownLimit])
+  const shownIssueCount = Math.min(lintShownLimit, visibleLocalIssues.length)
+  const batchGroups = useMemo(() => {
+    const map = new Map<string, LocalLintIssue[]>()
+    for (const issue of visibleLocalIssues) {
+      if (issue.group !== 'wordlist_replace' || !issue.replacement) continue
+      const key = issue.ruleKey ?? issue.originalText; const list = map.get(key); if (list) list.push(issue); else map.set(key, [issue])
+    }
+    return [...map.values()].filter((items) => items.length > 1)
+  }, [visibleLocalIssues])
+  // 抽屉里「原文」整页只取一次正文，避免每条提示各自 getText（上万条时是 O(条数 × 字数)）
+  const drawerText = proofreadOpen ? (editor?.getText({ blockSeparator: '\n\n' }) ?? '') : ''
 
   const ignoreHere = async (issue: LocalLintIssue): Promise<void> => {
     setIgnoredIssues((current) => new Set(current).add(issue.id))
@@ -414,8 +427,10 @@ export function EditorSurface({ node, content, focusMode, onFocusMode, onSaved, 
   const proposeBatch = async (items: LocalLintIssue[]): Promise<void> => {
     if (!editor) return
     await coordinator.flush()
+    if (items.length > BATCH_PROPOSE_LIMIT) throw new Error(`单次批量应用最多 ${BATCH_PROPOSE_LIMIT} 处。`)
     const plainText = editor.getText({ blockSeparator: '\n\n' })
-    if (items.some((issue) => textIdentity(plainText) !== issue.sourceTextHash)) throw new Error('正文已变化，请重新检查后再批量应用。')
+    const currentHash = textIdentity(plainText)
+    if (items.some((issue) => currentHash !== issue.sourceTextHash)) throw new Error('正文已变化，请重新检查后再批量应用。')
     const revision = coordinator.currentRevision()
     for (const issue of items) {
       const range = plainTextRangeToPm(editor.state.doc, issue.from, issue.to)
@@ -453,8 +468,8 @@ export function EditorSurface({ node, content, focusMode, onFocusMode, onSaved, 
       {proofreadError && <div className="inline-error" role="alert">{proofreadError}</div>}
       <section data-testid="local-lint"><h3>本地规则 <span>{visibleLocalIssues.length}</span></h3>
         {longChapter && <p className="empty-copy" role="status">章节过长，词表检查请手动运行（只检查了标点）。</p>}
-        {batchGroups.map((items) => <div key={items[0].ruleKey} className="proofread-actions"><button className="primary" onClick={() => reportLocal(proposeBatch(items))}>本章批量应用「{items[0].originalText}→{items[0].replacement}」（{items.length} 处，生成修改提案）</button></div>)}
-        {visibleLocalIssues.length === 0 ? <p className="empty-copy">暂未发现明确的标点或空格问题。</p> : groupedIssues.map(({ group, issues }) => <div key={group} className="lint-group" data-group={group}><h4>{issueLabel(group === 'punctuation' ? 'punctuation' : group)} <span>{issues.length}</span></h4>{issues.map((issue) => <article key={issue.id} className="proofread-issue"><span>{issueLabel(issue.kind)}</span><p>{issue.message}</p><small>原文：{(editor?.getText({ blockSeparator: '\n\n' }) ?? '').slice(issue.from, issue.to)}</small>{issue.replacement && <ins>建议：{issue.replacement}</ins>}<div><button onClick={() => jumpToLocalIssue(issue)}><LocateFixed size={14} />定位</button><button onClick={() => reportLocal(ignoreHere(issue))}>忽略这一处</button><button onClick={() => reportLocal(ignoreRule(issue))}>{issue.ruleKey?.startsWith('wordlist:') ? '本作品不再提示此词' : '本作品关闭此类'}</button>{issue.replacement && <button className="primary" onClick={() => reportLocal(applyLocalIssue(issue))}><Check size={14} />应用</button>}</div></article>)}</div>)}</section>
+        {batchGroups.map((all) => { const batch = batchSlice(all); return <div key={all[0].ruleKey} className="proofread-actions"><button className="primary" onClick={() => reportLocal(proposeBatch(batch.items))}>本章批量应用「{all[0].originalText}→{all[0].replacement}」（{batch.remaining > 0 ? `前 ${batch.items.length} 处 / 共 ${batch.total} 处` : `${batch.total} 处`}，生成修改提案）</button>{batch.remaining > 0 && <p className="empty-copy" role="status" data-testid="batch-limit-notice">单次最多 {BATCH_PROPOSE_LIMIT} 处：本次只为前 {batch.items.length} 处生成提案，其余 {batch.remaining} 处请处理完后重新检查再批量应用。</p>}</div> })}
+        {visibleLocalIssues.length === 0 ? <p className="empty-copy">暂未发现明确的标点或空格问题。</p> : <>{visibleLocalIssues.length > shownIssueCount && <p className="empty-copy" role="status" data-testid="lint-page-status">共 {visibleLocalIssues.length} 条，已显示前 {shownIssueCount} 条</p>}{pagedIssues.map(({ group, total, issues }) => <div key={group} className="lint-group" data-group={group}><h4>{issueLabel(group === 'punctuation' ? 'punctuation' : group)} <span>{total}</span></h4>{issues.map((issue) => <article key={issue.id} className="proofread-issue"><span>{issueLabel(issue.kind)}</span><p>{issue.message}</p><small>原文：{drawerText.slice(issue.from, issue.to)}</small>{issue.replacement && <ins>建议：{issue.replacement}</ins>}<div><button onClick={() => jumpToLocalIssue(issue)}><LocateFixed size={14} />定位</button><button onClick={() => reportLocal(ignoreHere(issue))}>忽略这一处</button><button onClick={() => reportLocal(ignoreRule(issue))}>{issue.ruleKey?.startsWith('wordlist:') ? '本作品不再提示此词' : '本作品关闭此类'}</button>{issue.replacement && <button className="primary" onClick={() => reportLocal(applyLocalIssue(issue))}><Check size={14} />应用</button>}</div></article>)}</div>)}{visibleLocalIssues.length > shownIssueCount && <div className="proofread-actions"><button onClick={() => setLintShownLimit((limit) => limit + LINT_PAGE_SIZE)}>更多（再显示 {Math.min(LINT_PAGE_SIZE, visibleLocalIssues.length - shownIssueCount)} 条，剩余 {visibleLocalIssues.length - shownIssueCount} 条）</button></div>}</>}</section>
       <section><h3>AI 校对 <span>{aiIssues.length}</span></h3>{aiIssues.length === 0 ? <p className="empty-copy">{aiProofreadRan ? 'AI 未发现需要处理的明确问题。' : '运行后，建议会先进入修改提案，不会直接改写正文。'}</p> : aiIssues.map((issue) => <article key={issue.id} className="proofread-issue"><span>{issueLabel(issue.category)}</span><p>{issue.reason}</p><small>原文：{issue.originalText}</small>{issue.suggestion && <ins>建议：{issue.suggestion}</ins>}<div><button className="primary" disabled={!issue.suggestion} onClick={() => void createProofreadPatch(issue).catch((error) => setProofreadError(error instanceof Error ? error.message : String(error)))}>加入修改提案</button></div></article>)}</section>
     </aside>}
   </section>
