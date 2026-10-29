@@ -9,6 +9,7 @@ import { LINT_GROUPS, type Character, type CharacterHoverPrefs, type DocumentCon
 import { textIdentity } from '../../../shared/text-identity'
 import { findTextRange, findTextRanges, plainTextRangeToPm } from '../services/prosemirror-range'
 import { SaveCoordinator, type SaveState } from '../services/save-coordinator'
+import { isStaleContent } from '../services/content-adoption'
 import { NameMatcher, termsFromCharacters } from '../../../shared/name-matcher'
 import { CHARACTERS_CHANGED_EVENT, HOVER_DEGRADE_NOTICE, characterHoverPlugin, hitAt, ignoreHoverAt, isHoverDegraded, setHoverMatcher, type DecoratedHit } from '../services/character-hover'
 import { CharacterHoverCard } from './CharacterHoverCard'
@@ -127,11 +128,13 @@ export function EditorSurface({ node, content, focusMode, onFocusMode, onSaved, 
   }, [node.id])
 
   useEffect(() => {
+    const sameDocument = renderedDocumentId.current === content.documentId
+    // 同章旧 content（比编辑器已保存的修订号更早）直接忽略：不回滚修订号、不覆盖正文（见 content-adoption.ts）
+    if (isStaleContent({ sameDocument, contentRevision: content.revision, editorRevision: coordinator.currentRevision() })) return
     coordinator.resetRevision(content.revision)
     latestRevision.current = content.revision
     latestPlainText.current = content.plainText
     setLiveWordCount(content.wordCount)
-    const sameDocument = renderedDocumentId.current === content.documentId
     renderedDocumentId.current = content.documentId
     if (!sameDocument) { setAiIssues([]); setAiProofreadRan(false); setProofreadError(undefined) }
     if (sameDocument && editor && !editor.isDestroyed && !coordinator.hasPending() && editor.getText({ blockSeparator: '\n\n' }) !== content.plainText) {

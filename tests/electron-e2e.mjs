@@ -939,6 +939,14 @@ try {
     await drawer.waitFor()
     await drawer.getByRole('button', { name: '全部接受（3 条）' }).waitFor()
     assert.equal(await editorText(page), original, '接受前正文不变')
+    // 记录全部接受过程中编辑器里「在座」的个数：逐条接受只能单调增加，出现回落 = 编辑器被旧 content 覆盖过
+    await page.evaluate(() => {
+      const editor = document.querySelector('.manuscript-editor')
+      const count = () => (editor.textContent.match(/在座/g) ?? []).length
+      window.__f13Counts = [count()]
+      window.__f13Observer = new MutationObserver(() => { const next = count(); if (next !== window.__f13Counts.at(-1)) window.__f13Counts.push(next) })
+      window.__f13Observer.observe(editor, { subtree: true, childList: true, characterData: true })
+    })
     await drawer.getByRole('button', { name: '全部接受（3 条）' }).click()
     await page.locator('.manuscript-editor', { hasText: '仍旧在座三' }).waitFor().catch(async (error) => {
       // 失败时把渲染层与持久层状态打到日志里（CI 只有日志可看），再原样抛出
@@ -953,6 +961,10 @@ try {
       process.stdout.write(`F13 ⑪ diagnostics: ${JSON.stringify(state)}\n`)
       throw error
     })
+    await page.waitForTimeout(300)
+    const counts = await page.evaluate(() => { window.__f13Observer.disconnect(); return window.__f13Counts })
+    process.stdout.write(`F13 ⑪ 在座 count sequence during accept-all: ${JSON.stringify(counts)}\n`)
+    assert.ok(counts.every((value, index) => index === 0 || value > counts[index - 1]), `全部接受过程中正文不应回退，实际序列 ${JSON.stringify(counts)}`)
     const after = await editorText(page)
     assert.ok(!after.includes('在坐') && (after.match(/在座/g) ?? []).length === 3, `全部接受后应替换 3 处，实际 ${after}`)
     assert.equal(await drawer.locator('.patch-status.stale').count(), 0, '无失效提案')
