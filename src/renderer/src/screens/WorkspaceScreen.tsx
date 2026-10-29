@@ -1,6 +1,6 @@
 import { BookmarkPlus, FilePlus2, Lightbulb, Search, SidebarClose, SlidersHorizontal } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { ChapterWordRange, DocumentContent, DocumentNode, DocumentTaskTarget, Project, SearchResult, TextPatch } from '../../../shared/domain'
+import type { FocusLockInput, FocusLockStatus, ChapterWordRange, DocumentContent, DocumentNode, DocumentTaskTarget, Project, SearchResult, TextPatch } from '../../../shared/domain'
 import { ProjectSidebar, type ProjectSection } from '../components/ProjectSidebar'
 import { EditorSurface, type EditorController, type EditorSelection } from '../components/EditorSurface'
 import { AssistantPanel } from '../components/AssistantPanel'
@@ -11,6 +11,7 @@ import { StockpileView } from './StockpileView'
 import { ForeshadowView } from './ForeshadowView'
 import { RelatedTimelineEvents, TimelineView } from './TimelineView'
 import { Modal } from '../components/Modal'
+import { BlackroomBar, BlackroomEmergencyDialog, BlackroomEntryDialog } from '../components/Blackroom'
 import { parseSearchSnippet } from '../services/search-snippet'
 import { chapterWordRangeHint } from '../services/chapter-word-range-view'
 
@@ -19,8 +20,8 @@ const renderSnippet = (snippet: string): React.ReactNode[] => {
 }
 
 const NARROW_QUERY = '(max-width: 1080px)'
-export function WorkspaceScreen({ project, onProjectChanged, onSettings, onRegisterBeforeLeave }: {
-  project: Project; onProjectChanged(): void; onSettings(): void; onRegisterBeforeLeave(handler?: () => Promise<void>): void
+export function WorkspaceScreen({ project, onProjectChanged, onSettings, onRegisterBeforeLeave, onFocusLockChange }: {
+  project: Project; onProjectChanged(): void; onSettings(): void; onRegisterBeforeLeave(handler?: () => Promise<void>): void; onFocusLockChange?(locked: boolean): void
 }): React.JSX.Element {
   const [tree, setTree] = useState<DocumentNode[]>([])
   const [selected, setSelected] = useState<DocumentNode>()
@@ -47,6 +48,12 @@ export function WorkspaceScreen({ project, onProjectChanged, onSettings, onRegis
   }, [])
   const toggleDrawer = useCallback(() => setDrawerOpen((open) => !open), [])
   const [focusMode, setFocusMode] = useState(false)
+  // F15 小黑屋：锁状态以主进程为准（墙钟），界面每秒及窗口重新获得焦点时刷新
+  const [lockStatus, setLockStatus] = useState<FocusLockStatus>()
+  const [blackroomEntryOpen, setBlackroomEntryOpen] = useState(false)
+  const [blackroomExitOpen, setBlackroomExitOpen] = useState(false)
+  const locked = lockStatus?.locked === true
+  const hideChrome = focusMode || locked
   const [selection, setSelection] = useState<EditorSelection>()
   const [ideaOpen, setIdeaOpen] = useState(false)
   const [ideaText, setIdeaText] = useState('')
@@ -106,11 +113,45 @@ export function WorkspaceScreen({ project, onProjectChanged, onSettings, onRegis
   useEffect(() => {
     const handler = (event: KeyboardEvent): void => {
       if (event.ctrlKey && event.key.toLowerCase() === 'j') { event.preventDefault(); setIdeaOpen(true) }
-      if (event.ctrlKey && event.key.toLowerCase() === 'f' && event.shiftKey) { event.preventDefault(); setSearchOpen(true) }
-      if (event.key === 'Escape' && focusMode) setFocusMode(false)
+      if (event.ctrlKey && event.key.toLowerCase() === 'f' && event.shiftKey) { event.preventDefault(); if (!locked) setSearchOpen(true) }
+      if (event.key === 'Escape' && focusMode && !locked) setFocusMode(false)
     }
     window.addEventListener('keydown', handler); return () => window.removeEventListener('keydown', handler)
-  }, [focusMode])
+  }, [focusMode, locked])
+
+  const refreshLock = useCallback(async (): Promise<void> => {
+    try { setLockStatus(await window.workspace.focus.status(project.id)) } catch { /* 读不到即保持当前界面，不阻止写作 */ }
+  }, [project.id])
+  useEffect(() => {
+    let active = true
+    void window.workspace.focus.restore(project.id).then((status) => { if (active) setLockStatus(status) }).catch(() => { if (active) setLockStatus(undefined) })
+    return () => { active = false }
+  }, [project.id])
+  useEffect(() => { onFocusLockChange?.(locked) }, [locked, onFocusLockChange])
+  // 锁定时窄屏抽屉一并关闭（抽屉与「打开同行者」按钮都随 AssistantPanel 不渲染）
+  useEffect(() => { if (locked) setDrawerOpen(false) }, [locked])
+  useEffect(() => () => onFocusLockChange?.(false), [onFocusLockChange])
+  useEffect(() => {
+    if (!locked) return
+    const timer = window.setInterval(() => void refreshLock(), 1000)
+    const wake = (): void => { void refreshLock() }
+    window.addEventListener('focus', wake); document.addEventListener('visibilitychange', wake)
+    return () => { window.clearInterval(timer); window.removeEventListener('focus', wake); document.removeEventListener('visibilitychange', wake) }
+  }, [locked, refreshLock])
+  const startBlackroom = async (input: FocusLockInput): Promise<void> => {
+    await flushAll()
+    const status = await window.workspace.focus.start(project.id, input)
+    setFocusMode(false); setSearchOpen(false); setPatchOpen(false); setSection('manuscript')
+    setLockStatus(status); setBlackroomEntryOpen(false)
+  }
+  const finishBlackroom = async (): Promise<void> => {
+    try { await flushAll(); setLockStatus(await window.workspace.focus.finish(project.id)); setNavigationError(undefined) }
+    catch (error) { setNavigationError(error instanceof Error ? error.message : String(error)) }
+  }
+  const emergencyExitBlackroom = async (phrase: string): Promise<void> => {
+    await flushAll()
+    setLockStatus(await window.workspace.focus.emergencyExit(project.id, phrase)); setBlackroomExitOpen(false)
+  }
 
   const changeSection = async (next: ProjectSection): Promise<void> => {
     if (next === section) return
@@ -213,14 +254,15 @@ export function WorkspaceScreen({ project, onProjectChanged, onSettings, onRegis
     return result
   }, [onProjectChanged, refreshTree, selected?.id])
 
-  return <div className={focusMode ? 'workspace-screen is-focus' : 'workspace-screen'}>
-    {!focusMode && <ProjectSidebar project={project} tree={tree} selectedId={selected?.id} section={section} onSection={(next) => { setTimelineFocus(undefined); setCharacterFocus(undefined); void changeSection(next) }} onSelect={(node) => void openDocument(node)} onNewVolume={() => void requestCreateNode('volume')} onNewChapter={(parent) => void requestCreateNode('chapter', parent)} onRename={(node) => setNodeEditor({ node, action: 'rename', title: node.title })} onDelete={(node) => setNodeEditor({ node, action: 'delete', title: node.title })} onReorder={async (documentId, parentId, orderIndex) => { try { await flushAll(); await window.workspace.documents.reorder(project.id, documentId, parentId, orderIndex); await refreshTree() } catch (error) { setNavigationError(String(error)) } }}  onSetStatus={async (node, status) => { try { await window.workspace.documents.setStatus(project.id, node.id, status); await refreshTree() } catch (error) { setNavigationError(String(error)) } }} />}
+  return <div className={hideChrome ? `workspace-screen is-focus${locked ? ' is-blackroom' : ''}` : 'workspace-screen'}>
+    {!hideChrome && <ProjectSidebar project={project} tree={tree} selectedId={selected?.id} section={section} onSection={(next) => { setTimelineFocus(undefined); setCharacterFocus(undefined); void changeSection(next) }} onSelect={(node) => void openDocument(node)} onNewVolume={() => void requestCreateNode('volume')} onNewChapter={(parent) => void requestCreateNode('chapter', parent)} onRename={(node) => setNodeEditor({ node, action: 'rename', title: node.title })} onDelete={(node) => setNodeEditor({ node, action: 'delete', title: node.title })} onReorder={async (documentId, parentId, orderIndex) => { try { await flushAll(); await window.workspace.documents.reorder(project.id, documentId, parentId, orderIndex); await refreshTree() } catch (error) { setNavigationError(String(error)) } }}  onSetStatus={async (node, status) => { try { await window.workspace.documents.setStatus(project.id, node.id, status); await refreshTree() } catch (error) { setNavigationError(String(error)) } }} />}
     <div className="workspace-main">
-      <div className="workspace-actions"><button onClick={() => setSearchOpen(true)}><Search size={16} />全文检索</button><button onClick={() => setIdeaOpen(true)}><Lightbulb size={16} />快速灵感 <kbd>Ctrl J</kbd></button>{selected && <button onClick={() => setPatchOpen(true)}><SlidersHorizontal size={16} />修改提案</button>}{selected && selection && selection.text.trim() && <button type="button" onClick={() => void registerForeshadow()}><BookmarkPlus size={16} />登记为伏笔</button>}<span />{focusMode && <button onClick={() => setFocusMode(false)}><SidebarClose size={16} />退出专注</button>}</div>
+      {locked && lockStatus ? <div className="workspace-actions blackroom-actions"><BlackroomBar status={lockStatus} chapters={tree.filter((node) => node.type === 'chapter')} selectedId={selected?.id} onSelectChapter={(node) => void openDocument(node)} onFinish={() => void finishBlackroom()} onEmergency={() => setBlackroomExitOpen(true)} /><button onClick={() => setIdeaOpen(true)}><Lightbulb size={16} />快速灵感 <kbd>Ctrl J</kbd></button></div>
+      : <div className="workspace-actions"><button onClick={() => setSearchOpen(true)}><Search size={16} />全文检索</button><button onClick={() => setIdeaOpen(true)}><Lightbulb size={16} />快速灵感 <kbd>Ctrl J</kbd></button>{selected && <button onClick={() => setPatchOpen(true)}><SlidersHorizontal size={16} />修改提案</button>}{selected && selection && selection.text.trim() && <button type="button" onClick={() => void registerForeshadow()}><BookmarkPlus size={16} />登记为伏笔</button>}<span />{focusMode && <button onClick={() => setFocusMode(false)}><SidebarClose size={16} />退出专注</button>}</div>}
       {navigationError && <div className="navigation-error" role="alert">{navigationError}</div>}
       {section === 'manuscript' && selected && content ? <div className="manuscript-with-outline">
-          <EditorSurface node={selected} content={content} focusMode={focusMode} onFocusMode={setFocusMode} onSaved={(saved) => { setContent(saved); void refreshTree(); onProjectChanged() }} onSelection={setSelection} onRegisterController={registerController} onOpenPatches={() => setPatchOpen(true)} />
-          {!focusMode && <div className="manuscript-aside-stack"><ChapterOutlineAside projectId={project.id} chapter={selected} />{selected.type === 'chapter' && <RelatedTimelineEvents projectId={project.id} chapterId={selected.id} onOpenEvent={(id) => void openTimelineEvent(id)} />}</div>}
+          <EditorSurface node={selected} content={content} focusMode={hideChrome} onFocusMode={setFocusMode} blackroomLocked={locked} onBlackroom={() => setBlackroomEntryOpen(true)} onSaved={(saved) => { setContent(saved); void refreshTree(); onProjectChanged(); if (locked) void refreshLock() }} onSelection={setSelection} onRegisterController={registerController} onOpenPatches={() => setPatchOpen(true)} />
+          {!hideChrome && <div className="manuscript-aside-stack"><ChapterOutlineAside projectId={project.id} chapter={selected} />{selected.type === 'chapter' && <RelatedTimelineEvents projectId={project.id} chapterId={selected.id} onOpenEvent={(id) => void openTimelineEvent(id)} />}</div>}
         </div>
         : section === 'outline' ? <OutlineView projectId={project.id} tree={tree} onTreeChanged={async () => { await refreshTree(); onProjectChanged() }} onOpenChapter={(node) => void openDocument(node)} onRegisterFlush={registerAuxiliaryFlush} />
         : section === 'ideas' ? <IdeasView projectId={project.id} onRegisterFlush={registerAuxiliaryFlush} />
@@ -237,10 +279,12 @@ export function WorkspaceScreen({ project, onProjectChanged, onSettings, onRegis
         : <section className="project-view placeholder-view"><FilePlus2 size={34} /><h1>内容</h1><p>这是辅助层，不要求作者维护复杂结构。</p></section>}
       <footer className="workspace-status"><span className="saved-dot" />本地项目<span>本章 {content?.wordCount.toLocaleString() ?? 0} 字</span>{rangeHint && <span className={`word-range-hint ${rangeHint.state}`} data-testid="word-range-hint">{rangeHint.text}</span>}<span>全书 {totalWords.toLocaleString()} 字</span><span>项目内容严格隔离</span></footer>
     </div>
-    {!focusMode && <AssistantPanel project={project} documentId={selected?.id} documentText={content?.plainText} documentRevision={content?.revision} selection={selection} collapsed={narrow ? !drawerOpen : assistantCollapsed} onCollapse={narrow ? toggleDrawer : () => setAssistantCollapsed(!assistantCollapsed)} narrow={narrow} drawer={narrow && drawerOpen} onCreatePatch={createPatch} onBeforeAI={freezeAITarget} onEnsureSaved={flushAll} onOpenDocument={openTargetDocument} onOpenSettings={onSettings} />}
+    {!hideChrome && <AssistantPanel project={project} documentId={selected?.id} documentText={content?.plainText} documentRevision={content?.revision} selection={selection} collapsed={narrow ? !drawerOpen : assistantCollapsed} onCollapse={narrow ? toggleDrawer : () => setAssistantCollapsed(!assistantCollapsed)} narrow={narrow} drawer={narrow && drawerOpen} onCreatePatch={createPatch} onBeforeAI={freezeAITarget} onEnsureSaved={flushAll} onOpenDocument={openTargetDocument} onOpenSettings={onSettings} />}
     {ideaOpen && <div className="quick-idea-popover"><header><strong>快速记录灵感</strong><kbd>Ctrl J</kbd></header><textarea autoFocus value={ideaText} onChange={(event) => setIdeaText(event.target.value)} placeholder="记下一闪而过的想法…" /><div><button onClick={() => { setIdeaText(''); setIdeaOpen(false) }}>取消</button><button className="primary" onClick={async () => { if (ideaText.trim()) await window.workspace.ideas.create(project.id, ideaText); setIdeaText(''); setIdeaOpen(false) }}>保存并返回正文</button></div></div>}
-    {searchOpen && <Modal title={`在《${project.title}》中检索`} onClose={() => setSearchOpen(false)} width={680}><div className="search-dialog"><div className="dialog-search"><input autoFocus value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') void runSearch() }} placeholder="输入关键词；只检索当前作品" /><button className="primary" onClick={() => void runSearch()}>搜索</button></div><div className="search-results">{searchResults.map((result) => <button key={result.documentId} onClick={async () => { const node = tree.find((item) => item.id === result.documentId); if (node) await openDocument(node); setSearchOpen(false) }}><strong>{result.title}</strong><p>{renderSnippet(result.snippet)}</p></button>)}</div></div></Modal>}
-    {patchOpen && selected && <PatchDrawer projectId={project.id} documentId={selected.id} onClose={() => setPatchOpen(false)} onAccept={acceptPatch} />}
+    {blackroomEntryOpen && !locked && <BlackroomEntryDialog onClose={() => setBlackroomEntryOpen(false)} onStart={startBlackroom} />}
+    {blackroomExitOpen && locked && <BlackroomEmergencyDialog onClose={() => setBlackroomExitOpen(false)} onConfirm={emergencyExitBlackroom} />}
+    {searchOpen && !locked && <Modal title={`在《${project.title}》中检索`} onClose={() => setSearchOpen(false)} width={680}><div className="search-dialog"><div className="dialog-search"><input autoFocus value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') void runSearch() }} placeholder="输入关键词；只检索当前作品" /><button className="primary" onClick={() => void runSearch()}>搜索</button></div><div className="search-results">{searchResults.map((result) => <button key={result.documentId} onClick={async () => { const node = tree.find((item) => item.id === result.documentId); if (node) await openDocument(node); setSearchOpen(false) }}><strong>{result.title}</strong><p>{renderSnippet(result.snippet)}</p></button>)}</div></div></Modal>}
+    {patchOpen && !locked && selected && <PatchDrawer projectId={project.id} documentId={selected.id} onClose={() => setPatchOpen(false)} onAccept={acceptPatch} />}
     {nodeCreator && <Modal title={nodeCreator.type === 'volume' ? '新建卷' : '新建章节'} onClose={() => setNodeCreator(undefined)}><form className="node-create-form" onSubmit={(event) => { event.preventDefault(); void createNode() }}><label><span>{nodeCreator.type === 'volume' ? '卷名' : '章节名'}</span><input autoFocus value={nodeCreator.title} onChange={(event) => setNodeCreator({ ...nodeCreator, title: event.target.value })} /></label><div className="modal-actions"><button type="button" onClick={() => setNodeCreator(undefined)}>取消</button><button className="primary" type="submit">创建</button></div></form></Modal>}
     {nodeEditor && <Modal title={nodeEditor.action === 'rename' ? `重命名${nodeEditor.node.type === 'volume' ? '卷' : '章节'}` : `删除${nodeEditor.node.type === 'volume' ? '卷' : '章节'}`} onClose={() => setNodeEditor(undefined)}><div className="node-create-form">{nodeEditor.action === 'rename' ? <label><span>名称</span><input autoFocus value={nodeEditor.title} onChange={(event) => setNodeEditor({ ...nodeEditor, title: event.target.value })} onKeyDown={(event) => { if (event.key === 'Enter') void updateNode() }} /></label> : <p>确定删除“{nodeEditor.node.title}”吗？{nodeEditor.node.type === 'volume' ? '卷内全部章节也会删除。' : '此操作无法撤销。'}</p>}<div className="modal-actions"><button onClick={() => setNodeEditor(undefined)}>取消</button><button className={nodeEditor.action === 'delete' ? 'danger-button' : 'primary'} onClick={() => void updateNode()}>{nodeEditor.action === 'rename' ? '保存' : '确认删除'}</button></div></div></Modal>}
   </div>

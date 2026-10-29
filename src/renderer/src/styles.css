@@ -525,3 +525,13 @@ button.link { border: 0; background: none; padding: 0; color: var(--accent, #2f6
 .context-pin-hint { display: block; color: var(--muted); }
 .context-preview-target { display: flex; gap: 4px; margin-bottom: 6px; }
 .context-preview-target button[aria-pressed="true"] { font-weight: 600; }
+/* F15 小黑屋 */
+.blackroom-actions { gap: 10px; }
+.blackroom-bar { display: flex; align-items: center; gap: 12px; flex: 1; font-size: 12px; color: #3d4643; }
+.blackroom-bar > span:empty { flex: 1; }
+.blackroom-bar select { font-size: 12px; max-width: 220px; }
+.workspace-actions .blackroom-bar button.primary { background: var(--accent); color: #fff; border-radius: 4px; padding: 3px 12px; }
+.blackroom-emergency { color: #8a5a50 !important; }
+.blackroom-modes { border: 0; padding: 0; margin: 0; display: flex; gap: 14px; font-size: 12px; }
+.blackroom-modes legend { margin-bottom: 6px; }
+.app-body.is-blackroom { grid-template-columns: 1fr; }

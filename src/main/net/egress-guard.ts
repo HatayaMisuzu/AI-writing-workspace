@@ -24,6 +24,10 @@ let rawFetch: typeof fetch = (...args) => globalThis.fetch(...args)
 /** 由 main/index.ts 在启动时安装（与 webRequest 共用同一个 NetworkGate）。传 undefined 卸载。 */
 export function installEgressGate(gate: EgressDecider | undefined): void { installed = gate }
 
+let focusLocked: () => boolean = () => false
+/** F15：小黑屋锁定期间主进程一律不出站（与 IPC 层 FOCUS_LOCKED 双保险）。传 undefined 卸载。 */
+export function installFocusEgressLock(check: (() => boolean) | undefined): void { focusLocked = check ?? (() => false) }
+
 /** 仅测试用：替换底层 fetch。 */
 export function setRawFetchForTests(fetcher: typeof fetch | undefined): void {
   rawFetch = fetcher ?? ((...args) => globalThis.fetch(...args))
@@ -39,6 +43,7 @@ export function checkEgress(rawUrl: string): void {
     throw new EgressBlockedError('出站请求被拒绝：仅允许 http/https 服务地址。', `blocked-scheme:${parsed.protocol}`)
   }
   if (!installed) throw new EgressBlockedError('出站请求被拒绝：网络守门未就绪。', 'gate-not-installed')
+  if (focusLocked()) throw new EgressBlockedError('出站请求被拒绝：小黑屋锁定中，不发起任何网络请求。', 'focus-locked')
   const decision = installed.decide(parsed.href)
   if (!decision.allow) {
     console.warn(`[egress-guard] blocked ${decision.reason}: ${parsed.origin}`)

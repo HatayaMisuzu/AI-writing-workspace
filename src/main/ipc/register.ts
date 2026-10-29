@@ -26,6 +26,8 @@ import { ProofreadingRunner } from '../ai/proofreading-runner'
 import { WritingDailyService } from '../services/writing-daily-service'
 import { ForeshadowService } from '../services/foreshadow-service'
 import { TimelineService } from '../services/timeline-service'
+import { FocusLockService, assertNoFocusLockAnywhere, assertNotFocusLocked } from '../services/focus-lock-service'
+import { installFocusEgressLock } from '../net/egress-guard'
 
 const trustedSender = (event: IpcMainInvokeEvent | IpcMainEvent): void => {
   if (event.senderFrame !== event.sender.mainFrame) throw new Error('IPC_UNTRUSTED_FRAME')
@@ -76,6 +78,14 @@ export function registerIpc(db: AppDatabase, codec: SecretCodec, network?: Netwo
   const promptTemplates = new PromptTemplateService(db)
   const foreshadows = new ForeshadowService(db)
   const timeline = new TimelineService(db)
+  const focus = new FocusLockService(db)
+  installFocusEgressLock(() => focus.anyLocked())
+  handle('focus:status', (projectId: string) => focus.status(parse(idSchema, projectId)))
+  handle('focus:restore', (projectId: string) => focus.restore(parse(idSchema, projectId)))
+  handle('focus:start', (projectId: string, input: unknown) => focus.start(parse(idSchema, projectId), input))
+  handle('focus:finish', (projectId: string) => focus.finish(parse(idSchema, projectId)))
+  handle('focus:emergency-exit', (projectId: string, phrase: unknown) => focus.emergencyExit(parse(idSchema, projectId), phrase))
+  handle('focus:last-session', (projectId: string) => focus.lastSession(parse(idSchema, projectId)) ?? null)
 
   handle('window:minimize', () => BrowserWindow.getFocusedWindow()?.minimize())
   handle('window:toggle-maximize', () => {
@@ -128,7 +138,7 @@ export function registerIpc(db: AppDatabase, codec: SecretCodec, network?: Netwo
   handle('memories:reject', (projectId: string, memoryId: string) => memories.reject(parse(idSchema, projectId), parse(idSchema, memoryId)))
   handle('memories:retire', (projectId: string, memoryId: string) => memories.retire(parse(idSchema, projectId), parse(idSchema, memoryId)))
   handle('memories:replace', (projectId: string, memoryId: string, content: string) => memories.proposeReplacement(parse(idSchema, projectId), parse(idSchema, memoryId), parse(contentSchema, content)))
-  handle('memories:extract-intent', (projectId: string, sourceId: string, content: string) => memoryIntent.extractAndCreate(parse(idSchema, projectId), parse(idSchema, sourceId), parse(contentSchema, content)))
+  handle('memories:extract-intent', (projectId: string, sourceId: string, content: string) => { assertNotFocusLocked(focus, parse(idSchema, projectId)); return memoryIntent.extractAndCreate(parse(idSchema, projectId), parse(idSchema, sourceId), parse(contentSchema, content)) })
   handle('foreshadows:list-ledger', (projectId: string) => foreshadows.listLedger(parse(idSchema, projectId)))
   handle('foreshadows:list-pending', (projectId: string) => foreshadows.listPending(parse(idSchema, projectId)))
   handle('foreshadows:register', (input: unknown) => {
@@ -209,10 +219,10 @@ export function registerIpc(db: AppDatabase, codec: SecretCodec, network?: Netwo
   handle('prompts:copy-preview', (projectId: string, source: unknown) => promptTemplates.previewCopy(parse(idSchema, projectId), parse(promptCopySourceSchema, source)))
   handle('prompts:copy-apply', (projectId: string, source: unknown, token: unknown) => promptTemplates.applyCopy(parse(idSchema, projectId), parse(promptCopySourceSchema, source), parse(z.string().regex(/^[0-9a-f]{64}$/), token)))
   handle('linter:run', (text: string) => lintChineseText(text))
-  handle('digests:run', (projectId: string, chapterId: string) => digestRunner.run(parse(idSchema, projectId), parse(idSchema, chapterId)))
+  handle('digests:run', (projectId: string, chapterId: string) => { assertNotFocusLocked(focus, parse(idSchema, projectId)); return digestRunner.run(parse(idSchema, projectId), parse(idSchema, chapterId)) })
   handle('digests:list', (projectId: string, chapterId?: string) => digests.list(projectId, chapterId))
   handle('digests:status', (projectId: string, chapterId: string) => digests.status(projectId, chapterId))
-  handle('proofreading:run', (projectId: string, documentId: string) => proofreading.run(parse(idSchema, projectId), parse(idSchema, documentId)))
+  handle('proofreading:run', (projectId: string, documentId: string) => { assertNotFocusLocked(focus, parse(idSchema, projectId)); return proofreading.run(parse(idSchema, projectId), parse(idSchema, documentId)) })
 
   handle('providers:list', () => providers.list())
   handle('providers:save', (input: ProviderInput) => {
@@ -225,6 +235,7 @@ export function registerIpc(db: AppDatabase, codec: SecretCodec, network?: Netwo
   handle('providers:routes', () => providers.listRoutes())
   handle('providers:set-route', (route: TaskModelRoute) => { const valid = parse(routeSchema, route); return providers.setRoute(valid.taskType, valid.modelId) })
   handle('providers:test', async (providerId: string, modelId: string) => {
+    assertNoFocusLockAnywhere(focus)
     try {
       providerId = parse(idSchema, providerId); modelId = parse(idSchema, modelId)
       const { config, apiKey } = providers.getWithSecret(providerId)
@@ -236,6 +247,7 @@ export function registerIpc(db: AppDatabase, codec: SecretCodec, network?: Netwo
   })
   // S2 / 决策 11：未保存地址仅在测试连接时临时放行（不写入白名单）
   handle('providers:test-url', async (input: { baseUrl: string; apiKey?: string; modelId: string; providerType?: ProviderType }) => {
+    assertNoFocusLockAnywhere(focus)
     try {
       const body = z.object({
         baseUrl: z.string().min(1).max(2000),
@@ -291,6 +303,7 @@ export function registerIpc(db: AppDatabase, codec: SecretCodec, network?: Netwo
     try {
       trustedSender(event)
       request = aiStartSchema.parse(request) as AIStartRequest
+      assertNotFocusLocked(focus, request.task.projectId)
       const target = request.task.target
       if (target && (target.requestId !== request.requestId || target.projectId !== request.task.projectId || target.documentId !== request.task.documentId)) {
         throw new Error('AI_TARGET_IDENTITY_INVALID')
@@ -310,6 +323,7 @@ export function registerIpc(db: AppDatabase, codec: SecretCodec, network?: Netwo
   })
   handle('ai:preview-context', (request: AIPreviewContextRequest) => {
     const parsed = aiPreviewContextSchema.parse(request) as AIPreviewContextRequest
+    assertNotFocusLocked(focus, parsed.task.projectId)
     return runtime.previewContext(parsed.task, parsed.threadId)
   })
   handle('ai:cancel', (requestId: string) => runtime.cancel(parse(idSchema, requestId)))

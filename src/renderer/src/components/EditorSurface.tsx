@@ -2,7 +2,7 @@ import { CharacterCount } from '@tiptap/extension-character-count'
 import { Placeholder } from '@tiptap/extension-placeholder'
 import { EditorContent, useEditor } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
-import { Check, Focus, LocateFixed, Redo2, Save, ShieldCheck, Sparkles, Undo2, X } from 'lucide-react'
+import { Check, Focus, Lock, LocateFixed, Redo2, Save, ShieldCheck, Sparkles, Undo2, X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { DocumentContent, DocumentNode, DocumentTaskTarget, LocalLintIssue, ProofreadIssue, TextPatch } from '../../../shared/domain'
 import { textIdentity } from '../../../shared/text-identity'
@@ -27,7 +27,8 @@ const issueLabel = (kind: string): string => ({
   quote: '引号', punctuation: '标点', typo: '错别字', grammar: '语法', reference: '指代', repetition: '重复', format: '格式'
 }[kind] ?? '文字提示')
 
-export function EditorSurface({ node, content, focusMode, onFocusMode, onSaved, onSelection, onRegisterController, onOpenPatches }: {
+export function EditorSurface({ node, content, focusMode, onFocusMode, onSaved, onSelection, onRegisterController, onOpenPatches, blackroomLocked = false, onBlackroom }: {
+  blackroomLocked?: boolean; onBlackroom?(): void
   node: DocumentNode; content: DocumentContent; focusMode: boolean; onFocusMode(value: boolean): void
   onSaved(content: DocumentContent): void; onSelection(selection?: EditorSelection): void
   onRegisterController(controller?: EditorController): void
@@ -223,14 +224,15 @@ export function EditorSurface({ node, content, focusMode, onFocusMode, onSaved, 
       <button className="icon-button" title="撤销" aria-label="撤销" onClick={() => editor?.chain().focus().undo().run()}><Undo2 size={17} /></button>
       <button className="icon-button" title="重做" aria-label="重做" onClick={() => editor?.chain().focus().redo().run()}><Redo2 size={17} /></button><span className="toolbar-separator" />
       <button className={editor?.isActive('bold') ? 'toolbar-button active' : 'toolbar-button'} onClick={() => editor?.chain().focus().toggleBold().run()}>粗体</button>
-      <button className="toolbar-button" onClick={() => setProofreadOpen(true)}><ShieldCheck size={16} />校对{visibleLocalIssues.length > 0 ? ` ${visibleLocalIssues.length}` : ''}</button>
-      <button className="toolbar-button" onClick={() => onFocusMode(!focusMode)}><Focus size={16} />专注</button>
+      {!blackroomLocked && <button className="toolbar-button" onClick={() => setProofreadOpen(true)}><ShieldCheck size={16} />校对{visibleLocalIssues.length > 0 ? ` ${visibleLocalIssues.length}` : ''}</button>}
+      {!blackroomLocked && <button className="toolbar-button" onClick={() => onFocusMode(!focusMode)}><Focus size={16} />专注</button>}
+      {!blackroomLocked && onBlackroom && <button className="toolbar-button" onClick={onBlackroom}><Lock size={16} />小黑屋</button>}
       <span className="toolbar-spacer" /><span className={`save-indicator ${saveState}`} title={saveError}><Save size={14} />{saveState === 'saved' ? '已保存' : saveState === 'dirty' ? '等待保存' : saveState === 'saving' ? '保存中' : '保存失败，内容仍保留'}</span>
     </div>
     {saveError && <div className="save-error" role="alert">{saveError}</div>}
     <div className="writing-scroll"><article className="writing-page"><h1>{node.title}</h1><EditorContent editor={editor} /></article></div>
     <div className="editor-status"><span>{liveWordCount.toLocaleString()} 字</span>{visibleLocalIssues.length > 0 && <button className="proofread-count" onClick={() => setProofreadOpen(true)}>{visibleLocalIssues.length} 条校对提示</button>}</div>
-    {proofreadOpen && <aside className="proofread-drawer" aria-label="校对结果">
+    {proofreadOpen && !blackroomLocked && <aside className="proofread-drawer" aria-label="校对结果">
       <header><div><h2>校对</h2><p>本地规则可直接修正；AI 建议会先进入修改提案。</p></div><button className="icon-button" aria-label="关闭校对" onClick={() => setProofreadOpen(false)}><X size={18} /></button></header>
       <div className="proofread-actions"><button onClick={() => void runLocalLint(editor?.getText({ blockSeparator: '\n\n' }) ?? '')}>重新检查本地规则</button><button className="primary" disabled={proofreadBusy} onClick={() => void runAiProofread()}><Sparkles size={15} />{proofreadBusy ? 'AI 校对中…' : '运行 AI 校对'}</button></div>
       {proofreadError && <div className="inline-error" role="alert">{proofreadError}</div>}

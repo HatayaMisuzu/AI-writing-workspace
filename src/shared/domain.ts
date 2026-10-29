@@ -472,3 +472,21 @@ export interface TimelineEvent {
   updatedAt: number
 }
 export type TimelineSortMode = 'story' | 'chapter'
+
+/** F15 小黑屋：每次进入由作者填写，不预填。 */
+export type FocusLockMode = 'words' | 'minutes' | 'combo'
+export type FocusLockCombine = 'all' | 'any'
+export interface FocusLockInput { mode: FocusLockMode; words?: number; minutes?: number; combine?: FocusLockCombine }
+export interface FocusLock {
+  startedAt: number; mode: FocusLockMode; words?: number; minutes?: number; combine?: FocusLockCombine
+  baseAdded: number; baseDeleted: number; sessionDate: string
+}
+export interface FocusLockStatus {
+  locked: boolean; lock?: FocusLock
+  /** 净新增 = max(0, (Σadded − baseAdded) − (Σdeleted − baseDeleted))，仅统计已保存值 */
+  progressWords: number; elapsedMs: number; remainingMs?: number; reached: boolean
+}
+export interface FocusLastSession {
+  startedAt: number; endedAt: number; mode: FocusLockMode; words?: number; minutes?: number; combine?: FocusLockCombine
+  netWords: number; endedBy: 'reached' | 'emergency'
+}
