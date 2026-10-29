@@ -490,3 +490,6 @@ export interface FocusLastSession {
   startedAt: number; endedAt: number; mode: FocusLockMode; words?: number; minutes?: number; combine?: FocusLockCombine
   netWords: number; endedBy: 'reached' | 'emergency'
 }
+
+/** F14：人物悬停偏好（settings_json，无迁移）。 */
+export interface CharacterHoverPrefs { enabled: boolean; ignoredTerms: Array<{ characterId: string; term: string }>; enabledSingleTerms: Array<{ characterId: string; term: string }> }

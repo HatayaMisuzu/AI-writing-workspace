@@ -162,3 +162,11 @@ export const timelineEventSaveSchema = z.object({
   chapterId: idSchema.nullable().optional(),
   characterIds: z.array(idSchema).max(100).optional()
 }).strict()
+
+/** F14 人物悬停偏好：条目上限防止 settings_json 被无限撑大。 */
+const hoverTermRefSchema = z.object({ characterId: idSchema, term: z.string().trim().min(1).max(100) }).strict()
+export const hoverPrefsSchema = z.object({
+  enabled: z.boolean(),
+  ignoredTerms: z.array(hoverTermRefSchema).max(10_000),
+  enabledSingleTerms: z.array(hoverTermRefSchema).max(10_000)
+}).strict()

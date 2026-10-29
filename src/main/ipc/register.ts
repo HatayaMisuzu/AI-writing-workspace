@@ -27,6 +27,7 @@ import { WritingDailyService } from '../services/writing-daily-service'
 import { ForeshadowService } from '../services/foreshadow-service'
 import { TimelineService } from '../services/timeline-service'
 import { FocusLockService, assertNoFocusLockAnywhere, assertNotFocusLocked } from '../services/focus-lock-service'
+import { readHoverPrefs, writeHoverPrefs } from '../services/hover-prefs-service'
 import { installFocusEgressLock } from '../net/egress-guard'
 
 const trustedSender = (event: IpcMainInvokeEvent | IpcMainEvent): void => {
@@ -48,7 +49,7 @@ const handle = <T extends unknown[], R>(channel: string, fn: (...args: T) => R |
 }
 
 import {
-  idSchema, shortTextSchema, contentSchema, nonNegativeIntSchema, projectCreateSchema, documentCreateSchema, documentSaveSchema, noteSaveSchema, characterSaveSchema, providerInputSchema, modelSchema, routeSchema, patchProposalSchema, snapshotReasonSchema, aiStartSchema, aiPreviewContextSchema, noteSectionSchema, outlineSaveSchema, batchCreateChaptersSchema, writingGoalsInputSchema, chapterStatusSchema, foreshadowRegisterSchema, foreshadowSetStateSchema, foreshadowUpdateMetaSchema, timelineSortModeSchema, timelineEventSaveSchema, chapterWordRangeSchema, promptTemplateModeSchema, promptTemplateTextSchema, promptTemplateScopeSchema, promptCopySourceSchema
+  idSchema, shortTextSchema, contentSchema, nonNegativeIntSchema, projectCreateSchema, documentCreateSchema, documentSaveSchema, noteSaveSchema, characterSaveSchema, providerInputSchema, modelSchema, routeSchema, patchProposalSchema, snapshotReasonSchema, aiStartSchema, aiPreviewContextSchema, noteSectionSchema, outlineSaveSchema, batchCreateChaptersSchema, writingGoalsInputSchema, chapterStatusSchema, foreshadowRegisterSchema, foreshadowSetStateSchema, foreshadowUpdateMetaSchema, timelineSortModeSchema, timelineEventSaveSchema, chapterWordRangeSchema, promptTemplateModeSchema, promptTemplateTextSchema, promptTemplateScopeSchema, promptCopySourceSchema, hoverPrefsSchema
 } from './schemas'
 import { toUserFacingIpcError } from './validation-error'
 const parse = <T>(schema: z.ZodType<T>, value: unknown): T => schema.parse(value)
@@ -132,6 +133,9 @@ export function registerIpc(db: AppDatabase, codec: SecretCodec, network?: Netwo
   handle('notes:delete', (projectId: string, noteId: string) => projectContent.deleteNote(parse(idSchema, projectId), parse(idSchema, noteId)))
   handle('characters:list', (projectId: string) => projectContent.listCharacters(projectId))
   handle('characters:save', (input: unknown) => projectContent.saveCharacter(parse(characterSaveSchema, input)))
+  // F14：悬停偏好（settings_json，无迁移）；纯本地，小黑屋内也允许（不改正文、不联网）
+  handle('characters:hover-prefs', (projectId: string) => readHoverPrefs(db, parse(idSchema, projectId)))
+  handle('characters:set-hover-prefs', (projectId: string, prefs: unknown) => writeHoverPrefs(db, parse(idSchema, projectId), parse(hoverPrefsSchema, prefs)))
   handle('characters:delete', (projectId: string, characterId: string) => projectContent.deleteCharacter(parse(idSchema, projectId), parse(idSchema, characterId)))
   handle('memories:list', (projectId: string) => memories.list(projectId))
   handle('memories:confirm', (projectId: string, memoryId: string) => memories.confirm(parse(idSchema, projectId), parse(idSchema, memoryId), 'user'))

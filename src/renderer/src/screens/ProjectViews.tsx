@@ -1,6 +1,6 @@
 import { Check, Clock3, GitCompareArrows, Lightbulb, ListTree, Plus, RotateCcw, Save, Shield, Trash2, UserRound } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { Character, DocumentContent, DocumentNode, Idea, MemoryItem, NodeOutline, ProjectNote, Snapshot, TextPatch } from '../../../shared/domain'
+import type { Character, CharacterHoverPrefs, DocumentContent, DocumentNode, Idea, MemoryItem, NodeOutline, ProjectNote, Snapshot, TextPatch } from '../../../shared/domain'
 import { Modal } from '../components/Modal'
 import { buildHistoryDiff } from '../services/history-diff'
 import { buildOutlineCards, noteSectionLabel, outlinePreviewText, parseBatchOutlineLines } from '../services/outline-view'
@@ -8,6 +8,8 @@ import { CHARACTER_FIELD_KEYS, CHARACTER_FIELD_LABELS, type CharacterFieldKey } 
 import { normalizeCharacterFields, readFixedCharacterFields } from '../../../shared/character-fields'
 import { RelatedTimelineEvents } from './TimelineView'
 import { ConfirmAction } from '../components/ConfirmAction'
+import { isSingleCharTerm } from '../../../shared/name-matcher'
+import { notifyCharactersChanged } from '../services/character-hover'
 
 const snapshotReason = (reason: Snapshot['reason']): string => ({
   interval: '定时保存', large_delete: '大段删除前', ai_edit: 'AI 修改前', manual: '手动快照', pre_restore: '恢复前备份'
@@ -85,7 +87,7 @@ export function CharactersView({ projectId, onRegisterFlush, focusCharacterId, o
       id: current.id, projectId, name: current.name, aliases: current.aliases.split('、').map((part) => part.trim()).filter(Boolean),
       notes: current.notes, fields: normalizeCharacterFields(current.fields)
     })
-    selectDraft({ id: saved.id, name: saved.name, aliases: saved.aliases.join('、'), notes: saved.notes, fields: readFixedCharacterFields(saved.fields) }); load()
+    selectDraft({ id: saved.id, name: saved.name, aliases: saved.aliases.join('、'), notes: saved.notes, fields: readFixedCharacterFields(saved.fields) }); load(); notifyCharactersChanged(projectId)
   }, [load, projectId, selectDraft])
   useEffect(() => { onRegisterFlush(flush); return () => onRegisterFlush(undefined) }, [flush, onRegisterFlush])
   useEffect(() => {
@@ -95,7 +97,22 @@ export function CharactersView({ projectId, onRegisterFlush, focusCharacterId, o
   const setField = (key: CharacterFieldKey, value: string): void => {
     setDraft((prev) => ({ ...prev, fields: { ...prev.fields, [key]: value } }))
   }
-  return <section className="project-view content-manager" data-testid="characters-view"><header><div><h1>人物</h1><p>固定字段均可留空；不预置身份文案。所有内容只属于当前作品。</p></div><button onClick={() => void flush().then(() => selectDraft({ name: '', aliases: '', notes: '', fields: emptyFields() }))}><Plus size={16} />新建人物</button></header><div className="content-manager-grid"><aside>{items.map((item) => <button key={item.id} className={draft.id === item.id ? 'active' : ''} onClick={() => void flush().then(() => selectDraft({ id: item.id, name: item.name, aliases: item.aliases.join('、'), notes: item.notes, fields: readFixedCharacterFields(item.fields) }))}><UserRound size={16} /><strong>{item.name}</strong><small>{item.aliases.join('、') || item.fields.identity || '暂无别名'}</small></button>)}</aside><div className="note-editor character-editor"><label><span>姓名</span><input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></label><label><span>别名（用顿号分隔）</span><input value={draft.aliases} onChange={(event) => setDraft({ ...draft, aliases: event.target.value })} /></label>{CHARACTER_FIELD_KEYS.map((key) => <label key={key}><span>{CHARACTER_FIELD_LABELS[key]}</span>{key === 'currentState' || key === 'appearance' || key === 'personality' || key === 'goal' ? <textarea value={draft.fields[key]} onChange={(event) => setField(key, event.target.value)} rows={2} /> : <input value={draft.fields[key]} onChange={(event) => setField(key, event.target.value)} />}</label>)}<label><span>自由笔记</span><textarea value={draft.notes} onChange={(event) => setDraft({ ...draft, notes: event.target.value })} /></label>{draft.id && onOpenTimelineEvent && <RelatedTimelineEvents projectId={projectId} characterId={draft.id} onOpenEvent={onOpenTimelineEvent} />}<div><button className="primary" onClick={() => void flush()}><Save size={15} />保存</button>{draft.id && <ConfirmAction title="删除人物" message="确定删除这个人物吗？" onConfirm={async () => { await window.workspace.characters.delete(projectId, draft.id!); selectDraft({ name: '', aliases: '', notes: '', fields: emptyFields() }); load() }}><Trash2 size={15} />删除</ConfirmAction>}</div></div></div></section>
+  return <section className="project-view content-manager" data-testid="characters-view"><header><div><h1>人物</h1><p>固定字段均可留空；不预置身份文案。所有内容只属于当前作品。</p></div><button onClick={() => void flush().then(() => selectDraft({ name: '', aliases: '', notes: '', fields: emptyFields() }))}><Plus size={16} />新建人物</button></header><div className="content-manager-grid"><aside>{items.map((item) => <button key={item.id} className={draft.id === item.id ? 'active' : ''} onClick={() => void flush().then(() => selectDraft({ id: item.id, name: item.name, aliases: item.aliases.join('、'), notes: item.notes, fields: readFixedCharacterFields(item.fields) }))}><UserRound size={16} /><strong>{item.name}</strong><small>{item.aliases.join('、') || item.fields.identity || '暂无别名'}</small></button>)}</aside><div className="note-editor character-editor"><label><span>姓名</span><input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></label><label><span>别名（用顿号分隔）</span><input value={draft.aliases} onChange={(event) => setDraft({ ...draft, aliases: event.target.value })} /></label>{draft.id && <SingleCharHoverTerms projectId={projectId} character={items.find((item) => item.id === draft.id)} />}{CHARACTER_FIELD_KEYS.map((key) => <label key={key}><span>{CHARACTER_FIELD_LABELS[key]}</span>{key === 'currentState' || key === 'appearance' || key === 'personality' || key === 'goal' ? <textarea value={draft.fields[key]} onChange={(event) => setField(key, event.target.value)} rows={2} /> : <input value={draft.fields[key]} onChange={(event) => setField(key, event.target.value)} />}</label>)}<label><span>自由笔记</span><textarea value={draft.notes} onChange={(event) => setDraft({ ...draft, notes: event.target.value })} /></label>{draft.id && onOpenTimelineEvent && <RelatedTimelineEvents projectId={projectId} characterId={draft.id} onOpenEvent={onOpenTimelineEvent} />}<div><button className="primary" onClick={() => void flush()}><Save size={15} />保存</button>{draft.id && <ConfirmAction title="删除人物" message="确定删除这个人物吗？" onConfirm={async () => { await window.workspace.characters.delete(projectId, draft.id!); selectDraft({ name: '', aliases: '', notes: '', fields: emptyFields() }); load(); notifyCharactersChanged(projectId) }}><Trash2 size={15} />删除</ConfirmAction>}</div></div></div></section>
+}
+
+/** F14 Q1：单字名/别名默认不参与悬停与「本章提及」，作者可按别名打开（存 settings_json）。 */
+function SingleCharHoverTerms({ projectId, character }: { projectId: string; character?: Character }): React.JSX.Element | null {
+  const [prefs, setPrefs] = useState<CharacterHoverPrefs>()
+  useEffect(() => { void window.workspace.characters.hoverPrefs(projectId).then(setPrefs) }, [projectId])
+  const terms = character ? [...new Set([character.name, ...character.aliases].map((term) => term.trim()).filter((term) => isSingleCharTerm(term)))] : []
+  if (!character || !terms.length || !prefs) return null
+  const enabled = (term: string): boolean => prefs.enabledSingleTerms.some((item) => item.characterId === character.id && item.term === term)
+  const toggle = async (term: string): Promise<void> => {
+    const rest = prefs.enabledSingleTerms.filter((item) => !(item.characterId === character.id && item.term === term))
+    const next = await window.workspace.characters.setHoverPrefs(projectId, { ...prefs, enabledSingleTerms: enabled(term) ? rest : [...rest, { characterId: character.id, term }] })
+    setPrefs(next); notifyCharactersChanged(projectId)
+  }
+  return <div className="single-char-hover" data-testid="single-char-hover"><small>单字别名不参与悬停</small>{terms.map((term) => <label key={term} className="inline-check"><input type="checkbox" checked={enabled(term)} onChange={() => void toggle(term)} />让「{term}」参与悬停和本章提及</label>)}</div>
 }
 
 export function HistoryView({ projectId, document, currentContent, onRestored }: { projectId: string; document?: DocumentNode; currentContent?: DocumentContent; onRestored?(content: Awaited<ReturnType<typeof window.workspace.snapshots.restore>>): void }): React.JSX.Element {

@@ -5,7 +5,7 @@ import type {
   ContextBundle,
   AITaskEnvelope, Character, ChatCursor, ChatMessage, ChatThread, DigestStatus, DocumentContent, DocumentNode, Idea, LocalLintIssue,
   MemoryItem, MemoryProposal, ModelConfig, NodeOutline, Project, ProjectNote, ProjectType, ProofreadIssue, ProviderConfig,
-  ProviderInput, RoutedTask, SearchResult, Snapshot, TaskModelRoute, TextOrigin, TextPatch, WritingDailyRow, WritingGoals, ChapterWordRange, ChapterStatus, SerialProgress, StockpileSummary, ForeshadowEntry, ForeshadowState, TimelineEvent, TimelineSortMode, FocusLockInput, FocusLockStatus, FocusLastSession
+  ProviderInput, RoutedTask, SearchResult, Snapshot, TaskModelRoute, TextOrigin, TextPatch, WritingDailyRow, WritingGoals, ChapterWordRange, ChapterStatus, SerialProgress, StockpileSummary, ForeshadowEntry, ForeshadowState, TimelineEvent, TimelineSortMode, FocusLockInput, FocusLockStatus, FocusLastSession, CharacterHoverPrefs
 } from './domain'
 
 export interface WorkspaceApi {
@@ -57,6 +57,9 @@ export interface WorkspaceApi {
     list(projectId: string): Promise<Character[]>
     save(input: { id?: string; projectId: string; name: string; aliases?: string[]; notes?: string; fields?: Record<string, string> }): Promise<Character>
     delete(projectId: string, characterId: string): Promise<void>
+    /** F14：人物悬停偏好（总开关 / 此别名不提示 / 单字别名打开）。 */
+    hoverPrefs(projectId: string): Promise<CharacterHoverPrefs>
+    setHoverPrefs(projectId: string, prefs: CharacterHoverPrefs): Promise<CharacterHoverPrefs>
   }
   foreshadows: {
     listLedger(projectId: string): Promise<ForeshadowEntry[]>

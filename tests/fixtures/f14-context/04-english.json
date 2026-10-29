@@ -1,0 +1,32 @@
+{
+ "name": "04-english",
+ "chapter": "Ann and Bob met at the dock. Annie waved.",
+ "characters": [
+  {
+   "id": "c1",
+   "name": "Ann",
+   "aliases": [
+    "Annie"
+   ],
+   "notes": "harbor pilot",
+   "fields": {},
+   "updatedAt": 1002
+  },
+  {
+   "id": "c2",
+   "name": "Bob",
+   "aliases": [],
+   "notes": "sailor",
+   "fields": {},
+   "updatedAt": 1001
+  },
+  {
+   "id": "c3",
+   "name": "Carl",
+   "aliases": [],
+   "notes": "absent",
+   "fields": {},
+   "updatedAt": 1003
+  }
+ ]
+}

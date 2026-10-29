@@ -1,0 +1,39 @@
+{
+ "name": "02-multi-alias",
+ "chapter": "阿栀把信交给顾三。小栀子笑了。",
+ "characters": [
+  {
+   "id": "c1",
+   "name": "林栀",
+   "aliases": [
+    "小栀子",
+    "阿栀"
+   ],
+   "notes": "雾港来的姑娘",
+   "fields": {
+    "identity": "信使"
+   },
+   "updatedAt": 1003
+  },
+  {
+   "id": "c2",
+   "name": "顾言",
+   "aliases": [
+    "顾三"
+   ],
+   "notes": "排行第三",
+   "fields": {},
+   "updatedAt": 1002
+  },
+  {
+   "id": "c3",
+   "name": "韩松",
+   "aliases": [
+    "老韩"
+   ],
+   "notes": "未出场",
+   "fields": {},
+   "updatedAt": 1004
+  }
+ ]
+}

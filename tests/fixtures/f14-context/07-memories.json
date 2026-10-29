@@ -1,0 +1,31 @@
+{
+ "name": "07-memories",
+ "chapter": "城门在雾港以北。",
+ "characters": [
+  {
+   "id": "c1",
+   "name": "守门人",
+   "aliases": [],
+   "notes": "未出场",
+   "fields": {},
+   "updatedAt": 1001
+  }
+ ],
+ "memories": [
+  {
+   "id": "m1",
+   "content": "城门：子时关闭",
+   "t": 1002
+  },
+  {
+   "id": "m2",
+   "content": "雾港：常年有雾",
+   "t": 1003
+  },
+  {
+   "id": "m3",
+   "content": "北境：寒冷",
+   "t": 1004
+  }
+ ]
+}

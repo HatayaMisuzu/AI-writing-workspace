@@ -29,8 +29,9 @@ export const memoryEntryNames = (content: string): string[] => {
 export const isMentioned = (names: string[], haystack: string): boolean =>
   names.some((name) => name.trim().length > 0 && haystack.includes(name.trim()))
 
-export const rankSetting = (input: SettingRankInput, haystack: string): SettingRank =>
-  ({ ...input, mentioned: isMentioned(input.names, haystack) })
+/** F14：mentioned 由调用方用 name-matcher 统一算出时传入；未传则沿用旧的子串判断。 */
+export const rankSetting = (input: SettingRankInput, haystack: string, mentioned?: boolean): SettingRank =>
+  ({ ...input, mentioned: mentioned ?? isMentioned(input.names, haystack) })
 
 export const compareSettingRank = (a: SettingRank, b: SettingRank): number =>
   Number(b.pinned) - Number(a.pinned)

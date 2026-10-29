@@ -535,3 +535,19 @@ button.link { border: 0; background: none; padding: 0; color: var(--accent, #2f6
 .blackroom-modes { border: 0; padding: 0; margin: 0; display: flex; gap: 14px; font-size: 12px; }
 .blackroom-modes legend { margin-bottom: 6px; }
 .app-body.is-blackroom { grid-template-columns: 1fr; }
+
+/* F14 人物悬停：虚线、低对比度下划线；卡片只读 */
+.manuscript-editor .character-hit { text-decoration: underline dashed; text-decoration-color: color-mix(in srgb, currentColor 35%, transparent); text-underline-offset: 3px; cursor: help; }
+.character-hover-card { position: fixed; z-index: 60; width: 300px; max-height: 360px; overflow: auto; padding: 12px 14px; border-radius: 10px; border: 1px solid var(--border, #ddd); background: var(--surface, #fff); box-shadow: 0 8px 24px rgba(0,0,0,.14); font-size: 13px; }
+.character-hover-card section + section { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border, #eee); }
+.character-hover-card header { display: flex; gap: 8px; align-items: baseline; }
+.character-hover-card header small, .character-hover-card .hover-card-hint { opacity: .65; }
+.character-hover-card p { margin: 6px 0; white-space: pre-wrap; }
+.character-hover-card dl { margin: 6px 0; display: grid; gap: 2px; }
+.character-hover-card dl div { display: flex; gap: 6px; }
+.character-hover-card dt { opacity: .65; min-width: 4em; }
+.character-hover-card dd { margin: 0; }
+.character-hover-card footer { display: flex; gap: 8px; margin-top: 10px; }
+.character-hover-card .link-button { background: none; border: 0; padding: 0; color: var(--accent, #2f6fdd); cursor: pointer; }
+.editor-status .hover-degraded { opacity: .7; margin-left: 12px; }
+.single-char-hover { display: grid; gap: 4px; font-size: 12px; opacity: .85; }

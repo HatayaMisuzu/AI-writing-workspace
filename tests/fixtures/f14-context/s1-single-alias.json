@@ -1,0 +1,36 @@
+{
+ "name": "s1-single-alias",
+ "singleChar": true,
+ "allowDiff": [
+  "c1"
+ ],
+ "chapter": "栀把信交给顾言。",
+ "characters": [
+  {
+   "id": "c1",
+   "name": "林栀",
+   "aliases": [
+    "栀"
+   ],
+   "notes": "雾港来的姑娘",
+   "fields": {},
+   "updatedAt": 1001
+  },
+  {
+   "id": "c2",
+   "name": "顾言",
+   "aliases": [],
+   "notes": "排行第三",
+   "fields": {},
+   "updatedAt": 1002
+  },
+  {
+   "id": "c3",
+   "name": "韩松",
+   "aliases": [],
+   "notes": "未出场",
+   "fields": {},
+   "updatedAt": 1003
+  }
+ ]
+}

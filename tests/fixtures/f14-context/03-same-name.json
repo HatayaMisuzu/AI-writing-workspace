@@ -1,0 +1,30 @@
+{
+ "name": "03-same-name",
+ "chapter": "苏白站在桥头。",
+ "characters": [
+  {
+   "id": "c1",
+   "name": "苏白",
+   "aliases": [],
+   "notes": "城南的苏白，铁匠",
+   "fields": {},
+   "updatedAt": 1002
+  },
+  {
+   "id": "c2",
+   "name": "苏白",
+   "aliases": [],
+   "notes": "城北的苏白，书生",
+   "fields": {},
+   "updatedAt": 1001
+  },
+  {
+   "id": "c3",
+   "name": "罗衣",
+   "aliases": [],
+   "notes": "未出场",
+   "fields": {},
+   "updatedAt": 1003
+  }
+ ]
+}
