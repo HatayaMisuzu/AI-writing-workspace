@@ -1,0 +1,3164 @@
+[
+ {
+  "text": "他说",
+  "issues": []
+ },
+ {
+  "text": "。",
+  "issues": []
+ },
+ {
+  "text": "..",
+  "issues": [
+   {
+    "from": 0,
+    "to": 2,
+    "severity": "warning",
+    "kind": "repeated_punctuation",
+    "message": "连续句点可能是误输入；中文句末通常使用句号。",
+    "replacement": "。",
+    "documentId": "doc-2",
+    "sourceRevision": 2,
+    "sourceTextHash": "2-19ggirx-1jid8pd",
+    "originalText": ".."
+   }
+  ]
+ },
+ {
+  "text": "...",
+  "issues": [
+   {
+    "from": 0,
+    "to": 3,
+    "severity": "warning",
+    "kind": "ellipsis",
+    "message": "中文省略号通常使用六点“……”。",
+    "replacement": "……",
+    "documentId": "doc-3",
+    "sourceRevision": 3,
+    "sourceTextHash": "3-2zi049-5guzo5",
+    "originalText": "..."
+   }
+  ]
+ },
+ {
+  "text": "....",
+  "issues": [
+   {
+    "from": 1,
+    "to": 4,
+    "severity": "warning",
+    "kind": "ellipsis",
+    "message": "中文省略号通常使用六点“……”。",
+    "replacement": "……",
+    "documentId": "doc-4",
+    "sourceRevision": 4,
+    "sourceTextHash": "4-b50bdh-knaieh",
+    "originalText": "..."
+   }
+  ]
+ },
+ {
+  "text": "。。",
+  "issues": [
+   {
+    "from": 0,
+    "to": 2,
+    "severity": "warning",
+    "kind": "repeated_punctuation",
+    "message": "连续句号可能是误输入。",
+    "replacement": "。",
+    "documentId": "doc-5",
+    "sourceRevision": 5,
+    "sourceTextHash": "2-11ishxh-1j2yz95",
+    "originalText": "。。"
+   }
+  ]
+ },
+ {
+  "text": "！！",
+  "issues": [
+   {
+    "from": 0,
+    "to": 2,
+    "severity": "warning",
+    "kind": "repeated_punctuation",
+    "message": "连续感叹号可能是误输入。",
+    "replacement": "！",
+    "documentId": "doc-6",
+    "sourceRevision": 6,
+    "sourceTextHash": "2-p22rcn-i0dieb",
+    "originalText": "！！"
+   }
+  ]
+ },
+ {
+  "text": "!!",
+  "issues": [
+   {
+    "from": 0,
+    "to": 2,
+    "severity": "warning",
+    "kind": "repeated_punctuation",
+    "message": "连续感叹号可能是误输入。",
+    "replacement": "！",
+    "documentId": "doc-7",
+    "sourceRevision": 7,
+    "sourceTextHash": "2-1321dpz-1wq3xk3",
+    "originalText": "!!"
+   }
+  ]
+ },
+ {
+  "text": "？？",
+  "issues": [
+   {
+    "from": 0,
+    "to": 2,
+    "severity": "warning",
+    "kind": "repeated_punctuation",
+    "message": "连续问号可能是误输入。",
+    "replacement": "？",
+    "documentId": "doc-8",
+    "sourceRevision": 8,
+    "sourceTextHash": "2-18f45cz-1iq22bj",
+    "originalText": "？？"
+   }
+  ]
+ },
+ {
+  "text": "??",
+  "issues": [
+   {
+    "from": 0,
+    "to": 2,
+    "severity": "warning",
+    "kind": "repeated_punctuation",
+    "message": "连续问号可能是误输入。",
+    "replacement": "？",
+    "documentId": "doc-9",
+    "sourceRevision": 9,
+    "sourceTextHash": "2-59k2hv-1ksqxkv",
+    "originalText": "??"
+   }
+  ]
+ },
+ {
+  "text": "—",
+  "issues": [
+   {
+    "from": 0,
+    "to": 1,
+    "severity": "warning",
+    "kind": "dash",
+    "message": "中文破折号通常使用两个连续字符“——”。",
+    "replacement": "——",
+    "documentId": "doc-10",
+    "sourceRevision": 10,
+    "sourceTextHash": "1-4s9bsz-70tov",
+    "originalText": "—"
+   }
+  ]
+ },
+ {
+  "text": "——",
+  "issues": []
+ },
+ {
+  "text": "你好 世界",
+  "issues": [
+   {
+    "from": 1,
+    "to": 4,
+    "severity": "warning",
+    "kind": "space",
+    "message": "中文字符之间可能有多余空格。",
+    "replacement": "好世",
+    "documentId": "doc-12",
+    "sourceRevision": 12,
+    "sourceTextHash": "5-nk7jxc-16h320s",
+    "originalText": "好 世"
+   }
+  ]
+ },
+ {
+  "text": "中  文",
+  "issues": [
+   {
+    "from": 0,
+    "to": 4,
+    "severity": "warning",
+    "kind": "space",
+    "message": "中文字符之间可能有多余空格。",
+    "replacement": "中文",
+    "documentId": "doc-13",
+    "sourceRevision": 13,
+    "sourceTextHash": "4-ge565-ao7op",
+    "originalText": "中  文"
+   }
+  ]
+ },
+ {
+  "text": "，,",
+  "issues": [
+   {
+    "from": 0,
+    "to": 2,
+    "severity": "warning",
+    "kind": "mixed_punctuation",
+    "message": "中英文标点可能重复。",
+    "replacement": "，",
+    "documentId": "doc-14",
+    "sourceRevision": 14,
+    "sourceTextHash": "2-1vi5ebp-1rbkt5",
+    "originalText": "，,"
+   }
+  ]
+ },
+ {
+  "text": "。.",
+  "issues": [
+   {
+    "from": 0,
+    "to": 2,
+    "severity": "warning",
+    "kind": "mixed_punctuation",
+    "message": "中英文标点可能重复。",
+    "replacement": "。",
+    "documentId": "doc-15",
+    "sourceRevision": 15,
+    "sourceTextHash": "2-1bhet81-emivhp",
+    "originalText": "。."
+   }
+  ]
+ },
+ {
+  "text": "：:",
+  "issues": [
+   {
+    "from": 0,
+    "to": 2,
+    "severity": "warning",
+    "kind": "mixed_punctuation",
+    "message": "中英文标点可能重复。",
+    "replacement": "：",
+    "documentId": "doc-16",
+    "sourceRevision": 16,
+    "sourceTextHash": "2-111jbf9-1iahxe1",
+    "originalText": "：:"
+   }
+  ]
+ },
+ {
+  "text": "“",
+  "issues": [
+   {
+    "from": 0,
+    "to": 1,
+    "severity": "warning",
+    "kind": "quote",
+    "message": "发现没有闭合的左引号。",
+    "documentId": "doc-17",
+    "sourceRevision": 17,
+    "sourceTextHash": "1-7065cr-1m2zgtz",
+    "originalText": "“"
+   }
+  ]
+ },
+ {
+  "text": "”",
+  "issues": [
+   {
+    "from": 0,
+    "to": 1,
+    "severity": "warning",
+    "kind": "quote",
+    "message": "发现没有对应左引号的右引号。",
+    "documentId": "doc-18",
+    "sourceRevision": 18,
+    "sourceTextHash": "1-6q6jns-kxa9ho",
+    "originalText": "”"
+   }
+  ]
+ },
+ {
+  "text": "在坐",
+  "issues": []
+ },
+ {
+  "text": "abc",
+  "issues": []
+ },
+ {
+  "text": " ",
+  "issues": []
+ },
+ {
+  "text": "\n\n",
+  "issues": []
+ },
+ {
+  "text": "……",
+  "issues": []
+ },
+ {
+  "text": "的的",
+  "issues": []
+ },
+ {
+  "text": "你好,世界",
+  "issues": []
+ },
+ {
+  "text": "（括号）",
+  "issues": []
+ },
+ {
+  "text": "(半角)",
+  "issues": []
+ },
+ {
+  "text": "123",
+  "issues": []
+ },
+ {
+  "text": "Hello...",
+  "issues": [
+   {
+    "from": 5,
+    "to": 8,
+    "severity": "warning",
+    "kind": "ellipsis",
+    "message": "中文省略号通常使用六点“……”。",
+    "replacement": "……",
+    "documentId": "doc-29",
+    "sourceRevision": 29,
+    "sourceTextHash": "8-10uyb4n-1bameyz",
+    "originalText": "..."
+   }
+  ]
+ },
+ {
+  "text": "；;",
+  "issues": [
+   {
+    "from": 0,
+    "to": 2,
+    "severity": "warning",
+    "kind": "mixed_punctuation",
+    "message": "中英文标点可能重复。",
+    "replacement": "；",
+    "documentId": "doc-30",
+    "sourceRevision": 30,
+    "sourceTextHash": "2-1y22nv7-1nb01b",
+    "originalText": "；;"
+   }
+  ]
+ },
+ {
+  "text": "。.你好 世界的的”你好,世界！！??。。你好,世界\n\n（括号）",
+  "issues": [
+   {
+    "from": 0,
+    "to": 2,
+    "severity": "warning",
+    "kind": "mixed_punctuation",
+    "message": "中英文标点可能重复。",
+    "replacement": "。",
+    "documentId": "doc-31",
+    "sourceRevision": 31,
+    "sourceTextHash": "w-cgucg9-1vwcdx",
+    "originalText": "。."
+   },
+   {
+    "from": 3,
+    "to": 6,
+    "severity": "warning",
+    "kind": "space",
+    "message": "中文字符之间可能有多余空格。",
+    "replacement": "好世",
+    "documentId": "doc-31",
+    "sourceRevision": 31,
+    "sourceTextHash": "w-cgucg9-1vwcdx",
+    "originalText": "好 世"
+   },
+   {
+    "from": 9,
+    "to": 10,
+    "severity": "warning",
+    "kind": "quote",
+    "message": "发现没有对应左引号的右引号。",
+    "documentId": "doc-31",
+    "sourceRevision": 31,
+    "sourceTextHash": "w-cgucg9-1vwcdx",
+    "originalText": "”"
+   },
+   {
+    "from": 15,
+    "to": 17,
+    "severity": "warning",
+    "kind": "repeated_punctuation",
+    "message": "连续感叹号可能是误输入。",
+    "replacement": "！",
+    "documentId": "doc-31",
+    "sourceRevision": 31,
+    "sourceTextHash": "w-cgucg9-1vwcdx",
+    "originalText": "！！"
+   },
+   {
+    "from": 16,
+    "to": 18,
+    "severity": "warning",
+    "kind": "mixed_punctuation",
+    "message": "中英文标点可能重复。",
+    "replacement": "！",
+    "documentId": "doc-31",
+    "sourceRevision": 31,
+    "sourceTextHash": "w-cgucg9-1vwcdx",
+    "originalText": "！?"
+   },
+   {
+    "from": 17,
+    "to": 19,
+    "severity": "warning",
+    "kind": "repeated_punctuation",
+    "message": "连续问号可能是误输入。",
+    "replacement": "？",
+    "documentId": "doc-31",
+    "sourceRevision": 31,
+    "sourceTextHash": "w-cgucg9-1vwcdx",
+    "originalText": "??"
+   },
+   {
+    "from": 19,
+    "to": 21,
+    "severity": "warning",
+    "kind": "repeated_punctuation",
+    "message": "连续句号可能是误输入。",
+    "replacement": "。",
+    "documentId": "doc-31",
+    "sourceRevision": 31,
+    "sourceTextHash": "w-cgucg9-1vwcdx",
+    "originalText": "。。"
+   }
+  ]
+ },
+ {
+  "text": "123abc，,”中  文。....",
+  "issues": [
+   {
+    "from": 6,
+    "to": 8,
+    "severity": "warning",
+    "kind": "mixed_punctuation",
+    "message": "中英文标点可能重复。",
+    "replacement": "，",
+    "documentId": "doc-32",
+    "sourceRevision": 32,
+    "sourceTextHash": "i-1jhlaxa-ueq9ea",
+    "originalText": "，,"
+   },
+   {
+    "from": 8,
+    "to": 9,
+    "severity": "warning",
+    "kind": "quote",
+    "message": "发现没有对应左引号的右引号。",
+    "documentId": "doc-32",
+    "sourceRevision": 32,
+    "sourceTextHash": "i-1jhlaxa-ueq9ea",
+    "originalText": "”"
+   },
+   {
+    "from": 9,
+    "to": 13,
+    "severity": "warning",
+    "kind": "space",
+    "message": "中文字符之间可能有多余空格。",
+    "replacement": "中文",
+    "documentId": "doc-32",
+    "sourceRevision": 32,
+    "sourceTextHash": "i-1jhlaxa-ueq9ea",
+    "originalText": "中  文"
+   },
+   {
+    "from": 13,
+    "to": 15,
+    "severity": "warning",
+    "kind": "mixed_punctuation",
+    "message": "中英文标点可能重复。",
+    "replacement": "。",
+    "documentId": "doc-32",
+    "sourceRevision": 32,
+    "sourceTextHash": "i-1jhlaxa-ueq9ea",
+    "originalText": "。."
+   },
+   {
+    "from": 15,
+    "to": 18,
+    "severity": "warning",
+    "kind": "ellipsis",
+    "message": "中文省略号通常使用六点“……”。",
+    "replacement": "……",
+    "documentId": "doc-32",
+    "sourceRevision": 32,
+    "sourceTextHash": "i-1jhlaxa-ueq9ea",
+    "originalText": "..."
+   }
+  ]
+ },
+ {
+  "text": "。.”\n\n（括号）“（括号） Hello...中  文……，,",
+  "issues": [
+   {
+    "from": 0,
+    "to": 2,
+    "severity": "warning",
+    "kind": "mixed_punctuation",
+    "message": "中英文标点可能重复。",
+    "replacement": "。",
+    "documentId": "doc-33",
+    "sourceRevision": 33,
+    "sourceTextHash": "v-snls5e-1pstavy",
+    "originalText": "。."
+   },
+   {
+    "from": 2,
+    "to": 3,
+    "severity": "warning",
+    "kind": "quote",
+    "message": "发现没有对应左引号的右引号。",
+    "documentId": "doc-33",
+    "sourceRevision": 33,
+    "sourceTextHash": "v-snls5e-1pstavy",
+    "originalText": "”"
+   },
+   {
+    "from": 9,
+    "to": 10,
+    "severity": "warning",
+    "kind": "quote",
+    "message": "发现没有闭合的左引号。",
+    "documentId": "doc-33",
+    "sourceRevision": 33,
+    "sourceTextHash": "v-snls5e-1pstavy",
+    "originalText": "“"
+   },
+   {
+    "from": 20,
+    "to": 23,
+    "severity": "warning",
+    "kind": "ellipsis",
+    "message": "中文省略号通常使用六点“……”。",
+    "replacement": "……",
+    "documentId": "doc-33",
+    "sourceRevision": 33,
+    "sourceTextHash": "v-snls5e-1pstavy",
+    "originalText": "..."
+   },
+   {
+    "from": 23,
+    "to": 27,
+    "severity": "warning",
+    "kind": "space",
+    "message": "中文字符之间可能有多余空格。",
+    "replacement": "中文",
+    "documentId": "doc-33",
+    "sourceRevision": 33,
+    "sourceTextHash": "v-snls5e-1pstavy",
+    "originalText": "中  文"
+   },
+   {
+    "from": 29,
+    "to": 31,
+    "severity": "warning",
+    "kind": "mixed_punctuation",
+    "message": "中英文标点可能重复。",
+    "replacement": "，",
+    "documentId": "doc-33",
+    "sourceRevision": 33,
+    "sourceTextHash": "v-snls5e-1pstavy",
+    "originalText": "，,"
+   }
+  ]
+ },
+ {
+  "text": "。。”（括号）！！（括号）你好,世界：:，,\n\n在坐他说",
+  "issues": [
+   {
+    "from": 0,
+    "to": 2,
+    "severity": "warning",
+    "kind": "repeated_punctuation",
+    "message": "连续句号可能是误输入。",
+    "replacement": "。",
+    "documentId": "doc-34",
+    "sourceRevision": 34,
+    "sourceTextHash": "s-1a7npkf-1lk8gpv",
+    "originalText": "。。"
+   },
+   {
+    "from": 2,
+    "to": 3,
+    "severity": "warning",
+    "kind": "quote",
+    "message": "发现没有对应左引号的右引号。",
+    "documentId": "doc-34",
+    "sourceRevision": 34,
+    "sourceTextHash": "s-1a7npkf-1lk8gpv",
+    "originalText": "”"
+   },
+   {
+    "from": 7,
+    "to": 9,
+    "severity": "warning",
+    "kind": "repeated_punctuation",
+    "message": "连续感叹号可能是误输入。",
+    "replacement": "！",
+    "documentId": "doc-34",
+    "sourceRevision": 34,
+    "sourceTextHash": "s-1a7npkf-1lk8gpv",
+    "originalText": "！！"
+   },
+   {
+    "from": 18,
+    "to": 20,
+    "severity": "warning",
+    "kind": "mixed_punctuation",
+    "message": "中英文标点可能重复。",
+    "replacement": "：",
+    "documentId": "doc-34",
+    "sourceRevision": 34,
+    "sourceTextHash": "s-1a7npkf-1lk8gpv",
+    "originalText": "：:"
+   },
+   {
+    "from": 20,
+    "to": 22,
+    "severity": "warning",
+    "kind": "mixed_punctuation",
+    "message": "中英文标点可能重复。",
+    "replacement": "，",
+    "documentId": "doc-34",
+    "sourceRevision": 34,
+    "sourceTextHash": "s-1a7npkf-1lk8gpv",
+    "originalText": "，,"
+   }
+  ]
+ },
+ {
+  "text": "...？？（括号）...！！...??。.他说你好 世界..",
+  "issues": [
+   {
+    "from": 0,
+    "to": 3,
+    "severity": "warning",
+    "kind": "ellipsis",
+    "message": "中文省略号通常使用六点“……”。",
+    "replacement": "……",
+    "documentId": "doc-35",
+    "sourceRevision": 35,
+    "sourceTextHash": "u-ikuils-xxrdvw",
+    "originalText": "..."
+   },
+   {
+    "from": 3,
+    "to": 5,
+    "severity": "warning",
+    "kind": "repeated_punctuation",
+    "message": "连续问号可能是误输入。",
+    "replacement": "？",
+    "documentId": "doc-35",
+    "sourceRevision": 35,
+    "sourceTextHash": "u-ikuils-xxrdvw",
+    "originalText": "？？"
+   },
+   {
+    "from": 9,
+    "to": 12,
+    "severity": "warning",
+    "kind": "ellipsis",
+    "message": "中文省略号通常使用六点“……”。",
+    "replacement": "……",
+    "documentId": "doc-35",
+    "sourceRevision": 35,
+    "sourceTextHash": "u-ikuils-xxrdvw",
+    "originalText": "..."
+   },
+   {
+    "from": 12,
+    "to": 14,
+    "severity": "warning",
+    "kind": "repeated_punctuation",
+    "message": "连续感叹号可能是误输入。",
+    "replacement": "！",
+    "documentId": "doc-35",
+    "sourceRevision": 35,
+    "sourceTextHash": "u-ikuils-xxrdvw",
+    "originalText": "！！"
+   },
+   {
+    "from": 13,
+    "to": 15,
+    "severity": "warning",
+    "kind": "mixed_punctuation",
+    "message": "中英文标点可能重复。",
+    "replacement": "！",
+    "documentId": "doc-35",
+    "sourceRevision": 35,
+    "sourceTextHash": "u-ikuils-xxrdvw",
+    "originalText": "！."
+   },
+   {
+    "from": 14,
+    "to": 17,
+    "severity": "warning",
+    "kind": "ellipsis",
+    "message": "中文省略号通常使用六点“……”。",
+    "replacement": "……",
+    "documentId": "doc-35",
+    "sourceRevision": 35,
+    "sourceTextHash": "u-ikuils-xxrdvw",
+    "originalText": "..."
+   },
+   {
+    "from": 17,
+    "to": 19,
+    "severity": "warning",
+    "kind": "repeated_punctuation",
+    "message": "连续问号可能是误输入。",
+    "replacement": "？",
+    "documentId": "doc-35",
+    "sourceRevision": 35,
+    "sourceTextHash": "u-ikuils-xxrdvw",
+    "originalText": "??"
+   },
+   {
+    "from": 19,
+    "to": 21,
+    "severity": "warning",
+    "kind": "mixed_punctuation",
+    "message": "中英文标点可能重复。",
+    "replacement": "。",
+    "documentId": "doc-35",
+    "sourceRevision": 35,
+    "sourceTextHash": "u-ikuils-xxrdvw",
+    "originalText": "。."
+   },
+   {
+    "from": 24,
+    "to": 27,
+    "severity": "warning",
+    "kind": "space",
+    "message": "中文字符之间可能有多余空格。",
+    "replacement": "好世",
+    "documentId": "doc-35",
+    "sourceRevision": 35,
+    "sourceTextHash": "u-ikuils-xxrdvw",
+    "originalText": "好 世"
+   },
+   {
+    "from": 28,
+    "to": 30,
+    "severity": "warning",
+    "kind": "repeated_punctuation",
+    "message": "连续句点可能是误输入；中文句末通常使用句号。",
+    "replacement": "。",
+    "documentId": "doc-35",
+    "sourceRevision": 35,
+    "sourceTextHash": "u-ikuils-xxrdvw",
+    "originalText": ".."
+   }
+  ]
+ },
+ {
+  "text": "——？？\n\n。中  文??在坐”——中  文!!",
+  "issues": [
+   {
+    "from": 2,
+    "to": 4,
+    "severity": "warning",
+    "kind": "repeated_punctuation",
+    "message": "连续问号可能是误输入。",
+    "replacement": "？",
+    "documentId": "doc-36",
+    "sourceRevision": 36,
+    "sourceTextHash": "o-kejz4e-139axtm",
+    "originalText": "？？"
+   },
+   {
+    "from": 7,
+    "to": 11,
+    "severity": "warning",
+    "kind": "space",
+    "message": "中文字符之间可能有多余空格。",
+    "replacement": "中文",
+    "documentId": "doc-36",
+    "sourceRevision": 36,
+    "sourceTextHash": "o-kejz4e-139axtm",
+    "originalText": "中  文"
+   },
+   {
+    "from": 11,
+    "to": 13,
+    "severity": "warning",
+    "kind": "repeated_punctuation",
+    "message": "连续问号可能是误输入。",
+    "replacement": "？",
+    "documentId": "doc-36",
+    "sourceRevision": 36,
+    "sourceTextHash": "o-kejz4e-139axtm",
+    "originalText": "??"
+   },
+   {
+    "from": 15,
+    "to": 16,
+    "severity": "warning",
+    "kind": "quote",
+    "message": "发现没有对应左引号的右引号。",
+    "documentId": "doc-36",
+    "sourceRevision": 36,
+    "sourceTextHash": "o-kejz4e-139axtm",
+    "originalText": "”"
+   },
+   {
+    "from": 18,
+    "to": 22,
+    "severity": "warning",
+    "kind": "space",
+    "message": "中文字符之间可能有多余空格。",
+    "replacement": "中文",
+    "documentId": "doc-36",
+    "sourceRevision": 36,
+    "sourceTextHash": "o-kejz4e-139axtm",
+    "originalText": "中  文"
+   },
+   {
+    "from": 22,
+    "to": 24,
+    "severity": "warning",
+    "kind": "repeated_punctuation",
+    "message": "连续感叹号可能是误输入。",
+    "replacement": "！",
+    "documentId": "doc-36",
+    "sourceRevision": 36,
+    "sourceTextHash": "o-kejz4e-139axtm",
+    "originalText": "!!"
+   }
+  ]
+ },
+ {
+  "text": "”：:。",
+  "issues": [
+   {
+    "from": 0,
+    "to": 1,
+    "severity": "warning",
+    "kind": "quote",
+    "message": "发现没有对应左引号的右引号。",
+    "documentId": "doc-37",
+    "sourceRevision": 37,
+    "sourceTextHash": "4-167ck1e-1mnk466",
+    "originalText": "”"
+   },
+   {
+    "from": 1,
+    "to": 3,
+    "severity": "warning",
+    "kind": "mixed_punctuation",
+    "message": "中英文标点可能重复。",
+    "replacement": "：",
+    "documentId": "doc-37",
+    "sourceRevision": 37,
+    "sourceTextHash": "4-167ck1e-1mnk466",
+    "originalText": "：:"
+   }
+  ]
+ },
+ {
+  "text": "”他说\n\n!!。...“？？。.!!……",
+  "issues": [
+   {
+    "from": 0,
+    "to": 1,
+    "severity": "warning",
+    "kind": "quote",
+    "message": "发现没有对应左引号的右引号。",
+    "documentId": "doc-38",
+    "sourceRevision": 38,
+    "sourceTextHash": "k-1vhlwtg-4y3lrk",
+    "originalText": "”"
+   },
+   {
+    "from": 5,
+    "to": 7,
+    "severity": "warning",
+    "kind": "repeated_punctuation",
+    "message": "连续感叹号可能是误输入。",
+    "replacement": "！",
+    "documentId": "doc-38",
+    "sourceRevision": 38,
+    "sourceTextHash": "k-1vhlwtg-4y3lrk",
+    "originalText": "!!"
+   },
+   {
+    "from": 7,
+    "to": 9,
+    "severity": "warning",
+    "kind": "mixed_punctuation",
+    "message": "中英文标点可能重复。",
+    "replacement": "。",
+    "documentId": "doc-38",
+    "sourceRevision": 38,
+    "sourceTextHash": "k-1vhlwtg-4y3lrk",
+    "originalText": "。."
+   },
+   {
+    "from": 8,
+    "to": 11,
+    "severity": "warning",
+    "kind": "ellipsis",
+    "message": "中文省略号通常使用六点“……”。",
+    "replacement": "……",
+    "documentId": "doc-38",
+    "sourceRevision": 38,
+    "sourceTextHash": "k-1vhlwtg-4y3lrk",
+    "originalText": "..."
+   },
+   {
+    "from": 11,
+    "to": 12,
+    "severity": "warning",
+    "kind": "quote",
+    "message": "发现没有闭合的左引号。",
+    "documentId": "doc-38",
+    "sourceRevision": 38,
+    "sourceTextHash": "k-1vhlwtg-4y3lrk",
+    "originalText": "“"
+   },
+   {
+    "from": 12,
+    "to": 14,
+    "severity": "warning",
+    "kind": "repeated_punctuation",
+    "message": "连续问号可能是误输入。",
+    "replacement": "？",
+    "documentId": "doc-38",
+    "sourceRevision": 38,
+    "sourceTextHash": "k-1vhlwtg-4y3lrk",
+    "originalText": "？？"
+   },
+   {
+    "from": 14,
+    "to": 16,
+    "severity": "warning",
+    "kind": "mixed_punctuation",
+    "message": "中英文标点可能重复。",
+    "replacement": "。",
+    "documentId": "doc-38",
+    "sourceRevision": 38,
+    "sourceTextHash": "k-1vhlwtg-4y3lrk",
+    "originalText": "。."
+   },
+   {
+    "from": 16,
+    "to": 18,
+    "severity": "warning",
+    "kind": "repeated_punctuation",
+    "message": "连续感叹号可能是误输入。",
+    "replacement": "！",
+    "documentId": "doc-38",
+    "sourceRevision": 38,
+    "sourceTextHash": "k-1vhlwtg-4y3lrk",
+    "originalText": "!!"
+   }
+  ]
+ },
+ {
+  "text": "他说你好 世界；;!!abc ...",
+  "issues": [
+   {
+    "from": 3,
+    "to": 6,
+    "severity": "warning",
+    "kind": "space",
+    "message": "中文字符之间可能有多余空格。",
+    "replacement": "好世",
+    "documentId": "doc-39",
+    "sourceRevision": 39,
+    "sourceTextHash": "i-1y9cel0-10rkpog",
+    "originalText": "好 世"
+   },
+   {
+    "from": 7,
+    "to": 9,
+    "severity": "warning",
+    "kind": "mixed_punctuation",
+    "message": "中英文标点可能重复。",
+    "replacement": "；",
+    "documentId": "doc-39",
+    "sourceRevision": 39,
+    "sourceTextHash": "i-1y9cel0-10rkpog",
+    "originalText": "；;"
+   },
+   {
+    "from": 9,
+    "to": 11,
+    "severity": "warning",
+    "kind": "repeated_punctuation",
+    "message": "连续感叹号可能是误输入。",
+    "replacement": "！",
+    "documentId": "doc-39",
+    "sourceRevision": 39,
+    "sourceTextHash": "i-1y9cel0-10rkpog",
+    "originalText": "!!"
+   },
+   {
+    "from": 15,
+    "to": 18,
+    "severity": "warning",
+    "kind": "ellipsis",
+    "message": "中文省略号通常使用六点“……”。",
+    "replacement": "……",
+    "documentId": "doc-39",
+    "sourceRevision": 39,
+    "sourceTextHash": "i-1y9cel0-10rkpog",
+    "originalText": "..."
+   }
+  ]
+ },
+ {
+  "text": "。—（括号）abc。.你好,世界；;在坐在坐（括号）...",
+  "issues": [
+   {
+    "from": 1,
+    "to": 2,
+    "severity": "warning",
+    "kind": "dash",
+    "message": "中文破折号通常使用两个连续字符“——”。",
+    "replacement": "——",
+    "documentId": "doc-40",
+    "sourceRevision": 40,
+    "sourceTextHash": "t-1fadpg8-1k1t8p0",
+    "originalText": "—"
+   },
+   {
+    "from": 9,
+    "to": 11,
+    "severity": "warning",
+    "kind": "mixed_punctuation",
+    "message": "中英文标点可能重复。",
+    "replacement": "。",
+    "documentId": "doc-40",
+    "sourceRevision": 40,
+    "sourceTextHash": "t-1fadpg8-1k1t8p0",
+    "originalText": "。."
+   },
+   {
+    "from": 16,
+    "to": 18,
+    "severity": "warning",
+    "kind": "mixed_punctuation",
+    "message": "中英文标点可能重复。",
+    "replacement": "；",
+    "documentId": "doc-40",
+    "sourceRevision": 40,
+    "sourceTextHash": "t-1fadpg8-1k1t8p0",
+    "originalText": "；;"
+   },
+   {
+    "from": 26,
+    "to": 29,
+    "severity": "warning",
+    "kind": "ellipsis",
+    "message": "中文省略号通常使用六点“……”。",
+    "replacement": "……",
+    "documentId": "doc-40",
+    "sourceRevision": 40,
+    "sourceTextHash": "t-1fadpg8-1k1t8p0",
+    "originalText": "..."
+   }
+  ]
+ },
+ {
+  "text": "他说——的的 你好,世界在坐他说",
+  "issues": [
+   {
+    "from": 5,
+    "to": 8,
+    "severity": "warning",
+    "kind": "space",
+    "message": "中文字符之间可能有多余空格。",
+    "replacement": "的你",
+    "documentId": "doc-41",
+    "sourceRevision": 41,
+    "sourceTextHash": "g-wynsrq-c0bh8q",
+    "originalText": "的 你"
+   }
+  ]
+ },
+ {
+  "text": "。。。。??你好 世界——你好 世界（括号）—，,(半角)....",
+  "issues": [
+   {
+    "from": 0,
+    "to": 4,
+    "severity": "warning",
+    "kind": "repeated_punctuation",
+    "message": "连续句号可能是误输入。",
+    "replacement": "。",
+    "documentId": "doc-42",
+    "sourceRevision": 42,
+    "sourceTextHash": "x-oli4es-kr0sq8",
+    "originalText": "。。。。"
+   },
+   {
+    "from": 3,
+    "to": 5,
+    "severity": "warning",
+    "kind": "mixed_punctuation",
+    "message": "中英文标点可能重复。",
+    "replacement": "。",
+    "documentId": "doc-42",
+    "sourceRevision": 42,
+    "sourceTextHash": "x-oli4es-kr0sq8",
+    "originalText": "。?"
+   },
+   {
+    "from": 4,
+    "to": 6,
+    "severity": "warning",
+    "kind": "repeated_punctuation",
+    "message": "连续问号可能是误输入。",
+    "replacement": "？",
+    "documentId": "doc-42",
+    "sourceRevision": 42,
+    "sourceTextHash": "x-oli4es-kr0sq8",
+    "originalText": "??"
+   },
+   {
+    "from": 7,
+    "to": 10,
+    "severity": "warning",
+    "kind": "space",
+    "message": "中文字符之间可能有多余空格。",
+    "replacement": "好世",
+    "documentId": "doc-42",
+    "sourceRevision": 42,
+    "sourceTextHash": "x-oli4es-kr0sq8",
+    "originalText": "好 世"
+   },
+   {
+    "from": 14,
+    "to": 17,
+    "severity": "warning",
+    "kind": "space",
+    "message": "中文字符之间可能有多余空格。",
+    "replacement": "好世",
+    "documentId": "doc-42",
+    "sourceRevision": 42,
+    "sourceTextHash": "x-oli4es-kr0sq8",
+    "originalText": "好 世"
+   },
+   {
+    "from": 22,
+    "to": 23,
+    "severity": "warning",
+    "kind": "dash",
+    "message": "中文破折号通常使用两个连续字符“——”。",
+    "replacement": "——",
+    "documentId": "doc-42",
+    "sourceRevision": 42,
+    "sourceTextHash": "x-oli4es-kr0sq8",
+    "originalText": "—"
+   },
+   {
+    "from": 23,
+    "to": 25,
+    "severity": "warning",
+    "kind": "mixed_punctuation",
+    "message": "中英文标点可能重复。",
+    "replacement": "，",
+    "documentId": "doc-42",
+    "sourceRevision": 42,
+    "sourceTextHash": "x-oli4es-kr0sq8",
+    "originalText": "，,"
+   },
+   {
+    "from": 30,
+    "to": 33,
+    "severity": "warning",
+    "kind": "ellipsis",
+    "message": "中文省略号通常使用六点“……”。",
+    "replacement": "……",
+    "documentId": "doc-42",
+    "sourceRevision": 42,
+    "sourceTextHash": "x-oli4es-kr0sq8",
+    "originalText": "..."
+   }
+  ]
+ },
+ {
+  "text": "（括号）\n\nHello...——你好,世界\n\n\n\n",
+  "issues": [
+   {
+    "from": 11,
+    "to": 14,
+    "severity": "warning",
+    "kind": "ellipsis",
+    "message": "中文省略号通常使用六点“……”。",
+    "replacement": "……",
+    "documentId": "doc-43",
+    "sourceRevision": 43,
+    "sourceTextHash": "p-132pai-15m7xty",
+    "originalText": "..."
+   }
+  ]
+ },
+ {
+  "text": "；;你好 世界的的……你好 世界Hello.....",
+  "issues": [
+   {
+    "from": 0,
+    "to": 2,
+    "severity": "warning",
+    "kind": "mixed_punctuation",
+    "message": "中英文标点可能重复。",
+    "replacement": "；",
+    "documentId": "doc-44",
+    "sourceRevision": 44,
+    "sourceTextHash": "q-1dzxsz-55nn07",
+    "originalText": "；;"
+   },
+   {
+    "from": 3,
+    "to": 6,
+    "severity": "warning",
+    "kind": "space",
+    "message": "中文字符之间可能有多余空格。",
+    "replacement": "好世",
+    "documentId": "doc-44",
+    "sourceRevision": 44,
+    "sourceTextHash": "q-1dzxsz-55nn07",
+    "originalText": "好 世"
+   },
+   {
+    "from": 12,
+    "to": 15,
+    "severity": "warning",
+    "kind": "space",
+    "message": "中文字符之间可能有多余空格。",
+    "replacement": "好世",
+    "documentId": "doc-44",
+    "sourceRevision": 44,
+    "sourceTextHash": "q-1dzxsz-55nn07",
+    "originalText": "好 世"
+   },
+   {
+    "from": 23,
+    "to": 26,
+    "severity": "warning",
+    "kind": "ellipsis",
+    "message": "中文省略号通常使用六点“……”。",
+    "replacement": "……",
+    "documentId": "doc-44",
+    "sourceRevision": 44,
+    "sourceTextHash": "q-1dzxsz-55nn07",
+    "originalText": "..."
+   }
+  ]
+ },
+ {
+  "text": "（括号）；;Hello...\n\n\n\n......(半角)；;！！123",
+  "issues": [
+   {
+    "from": 4,
+    "to": 6,
+    "severity": "warning",
+    "kind": "mixed_punctuation",
+    "message": "中英文标点可能重复。",
+    "replacement": "；",
+    "documentId": "doc-45",
+    "sourceRevision": 45,
+    "sourceTextHash": "z-en4v9y-zihw7e",
+    "originalText": "；;"
+   },
+   {
+    "from": 11,
+    "to": 14,
+    "severity": "warning",
+    "kind": "ellipsis",
+    "message": "中文省略号通常使用六点“……”。",
+    "replacement": "……",
+    "documentId": "doc-45",
+    "sourceRevision": 45,
+    "sourceTextHash": "z-en4v9y-zihw7e",
+    "originalText": "..."
+   },
+   {
+    "from": 21,
+    "to": 24,
+    "severity": "warning",
+    "kind": "ellipsis",
+    "message": "中文省略号通常使用六点“……”。",
+    "replacement": "……",
+    "documentId": "doc-45",
+    "sourceRevision": 45,
+    "sourceTextHash": "z-en4v9y-zihw7e",
+    "originalText": "..."
+   },
+   {
+    "from": 28,
+    "to": 30,
+    "severity": "warning",
+    "kind": "mixed_punctuation",
+    "message": "中英文标点可能重复。",
+    "replacement": "；",
+    "documentId": "doc-45",
+    "sourceRevision": 45,
+    "sourceTextHash": "z-en4v9y-zihw7e",
+    "originalText": "；;"
+   },
+   {
+    "from": 30,
+    "to": 32,
+    "severity": "warning",
+    "kind": "repeated_punctuation",
+    "message": "连续感叹号可能是误输入。",
+    "replacement": "！",
+    "documentId": "doc-45",
+    "sourceRevision": 45,
+    "sourceTextHash": "z-en4v9y-zihw7e",
+    "originalText": "！！"
+   }
+  ]
+ },
+ {
+  "text": "”你好 世界\n\n ...，,的的123你好,世界——你好,世界",
+  "issues": [
+   {
+    "from": 0,
+    "to": 1,
+    "severity": "warning",
+    "kind": "quote",
+    "message": "发现没有对应左引号的右引号。",
+    "documentId": "doc-46",
+    "sourceRevision": 46,
+    "sourceTextHash": "v-1c74e1l-10qdunh",
+    "originalText": "”"
+   },
+   {
+    "from": 2,
+    "to": 5,
+    "severity": "warning",
+    "kind": "space",
+    "message": "中文字符之间可能有多余空格。",
+    "replacement": "好世",
+    "documentId": "doc-46",
+    "sourceRevision": 46,
+    "sourceTextHash": "v-1c74e1l-10qdunh",
+    "originalText": "好 世"
+   },
+   {
+    "from": 9,
+    "to": 12,
+    "severity": "warning",
+    "kind": "ellipsis",
+    "message": "中文省略号通常使用六点“……”。",
+    "replacement": "……",
+    "documentId": "doc-46",
+    "sourceRevision": 46,
+    "sourceTextHash": "v-1c74e1l-10qdunh",
+    "originalText": "..."
+   },
+   {
+    "from": 12,
+    "to": 14,
+    "severity": "warning",
+    "kind": "mixed_punctuation",
+    "message": "中英文标点可能重复。",
+    "replacement": "，",
+    "documentId": "doc-46",
+    "sourceRevision": 46,
+    "sourceTextHash": "v-1c74e1l-10qdunh",
+    "originalText": "，,"
+   }
+  ]
+ },
+ {
+  "text": "？？。。，,(半角)”：:，,",
+  "issues": [
+   {
+    "from": 0,
+    "to": 2,
+    "severity": "warning",
+    "kind": "repeated_punctuation",
+    "message": "连续问号可能是误输入。",
+    "replacement": "？",
+    "documentId": "doc-47",
+    "sourceRevision": 47,
+    "sourceTextHash": "f-1u439yf-1f7rb03",
+    "originalText": "？？"
+   },
+   {
+    "from": 2,
+    "to": 4,
+    "severity": "warning",
+    "kind": "repeated_punctuation",
+    "message": "连续句号可能是误输入。",
+    "replacement": "。",
+    "documentId": "doc-47",
+    "sourceRevision": 47,
+    "sourceTextHash": "f-1u439yf-1f7rb03",
+    "originalText": "。。"
+   },
+   {
+    "from": 4,
+    "to": 6,
+    "severity": "warning",
+    "kind": "mixed_punctuation",
+    "message": "中英文标点可能重复。",
+    "replacement": "，",
+    "documentId": "doc-47",
+    "sourceRevision": 47,
+    "sourceTextHash": "f-1u439yf-1f7rb03",
+    "originalText": "，,"
+   },
+   {
+    "from": 10,
+    "to": 11,
+    "severity": "warning",
+    "kind": "quote",
+    "message": "发现没有对应左引号的右引号。",
+    "documentId": "doc-47",
+    "sourceRevision": 47,
+    "sourceTextHash": "f-1u439yf-1f7rb03",
+    "originalText": "”"
+   },
+   {
+    "from": 11,
+    "to": 13,
+    "severity": "warning",
+    "kind": "mixed_punctuation",
+    "message": "中英文标点可能重复。",
+    "replacement": "：",
+    "documentId": "doc-47",
+    "sourceRevision": 47,
+    "sourceTextHash": "f-1u439yf-1f7rb03",
+    "originalText": "：:"
+   },
+   {
+    "from": 13,
+    "to": 15,
+    "severity": "warning",
+    "kind": "mixed_punctuation",
+    "message": "中英文标点可能重复。",
+    "replacement": "，",
+    "documentId": "doc-47",
+    "sourceRevision": 47,
+    "sourceTextHash": "f-1u439yf-1f7rb03",
+    "originalText": "，,"
+   }
+  ]
+ },
+ {
+  "text": "……。。（括号）他说（括号）。。你好,世界在坐“在坐；;",
+  "issues": [
+   {
+    "from": 2,
+    "to": 4,
+    "severity": "warning",
+    "kind": "repeated_punctuation",
+    "message": "连续句号可能是误输入。",
+    "replacement": "。",
+    "documentId": "doc-48",
+    "sourceRevision": 48,
+    "sourceTextHash": "s-ug54i8-fasr1o",
+    "originalText": "。。"
+   },
+   {
+    "from": 14,
+    "to": 16,
+    "severity": "warning",
+    "kind": "repeated_punctuation",
+    "message": "连续句号可能是误输入。",
+    "replacement": "。",
+    "documentId": "doc-48",
+    "sourceRevision": 48,
+    "sourceTextHash": "s-ug54i8-fasr1o",
+    "originalText": "。。"
+   },
+   {
+    "from": 23,
+    "to": 24,
+    "severity": "warning",
+    "kind": "quote",
+    "message": "发现没有闭合的左引号。",
+    "documentId": "doc-48",
+    "sourceRevision": 48,
+    "sourceTextHash": "s-ug54i8-fasr1o",
+    "originalText": "“"
+   },
+   {
+    "from": 26,
+    "to": 28,
+    "severity": "warning",
+    "kind": "mixed_punctuation",
+    "message": "中英文标点可能重复。",
+    "replacement": "；",
+    "documentId": "doc-48",
+    "sourceRevision": 48,
+    "sourceTextHash": "s-ug54i8-fasr1o",
+    "originalText": "；;"
+   }
+  ]
+ },
+ {
+  "text": "。。\n\n你好 世界：:。；;中  文？？。他说Hello...",
+  "issues": [
+   {
+    "from": 0,
+    "to": 2,
+    "severity": "warning",
+    "kind": "repeated_punctuation",
+    "message": "连续句号可能是误输入。",
+    "replacement": "。",
+    "documentId": "doc-49",
+    "sourceRevision": 49,
+    "sourceTextHash": "v-4pvb4c-8dq75s",
+    "originalText": "。。"
+   },
+   {
+    "from": 5,
+    "to": 8,
+    "severity": "warning",
+    "kind": "space",
+    "message": "中文字符之间可能有多余空格。",
+    "replacement": "好世",
+    "documentId": "doc-49",
+    "sourceRevision": 49,
+    "sourceTextHash": "v-4pvb4c-8dq75s",
+    "originalText": "好 世"
+   },
+   {
+    "from": 9,
+    "to": 11,
+    "severity": "warning",
+    "kind": "mixed_punctuation",
+    "message": "中英文标点可能重复。",
+    "replacement": "：",
+    "documentId": "doc-49",
+    "sourceRevision": 49,
+    "sourceTextHash": "v-4pvb4c-8dq75s",
+    "originalText": "：:"
+   },
+   {
+    "from": 12,
+    "to": 14,
+    "severity": "warning",
+    "kind": "mixed_punctuation",
+    "message": "中英文标点可能重复。",
+    "replacement": "；",
+    "documentId": "doc-49",
+    "sourceRevision": 49,
+    "sourceTextHash": "v-4pvb4c-8dq75s",
+    "originalText": "；;"
+   },
+   {
+    "from": 14,
+    "to": 18,
+    "severity": "warning",
+    "kind": "space",
+    "message": "中文字符之间可能有多余空格。",
+    "replacement": "中文",
+    "documentId": "doc-49",
+    "sourceRevision": 49,
+    "sourceTextHash": "v-4pvb4c-8dq75s",
+    "originalText": "中  文"
+   },
+   {
+    "from": 18,
+    "to": 20,
+    "severity": "warning",
+    "kind": "repeated_punctuation",
+    "message": "连续问号可能是误输入。",
+    "replacement": "？",
+    "documentId": "doc-49",
+    "sourceRevision": 49,
+    "sourceTextHash": "v-4pvb4c-8dq75s",
+    "originalText": "？？"
+   },
+   {
+    "from": 28,
+    "to": 31,
+    "severity": "warning",
+    "kind": "ellipsis",
+    "message": "中文省略号通常使用六点“……”。",
+    "replacement": "……",
+    "documentId": "doc-49",
+    "sourceRevision": 49,
+    "sourceTextHash": "v-4pvb4c-8dq75s",
+    "originalText": "..."
+   }
+  ]
+ },
+ {
+  "text": "：:他说，,",
+  "issues": [
+   {
+    "from": 0,
+    "to": 2,
+    "severity": "warning",
+    "kind": "mixed_punctuation",
+    "message": "中英文标点可能重复。",
+    "replacement": "：",
+    "documentId": "doc-50",
+    "sourceRevision": 50,
+    "sourceTextHash": "6-1g2sxvb-r7g217",
+    "originalText": "：:"
+   },
+   {
+    "from": 4,
+    "to": 6,
+    "severity": "warning",
+    "kind": "mixed_punctuation",
+    "message": "中英文标点可能重复。",
+    "replacement": "，",
+    "documentId": "doc-50",
+    "sourceRevision": 50,
+    "sourceTextHash": "6-1g2sxvb-r7g217",
+    "originalText": "，,"
+   }
+  ]
+ },
+ {
+  "text": "...（括号）abc",
+  "issues": [
+   {
+    "from": 0,
+    "to": 3,
+    "severity": "warning",
+    "kind": "ellipsis",
+    "message": "中文省略号通常使用六点“……”。",
+    "replacement": "……",
+    "documentId": "doc-51",
+    "sourceRevision": 51,
+    "sourceTextHash": "a-1ro3d4r-1tccb7z",
+    "originalText": "..."
+   }
+  ]
+ },
+ {
+  "text": "Hello...？？。.。。。你好 世界abc(半角)中  文....。。",
+  "issues": [
+   {
+    "from": 5,
+    "to": 8,
+    "severity": "warning",
+    "kind": "ellipsis",
+    "message": "中文省略号通常使用六点“……”。",
+    "replacement": "……",
+    "documentId": "doc-52",
+    "sourceRevision": 52,
+    "sourceTextHash": "11-wzlein-fpiw9f",
+    "originalText": "..."
+   },
+   {
+    "from": 8,
+    "to": 10,
+    "severity": "warning",
+    "kind": "repeated_punctuation",
+    "message": "连续问号可能是误输入。",
+    "replacement": "？",
+    "documentId": "doc-52",
+    "sourceRevision": 52,
+    "sourceTextHash": "11-wzlein-fpiw9f",
+    "originalText": "？？"
+   },
+   {
+    "from": 10,
+    "to": 12,
+    "severity": "warning",
+    "kind": "mixed_punctuation",
+    "message": "中英文标点可能重复。",
+    "replacement": "。",
+    "documentId": "doc-52",
+    "sourceRevision": 52,
+    "sourceTextHash": "11-wzlein-fpiw9f",
+    "originalText": "。."
+   },
+   {
+    "from": 12,
+    "to": 15,
+    "severity": "warning",
+    "kind": "repeated_punctuation",
+    "message": "连续句号可能是误输入。",
+    "replacement": "。",
+    "documentId": "doc-52",
+    "sourceRevision": 52,
+    "sourceTextHash": "11-wzlein-fpiw9f",
+    "originalText": "。。。"
+   },
+   {
+    "from": 16,
+    "to": 19,
+    "severity": "warning",
+    "kind": "space",
+    "message": "中文字符之间可能有多余空格。",
+    "replacement": "好世",
+    "documentId": "doc-52",
+    "sourceRevision": 52,
+    "sourceTextHash": "11-wzlein-fpiw9f",
+    "originalText": "好 世"
+   },
+   {
+    "from": 27,
+    "to": 31,
+    "severity": "warning",
+    "kind": "space",
+    "message": "中文字符之间可能有多余空格。",
+    "replacement": "中文",
+    "documentId": "doc-52",
+    "sourceRevision": 52,
+    "sourceTextHash": "11-wzlein-fpiw9f",
+    "originalText": "中  文"
+   },
+   {
+    "from": 32,
+    "to": 35,
+    "severity": "warning",
+    "kind": "ellipsis",
+    "message": "中文省略号通常使用六点“……”。",
+    "replacement": "……",
+    "documentId": "doc-52",
+    "sourceRevision": 52,
+    "sourceTextHash": "11-wzlein-fpiw9f",
+    "originalText": "..."
+   },
+   {
+    "from": 35,
+    "to": 37,
+    "severity": "warning",
+    "kind": "repeated_punctuation",
+    "message": "连续句号可能是误输入。",
+    "replacement": "。",
+    "documentId": "doc-52",
+    "sourceRevision": 52,
+    "sourceTextHash": "11-wzlein-fpiw9f",
+    "originalText": "。。"
+   }
+  ]
+ },
+ {
+  "text": "—：:……你好,世界你好,世界。。 ",
+  "issues": [
+   {
+    "from": 0,
+    "to": 1,
+    "severity": "warning",
+    "kind": "dash",
+    "message": "中文破折号通常使用两个连续字符“——”。",
+    "replacement": "——",
+    "documentId": "doc-53",
+    "sourceRevision": 53,
+    "sourceTextHash": "i-1wvbejr-1m7o3t7",
+    "originalText": "—"
+   },
+   {
+    "from": 1,
+    "to": 3,
+    "severity": "warning",
+    "kind": "mixed_punctuation",
+    "message": "中英文标点可能重复。",
+    "replacement": "：",
+    "documentId": "doc-53",
+    "sourceRevision": 53,
+    "sourceTextHash": "i-1wvbejr-1m7o3t7",
+    "originalText": "：:"
+   },
+   {
+    "from": 15,
+    "to": 17,
+    "severity": "warning",
+    "kind": "repeated_punctuation",
+    "message": "连续句号可能是误输入。",
+    "replacement": "。",
+    "documentId": "doc-53",
+    "sourceRevision": 53,
+    "sourceTextHash": "i-1wvbejr-1m7o3t7",
+    "originalText": "。。"
+   }
+  ]
+ },
+ {
+  "text": "……：:\n\n的的！！他说？？",
+  "issues": [
+   {
+    "from": 2,
+    "to": 4,
+    "severity": "warning",
+    "kind": "mixed_punctuation",
+    "message": "中英文标点可能重复。",
+    "replacement": "：",
+    "documentId": "doc-54",
+    "sourceRevision": 54,
+    "sourceTextHash": "e-119f67v-l6h0zj",
+    "originalText": "：:"
+   },
+   {
+    "from": 8,
+    "to": 10,
+    "severity": "warning",
+    "kind": "repeated_punctuation",
+    "message": "连续感叹号可能是误输入。",
+    "replacement": "！",
+    "documentId": "doc-54",
+    "sourceRevision": 54,
+    "sourceTextHash": "e-119f67v-l6h0zj",
+    "originalText": "！！"
+   },
+   {
+    "from": 12,
+    "to": 14,
+    "severity": "warning",
+    "kind": "repeated_punctuation",
+    "message": "连续问号可能是误输入。",
+    "replacement": "？",
+    "documentId": "doc-54",
+    "sourceRevision": 54,
+    "sourceTextHash": "e-119f67v-l6h0zj",
+    "originalText": "？？"
+   }
+  ]
+ },
+ {
+  "text": "“的的中  文(半角)Hello...你好,世界(半角)。。\n\n123”",
+  "issues": [
+   {
+    "from": 3,
+    "to": 7,
+    "severity": "warning",
+    "kind": "space",
+    "message": "中文字符之间可能有多余空格。",
+    "replacement": "中文",
+    "documentId": "doc-55",
+    "sourceRevision": 55,
+    "sourceTextHash": "10-1gxobj5-17i5fnh",
+    "originalText": "中  文"
+   },
+   {
+    "from": 16,
+    "to": 19,
+    "severity": "warning",
+    "kind": "ellipsis",
+    "message": "中文省略号通常使用六点“……”。",
+    "replacement": "……",
+    "documentId": "doc-55",
+    "sourceRevision": 55,
+    "sourceTextHash": "10-1gxobj5-17i5fnh",
+    "originalText": "..."
+   },
+   {
+    "from": 28,
+    "to": 30,
+    "severity": "warning",
+    "kind": "repeated_punctuation",
+    "message": "连续句号可能是误输入。",
+    "replacement": "。",
+    "documentId": "doc-55",
+    "sourceRevision": 55,
+    "sourceTextHash": "10-1gxobj5-17i5fnh",
+    "originalText": "。。"
+   }
+  ]
+ },
+ {
+  "text": "……你好 世界(半角)；;...\n\nHello...",
+  "issues": [
+   {
+    "from": 3,
+    "to": 6,
+    "severity": "warning",
+    "kind": "space",
+    "message": "中文字符之间可能有多余空格。",
+    "replacement": "好世",
+    "documentId": "doc-56",
+    "sourceRevision": 56,
+    "sourceTextHash": "q-k3rhi3-14o0re7",
+    "originalText": "好 世"
+   },
+   {
+    "from": 11,
+    "to": 13,
+    "severity": "warning",
+    "kind": "mixed_punctuation",
+    "message": "中英文标点可能重复。",
+    "replacement": "；",
+    "documentId": "doc-56",
+    "sourceRevision": 56,
+    "sourceTextHash": "q-k3rhi3-14o0re7",
+    "originalText": "；;"
+   },
+   {
+    "from": 13,
+    "to": 16,
+    "severity": "warning",
+    "kind": "ellipsis",
+    "message": "中文省略号通常使用六点“……”。",
+    "replacement": "……",
+    "documentId": "doc-56",
+    "sourceRevision": 56,
+    "sourceTextHash": "q-k3rhi3-14o0re7",
+    "originalText": "..."
+   },
+   {
+    "from": 23,
+    "to": 26,
+    "severity": "warning",
+    "kind": "ellipsis",
+    "message": "中文省略号通常使用六点“……”。",
+    "replacement": "……",
+    "documentId": "doc-56",
+    "sourceRevision": 56,
+    "sourceTextHash": "q-k3rhi3-14o0re7",
+    "originalText": "..."
+   }
+  ]
+ },
+ {
+  "text": "你好 世界你好,世界（括号）。。的的的的中  文(半角) ！！....",
+  "issues": [
+   {
+    "from": 1,
+    "to": 4,
+    "severity": "warning",
+    "kind": "space",
+    "message": "中文字符之间可能有多余空格。",
+    "replacement": "好世",
+    "documentId": "doc-57",
+    "sourceRevision": 57,
+    "sourceTextHash": "z-1gy0tmy-hfm74m",
+    "originalText": "好 世"
+   },
+   {
+    "from": 14,
+    "to": 16,
+    "severity": "warning",
+    "kind": "repeated_punctuation",
+    "message": "连续句号可能是误输入。",
+    "replacement": "。",
+    "documentId": "doc-57",
+    "sourceRevision": 57,
+    "sourceTextHash": "z-1gy0tmy-hfm74m",
+    "originalText": "。。"
+   },
+   {
+    "from": 20,
+    "to": 24,
+    "severity": "warning",
+    "kind": "space",
+    "message": "中文字符之间可能有多余空格。",
+    "replacement": "中文",
+    "documentId": "doc-57",
+    "sourceRevision": 57,
+    "sourceTextHash": "z-1gy0tmy-hfm74m",
+    "originalText": "中  文"
+   },
+   {
+    "from": 29,
+    "to": 31,
+    "severity": "warning",
+    "kind": "repeated_punctuation",
+    "message": "连续感叹号可能是误输入。",
+    "replacement": "！",
+    "documentId": "doc-57",
+    "sourceRevision": 57,
+    "sourceTextHash": "z-1gy0tmy-hfm74m",
+    "originalText": "！！"
+   },
+   {
+    "from": 30,
+    "to": 32,
+    "severity": "warning",
+    "kind": "mixed_punctuation",
+    "message": "中英文标点可能重复。",
+    "replacement": "！",
+    "documentId": "doc-57",
+    "sourceRevision": 57,
+    "sourceTextHash": "z-1gy0tmy-hfm74m",
+    "originalText": "！."
+   },
+   {
+    "from": 32,
+    "to": 35,
+    "severity": "warning",
+    "kind": "ellipsis",
+    "message": "中文省略号通常使用六点“……”。",
+    "replacement": "……",
+    "documentId": "doc-57",
+    "sourceRevision": 57,
+    "sourceTextHash": "z-1gy0tmy-hfm74m",
+    "originalText": "..."
+   }
+  ]
+ },
+ {
+  "text": "”123....，,你好 世界??？？",
+  "issues": [
+   {
+    "from": 0,
+    "to": 1,
+    "severity": "warning",
+    "kind": "quote",
+    "message": "发现没有对应左引号的右引号。",
+    "documentId": "doc-58",
+    "sourceRevision": 58,
+    "sourceTextHash": "j-s10ndf-z9yvkf",
+    "originalText": "”"
+   },
+   {
+    "from": 5,
+    "to": 8,
+    "severity": "warning",
+    "kind": "ellipsis",
+    "message": "中文省略号通常使用六点“……”。",
+    "replacement": "……",
+    "documentId": "doc-58",
+    "sourceRevision": 58,
+    "sourceTextHash": "j-s10ndf-z9yvkf",
+    "originalText": "..."
+   },
+   {
+    "from": 8,
+    "to": 10,
+    "severity": "warning",
+    "kind": "mixed_punctuation",
+    "message": "中英文标点可能重复。",
+    "replacement": "，",
+    "documentId": "doc-58",
+    "sourceRevision": 58,
+    "sourceTextHash": "j-s10ndf-z9yvkf",
+    "originalText": "，,"
+   },
+   {
+    "from": 11,
+    "to": 14,
+    "severity": "warning",
+    "kind": "space",
+    "message": "中文字符之间可能有多余空格。",
+    "replacement": "好世",
+    "documentId": "doc-58",
+    "sourceRevision": 58,
+    "sourceTextHash": "j-s10ndf-z9yvkf",
+    "originalText": "好 世"
+   },
+   {
+    "from": 15,
+    "to": 19,
+    "severity": "warning",
+    "kind": "repeated_punctuation",
+    "message": "连续问号可能是误输入。",
+    "replacement": "？",
+    "documentId": "doc-58",
+    "sourceRevision": 58,
+    "sourceTextHash": "j-s10ndf-z9yvkf",
+    "originalText": "??？？"
+   }
+  ]
+ },
+ {
+  "text": "..中  文!!你好 世界？？..(半角)——。.。.abc",
+  "issues": [
+   {
+    "from": 0,
+    "to": 2,
+    "severity": "warning",
+    "kind": "repeated_punctuation",
+    "message": "连续句点可能是误输入；中文句末通常使用句号。",
+    "replacement": "。",
+    "documentId": "doc-59",
+    "sourceRevision": 59,
+    "sourceTextHash": "u-9dae99-5tjbnt",
+    "originalText": ".."
+   },
+   {
+    "from": 2,
+    "to": 6,
+    "severity": "warning",
+    "kind": "space",
+    "message": "中文字符之间可能有多余空格。",
+    "replacement": "中文",
+    "documentId": "doc-59",
+    "sourceRevision": 59,
+    "sourceTextHash": "u-9dae99-5tjbnt",
+    "originalText": "中  文"
+   },
+   {
+    "from": 6,
+    "to": 8,
+    "severity": "warning",
+    "kind": "repeated_punctuation",
+    "message": "连续感叹号可能是误输入。",
+    "replacement": "！",
+    "documentId": "doc-59",
+    "sourceRevision": 59,
+    "sourceTextHash": "u-9dae99-5tjbnt",
+    "originalText": "!!"
+   },
+   {
+    "from": 9,
+    "to": 12,
+    "severity": "warning",
+    "kind": "space",
+    "message": "中文字符之间可能有多余空格。",
+    "replacement": "好世",
+    "documentId": "doc-59",
+    "sourceRevision": 59,
+    "sourceTextHash": "u-9dae99-5tjbnt",
+    "originalText": "好 世"
+   },
+   {
+    "from": 13,
+    "to": 15,
+    "severity": "warning",
+    "kind": "repeated_punctuation",
+    "message": "连续问号可能是误输入。",
+    "replacement": "？",
+    "documentId": "doc-59",
+    "sourceRevision": 59,
+    "sourceTextHash": "u-9dae99-5tjbnt",
+    "originalText": "？？"
+   },
+   {
+    "from": 14,
+    "to": 16,
+    "severity": "warning",
+    "kind": "mixed_punctuation",
+    "message": "中英文标点可能重复。",
+    "replacement": "？",
+    "documentId": "doc-59",
+    "sourceRevision": 59,
+    "sourceTextHash": "u-9dae99-5tjbnt",
+    "originalText": "？."
+   },
+   {
+    "from": 15,
+    "to": 17,
+    "severity": "warning",
+    "kind": "repeated_punctuation",
+    "message": "连续句点可能是误输入；中文句末通常使用句号。",
+    "replacement": "。",
+    "documentId": "doc-59",
+    "sourceRevision": 59,
+    "sourceTextHash": "u-9dae99-5tjbnt",
+    "originalText": ".."
+   },
+   {
+    "from": 23,
+    "to": 25,
+    "severity": "warning",
+    "kind": "mixed_punctuation",
+    "message": "中英文标点可能重复。",
+    "replacement": "。",
+    "documentId": "doc-59",
+    "sourceRevision": 59,
+    "sourceTextHash": "u-9dae99-5tjbnt",
+    "originalText": "。."
+   },
+   {
+    "from": 25,
+    "to": 27,
+    "severity": "warning",
+    "kind": "mixed_punctuation",
+    "message": "中英文标点可能重复。",
+    "replacement": "。",
+    "documentId": "doc-59",
+    "sourceRevision": 59,
+    "sourceTextHash": "u-9dae99-5tjbnt",
+    "originalText": "。."
+   }
+  ]
+ },
+ {
+  "text": "“..！！",
+  "issues": [
+   {
+    "from": 0,
+    "to": 1,
+    "severity": "warning",
+    "kind": "quote",
+    "message": "发现没有闭合的左引号。",
+    "documentId": "doc-60",
+    "sourceRevision": 60,
+    "sourceTextHash": "5-ecdtx1-1s8apax",
+    "originalText": "“"
+   },
+   {
+    "from": 1,
+    "to": 3,
+    "severity": "warning",
+    "kind": "repeated_punctuation",
+    "message": "连续句点可能是误输入；中文句末通常使用句号。",
+    "replacement": "。",
+    "documentId": "doc-60",
+    "sourceRevision": 60,
+    "sourceTextHash": "5-ecdtx1-1s8apax",
+    "originalText": ".."
+   },
+   {
+    "from": 3,
+    "to": 5,
+    "severity": "warning",
+    "kind": "repeated_punctuation",
+    "message": "连续感叹号可能是误输入。",
+    "replacement": "！",
+    "documentId": "doc-60",
+    "sourceRevision": 60,
+    "sourceTextHash": "5-ecdtx1-1s8apax",
+    "originalText": "！！"
+   }
+  ]
+ },
+ {
+  "text": " 的的你好 世界",
+  "issues": [
+   {
+    "from": 4,
+    "to": 7,
+    "severity": "warning",
+    "kind": "space",
+    "message": "中文字符之间可能有多余空格。",
+    "replacement": "好世",
+    "documentId": "doc-61",
+    "sourceRevision": 61,
+    "sourceTextHash": "8-1w6hpwa-c9lejq",
+    "originalText": "好 世"
+   }
+  ]
+ },
+ {
+  "text": "在坐你好 世界？？。.！！你好,世界在坐",
+  "issues": [
+   {
+    "from": 3,
+    "to": 6,
+    "severity": "warning",
+    "kind": "space",
+    "message": "中文字符之间可能有多余空格。",
+    "replacement": "好世",
+    "documentId": "doc-62",
+    "sourceRevision": 62,
+    "sourceTextHash": "k-o43xnj-11bwvwr",
+    "originalText": "好 世"
+   },
+   {
+    "from": 7,
+    "to": 9,
+    "severity": "warning",
+    "kind": "repeated_punctuation",
+    "message": "连续问号可能是误输入。",
+    "replacement": "？",
+    "documentId": "doc-62",
+    "sourceRevision": 62,
+    "sourceTextHash": "k-o43xnj-11bwvwr",
+    "originalText": "？？"
+   },
+   {
+    "from": 9,
+    "to": 11,
+    "severity": "warning",
+    "kind": "mixed_punctuation",
+    "message": "中英文标点可能重复。",
+    "replacement": "。",
+    "documentId": "doc-62",
+    "sourceRevision": 62,
+    "sourceTextHash": "k-o43xnj-11bwvwr",
+    "originalText": "。."
+   },
+   {
+    "from": 11,
+    "to": 13,
+    "severity": "warning",
+    "kind": "repeated_punctuation",
+    "message": "连续感叹号可能是误输入。",
+    "replacement": "！",
+    "documentId": "doc-62",
+    "sourceRevision": 62,
+    "sourceTextHash": "k-o43xnj-11bwvwr",
+    "originalText": "！！"
+   }
+  ]
+ },
+ {
+  "text": "；;中  文；;",
+  "issues": [
+   {
+    "from": 0,
+    "to": 2,
+    "severity": "warning",
+    "kind": "mixed_punctuation",
+    "message": "中英文标点可能重复。",
+    "replacement": "；",
+    "documentId": "doc-63",
+    "sourceRevision": 63,
+    "sourceTextHash": "8-7fluz1-1bs7g9l",
+    "originalText": "；;"
+   },
+   {
+    "from": 2,
+    "to": 6,
+    "severity": "warning",
+    "kind": "space",
+    "message": "中文字符之间可能有多余空格。",
+    "replacement": "中文",
+    "documentId": "doc-63",
+    "sourceRevision": 63,
+    "sourceTextHash": "8-7fluz1-1bs7g9l",
+    "originalText": "中  文"
+   },
+   {
+    "from": 6,
+    "to": 8,
+    "severity": "warning",
+    "kind": "mixed_punctuation",
+    "message": "中英文标点可能重复。",
+    "replacement": "；",
+    "documentId": "doc-63",
+    "sourceRevision": 63,
+    "sourceTextHash": "8-7fluz1-1bs7g9l",
+    "originalText": "；;"
+   }
+  ]
+ },
+ {
+  "text": "你好 世界\n\n，,",
+  "issues": [
+   {
+    "from": 1,
+    "to": 4,
+    "severity": "warning",
+    "kind": "space",
+    "message": "中文字符之间可能有多余空格。",
+    "replacement": "好世",
+    "documentId": "doc-64",
+    "sourceRevision": 64,
+    "sourceTextHash": "9-hxyzlg-1gvhscg",
+    "originalText": "好 世"
+   },
+   {
+    "from": 7,
+    "to": 9,
+    "severity": "warning",
+    "kind": "mixed_punctuation",
+    "message": "中英文标点可能重复。",
+    "replacement": "，",
+    "documentId": "doc-64",
+    "sourceRevision": 64,
+    "sourceTextHash": "9-hxyzlg-1gvhscg",
+    "originalText": "，,"
+   }
+  ]
+ },
+ {
+  "text": "！！，,...",
+  "issues": [
+   {
+    "from": 0,
+    "to": 2,
+    "severity": "warning",
+    "kind": "repeated_punctuation",
+    "message": "连续感叹号可能是误输入。",
+    "replacement": "！",
+    "documentId": "doc-65",
+    "sourceRevision": 65,
+    "sourceTextHash": "7-v8tsur-940ovr",
+    "originalText": "！！"
+   },
+   {
+    "from": 2,
+    "to": 4,
+    "severity": "warning",
+    "kind": "mixed_punctuation",
+    "message": "中英文标点可能重复。",
+    "replacement": "，",
+    "documentId": "doc-65",
+    "sourceRevision": 65,
+    "sourceTextHash": "7-v8tsur-940ovr",
+    "originalText": "，,"
+   },
+   {
+    "from": 4,
+    "to": 7,
+    "severity": "warning",
+    "kind": "ellipsis",
+    "message": "中文省略号通常使用六点“……”。",
+    "replacement": "……",
+    "documentId": "doc-65",
+    "sourceRevision": 65,
+    "sourceTextHash": "7-v8tsur-940ovr",
+    "originalText": "..."
+   }
+  ]
+ },
+ {
+  "text": "。 ，,你好,世界abc........Hello...。.…………",
+  "issues": [
+   {
+    "from": 2,
+    "to": 4,
+    "severity": "warning",
+    "kind": "mixed_punctuation",
+    "message": "中英文标点可能重复。",
+    "replacement": "，",
+    "documentId": "doc-66",
+    "sourceRevision": 66,
+    "sourceTextHash": "y-es8asg-1ar0kqc",
+    "originalText": "，,"
+   },
+   {
+    "from": 17,
+    "to": 20,
+    "severity": "warning",
+    "kind": "ellipsis",
+    "message": "中文省略号通常使用六点“……”。",
+    "replacement": "……",
+    "documentId": "doc-66",
+    "sourceRevision": 66,
+    "sourceTextHash": "y-es8asg-1ar0kqc",
+    "originalText": "..."
+   },
+   {
+    "from": 25,
+    "to": 28,
+    "severity": "warning",
+    "kind": "ellipsis",
+    "message": "中文省略号通常使用六点“……”。",
+    "replacement": "……",
+    "documentId": "doc-66",
+    "sourceRevision": 66,
+    "sourceTextHash": "y-es8asg-1ar0kqc",
+    "originalText": "..."
+   },
+   {
+    "from": 28,
+    "to": 30,
+    "severity": "warning",
+    "kind": "mixed_punctuation",
+    "message": "中英文标点可能重复。",
+    "replacement": "。",
+    "documentId": "doc-66",
+    "sourceRevision": 66,
+    "sourceTextHash": "y-es8asg-1ar0kqc",
+    "originalText": "。."
+   }
+  ]
+ },
+ {
+  "text": "！！——...??—??——",
+  "issues": [
+   {
+    "from": 0,
+    "to": 2,
+    "severity": "warning",
+    "kind": "repeated_punctuation",
+    "message": "连续感叹号可能是误输入。",
+    "replacement": "！",
+    "documentId": "doc-67",
+    "sourceRevision": 67,
+    "sourceTextHash": "e-5746l-q3uuu1",
+    "originalText": "！！"
+   },
+   {
+    "from": 4,
+    "to": 7,
+    "severity": "warning",
+    "kind": "ellipsis",
+    "message": "中文省略号通常使用六点“……”。",
+    "replacement": "……",
+    "documentId": "doc-67",
+    "sourceRevision": 67,
+    "sourceTextHash": "e-5746l-q3uuu1",
+    "originalText": "..."
+   },
+   {
+    "from": 7,
+    "to": 9,
+    "severity": "warning",
+    "kind": "repeated_punctuation",
+    "message": "连续问号可能是误输入。",
+    "replacement": "？",
+    "documentId": "doc-67",
+    "sourceRevision": 67,
+    "sourceTextHash": "e-5746l-q3uuu1",
+    "originalText": "??"
+   },
+   {
+    "from": 9,
+    "to": 10,
+    "severity": "warning",
+    "kind": "dash",
+    "message": "中文破折号通常使用两个连续字符“——”。",
+    "replacement": "——",
+    "documentId": "doc-67",
+    "sourceRevision": 67,
+    "sourceTextHash": "e-5746l-q3uuu1",
+    "originalText": "—"
+   },
+   {
+    "from": 10,
+    "to": 12,
+    "severity": "warning",
+    "kind": "repeated_punctuation",
+    "message": "连续问号可能是误输入。",
+    "replacement": "？",
+    "documentId": "doc-67",
+    "sourceRevision": 67,
+    "sourceTextHash": "e-5746l-q3uuu1",
+    "originalText": "??"
+   }
+  ]
+ },
+ {
+  "text": "..........。。....；;你好 世界",
+  "issues": [
+   {
+    "from": 7,
+    "to": 10,
+    "severity": "warning",
+    "kind": "ellipsis",
+    "message": "中文省略号通常使用六点“……”。",
+    "replacement": "……",
+    "documentId": "doc-68",
+    "sourceRevision": 68,
+    "sourceTextHash": "n-4algli-3ylngq",
+    "originalText": "..."
+   },
+   {
+    "from": 10,
+    "to": 12,
+    "severity": "warning",
+    "kind": "repeated_punctuation",
+    "message": "连续句号可能是误输入。",
+    "replacement": "。",
+    "documentId": "doc-68",
+    "sourceRevision": 68,
+    "sourceTextHash": "n-4algli-3ylngq",
+    "originalText": "。。"
+   },
+   {
+    "from": 11,
+    "to": 13,
+    "severity": "warning",
+    "kind": "mixed_punctuation",
+    "message": "中英文标点可能重复。",
+    "replacement": "。",
+    "documentId": "doc-68",
+    "sourceRevision": 68,
+    "sourceTextHash": "n-4algli-3ylngq",
+    "originalText": "。."
+   },
+   {
+    "from": 13,
+    "to": 16,
+    "severity": "warning",
+    "kind": "ellipsis",
+    "message": "中文省略号通常使用六点“……”。",
+    "replacement": "……",
+    "documentId": "doc-68",
+    "sourceRevision": 68,
+    "sourceTextHash": "n-4algli-3ylngq",
+    "originalText": "..."
+   },
+   {
+    "from": 16,
+    "to": 18,
+    "severity": "warning",
+    "kind": "mixed_punctuation",
+    "message": "中英文标点可能重复。",
+    "replacement": "；",
+    "documentId": "doc-68",
+    "sourceRevision": 68,
+    "sourceTextHash": "n-4algli-3ylngq",
+    "originalText": "；;"
+   },
+   {
+    "from": 19,
+    "to": 22,
+    "severity": "warning",
+    "kind": "space",
+    "message": "中文字符之间可能有多余空格。",
+    "replacement": "好世",
+    "documentId": "doc-68",
+    "sourceRevision": 68,
+    "sourceTextHash": "n-4algli-3ylngq",
+    "originalText": "好 世"
+   }
+  ]
+ },
+ {
+  "text": "的的(半角)”",
+  "issues": [
+   {
+    "from": 6,
+    "to": 7,
+    "severity": "warning",
+    "kind": "quote",
+    "message": "发现没有对应左引号的右引号。",
+    "documentId": "doc-69",
+    "sourceRevision": 69,
+    "sourceTextHash": "7-g88rd9-hidfy9",
+    "originalText": "”"
+   }
+  ]
+ },
+ {
+  "text": " ——??",
+  "issues": [
+   {
+    "from": 3,
+    "to": 5,
+    "severity": "warning",
+    "kind": "repeated_punctuation",
+    "message": "连续问号可能是误输入。",
+    "replacement": "？",
+    "documentId": "doc-70",
+    "sourceRevision": 70,
+    "sourceTextHash": "5-jkvwml-fvr8mh",
+    "originalText": "??"
+   }
+  ]
+ },
+ {
+  "text": "\n\n你好 世界他说。。。。—？？",
+  "issues": [
+   {
+    "from": 3,
+    "to": 6,
+    "severity": "warning",
+    "kind": "space",
+    "message": "中文字符之间可能有多余空格。",
+    "replacement": "好世",
+    "documentId": "doc-71",
+    "sourceRevision": 71,
+    "sourceTextHash": "g-xawc5s-1aioaok",
+    "originalText": "好 世"
+   },
+   {
+    "from": 9,
+    "to": 13,
+    "severity": "warning",
+    "kind": "repeated_punctuation",
+    "message": "连续句号可能是误输入。",
+    "replacement": "。",
+    "documentId": "doc-71",
+    "sourceRevision": 71,
+    "sourceTextHash": "g-xawc5s-1aioaok",
+    "originalText": "。。。。"
+   },
+   {
+    "from": 13,
+    "to": 14,
+    "severity": "warning",
+    "kind": "dash",
+    "message": "中文破折号通常使用两个连续字符“——”。",
+    "replacement": "——",
+    "documentId": "doc-71",
+    "sourceRevision": 71,
+    "sourceTextHash": "g-xawc5s-1aioaok",
+    "originalText": "—"
+   },
+   {
+    "from": 14,
+    "to": 16,
+    "severity": "warning",
+    "kind": "repeated_punctuation",
+    "message": "连续问号可能是误输入。",
+    "replacement": "？",
+    "documentId": "doc-71",
+    "sourceRevision": 71,
+    "sourceTextHash": "g-xawc5s-1aioaok",
+    "originalText": "？？"
+   }
+  ]
+ },
+ {
+  "text": "。！！在坐。.Hello...？？\n\n在坐—……：:",
+  "issues": [
+   {
+    "from": 1,
+    "to": 3,
+    "severity": "warning",
+    "kind": "repeated_punctuation",
+    "message": "连续感叹号可能是误输入。",
+    "replacement": "！",
+    "documentId": "doc-72",
+    "sourceRevision": 72,
+    "sourceTextHash": "q-1d032rx-3zdok1",
+    "originalText": "！！"
+   },
+   {
+    "from": 5,
+    "to": 7,
+    "severity": "warning",
+    "kind": "mixed_punctuation",
+    "message": "中英文标点可能重复。",
+    "replacement": "。",
+    "documentId": "doc-72",
+    "sourceRevision": 72,
+    "sourceTextHash": "q-1d032rx-3zdok1",
+    "originalText": "。."
+   },
+   {
+    "from": 12,
+    "to": 15,
+    "severity": "warning",
+    "kind": "ellipsis",
+    "message": "中文省略号通常使用六点“……”。",
+    "replacement": "……",
+    "documentId": "doc-72",
+    "sourceRevision": 72,
+    "sourceTextHash": "q-1d032rx-3zdok1",
+    "originalText": "..."
+   },
+   {
+    "from": 15,
+    "to": 17,
+    "severity": "warning",
+    "kind": "repeated_punctuation",
+    "message": "连续问号可能是误输入。",
+    "replacement": "？",
+    "documentId": "doc-72",
+    "sourceRevision": 72,
+    "sourceTextHash": "q-1d032rx-3zdok1",
+    "originalText": "？？"
+   },
+   {
+    "from": 21,
+    "to": 22,
+    "severity": "warning",
+    "kind": "dash",
+    "message": "中文破折号通常使用两个连续字符“——”。",
+    "replacement": "——",
+    "documentId": "doc-72",
+    "sourceRevision": 72,
+    "sourceTextHash": "q-1d032rx-3zdok1",
+    "originalText": "—"
+   },
+   {
+    "from": 24,
+    "to": 26,
+    "severity": "warning",
+    "kind": "mixed_punctuation",
+    "message": "中英文标点可能重复。",
+    "replacement": "：",
+    "documentId": "doc-72",
+    "sourceRevision": 72,
+    "sourceTextHash": "q-1d032rx-3zdok1",
+    "originalText": "：:"
+   }
+  ]
+ },
+ {
+  "text": "123你好 世界。.—，,(半角)在坐",
+  "issues": [
+   {
+    "from": 4,
+    "to": 7,
+    "severity": "warning",
+    "kind": "space",
+    "message": "中文字符之间可能有多余空格。",
+    "replacement": "好世",
+    "documentId": "doc-73",
+    "sourceRevision": 73,
+    "sourceTextHash": "j-1a5nbf1-i11x7d",
+    "originalText": "好 世"
+   },
+   {
+    "from": 8,
+    "to": 10,
+    "severity": "warning",
+    "kind": "mixed_punctuation",
+    "message": "中英文标点可能重复。",
+    "replacement": "。",
+    "documentId": "doc-73",
+    "sourceRevision": 73,
+    "sourceTextHash": "j-1a5nbf1-i11x7d",
+    "originalText": "。."
+   },
+   {
+    "from": 10,
+    "to": 11,
+    "severity": "warning",
+    "kind": "dash",
+    "message": "中文破折号通常使用两个连续字符“——”。",
+    "replacement": "——",
+    "documentId": "doc-73",
+    "sourceRevision": 73,
+    "sourceTextHash": "j-1a5nbf1-i11x7d",
+    "originalText": "—"
+   },
+   {
+    "from": 11,
+    "to": 13,
+    "severity": "warning",
+    "kind": "mixed_punctuation",
+    "message": "中英文标点可能重复。",
+    "replacement": "，",
+    "documentId": "doc-73",
+    "sourceRevision": 73,
+    "sourceTextHash": "j-1a5nbf1-i11x7d",
+    "originalText": "，,"
+   }
+  ]
+ },
+ {
+  "text": "（括号）。。的的",
+  "issues": [
+   {
+    "from": 4,
+    "to": 6,
+    "severity": "warning",
+    "kind": "repeated_punctuation",
+    "message": "连续句号可能是误输入。",
+    "replacement": "。",
+    "documentId": "doc-74",
+    "sourceRevision": 74,
+    "sourceTextHash": "8-1g8by0h-1ao9kd",
+    "originalText": "。。"
+   }
+  ]
+ },
+ {
+  "text": "abc。.\n\n!!!!123，,",
+  "issues": [
+   {
+    "from": 3,
+    "to": 5,
+    "severity": "warning",
+    "kind": "mixed_punctuation",
+    "message": "中英文标点可能重复。",
+    "replacement": "。",
+    "documentId": "doc-75",
+    "sourceRevision": 75,
+    "sourceTextHash": "g-b5dmnx-1jjcqtl",
+    "originalText": "。."
+   },
+   {
+    "from": 7,
+    "to": 11,
+    "severity": "warning",
+    "kind": "repeated_punctuation",
+    "message": "连续感叹号可能是误输入。",
+    "replacement": "！",
+    "documentId": "doc-75",
+    "sourceRevision": 75,
+    "sourceTextHash": "g-b5dmnx-1jjcqtl",
+    "originalText": "!!!!"
+   },
+   {
+    "from": 14,
+    "to": 16,
+    "severity": "warning",
+    "kind": "mixed_punctuation",
+    "message": "中英文标点可能重复。",
+    "replacement": "，",
+    "documentId": "doc-75",
+    "sourceRevision": 75,
+    "sourceTextHash": "g-b5dmnx-1jjcqtl",
+    "originalText": "，,"
+   }
+  ]
+ },
+ {
+  "text": "？？中  文!!他说……”！！在坐..??”",
+  "issues": [
+   {
+    "from": 0,
+    "to": 2,
+    "severity": "warning",
+    "kind": "repeated_punctuation",
+    "message": "连续问号可能是误输入。",
+    "replacement": "？",
+    "documentId": "doc-76",
+    "sourceRevision": 76,
+    "sourceTextHash": "m-1h4umlx-1e2su21",
+    "originalText": "？？"
+   },
+   {
+    "from": 2,
+    "to": 6,
+    "severity": "warning",
+    "kind": "space",
+    "message": "中文字符之间可能有多余空格。",
+    "replacement": "中文",
+    "documentId": "doc-76",
+    "sourceRevision": 76,
+    "sourceTextHash": "m-1h4umlx-1e2su21",
+    "originalText": "中  文"
+   },
+   {
+    "from": 6,
+    "to": 8,
+    "severity": "warning",
+    "kind": "repeated_punctuation",
+    "message": "连续感叹号可能是误输入。",
+    "replacement": "！",
+    "documentId": "doc-76",
+    "sourceRevision": 76,
+    "sourceTextHash": "m-1h4umlx-1e2su21",
+    "originalText": "!!"
+   },
+   {
+    "from": 12,
+    "to": 13,
+    "severity": "warning",
+    "kind": "quote",
+    "message": "发现没有对应左引号的右引号。",
+    "documentId": "doc-76",
+    "sourceRevision": 76,
+    "sourceTextHash": "m-1h4umlx-1e2su21",
+    "originalText": "”"
+   },
+   {
+    "from": 13,
+    "to": 15,
+    "severity": "warning",
+    "kind": "repeated_punctuation",
+    "message": "连续感叹号可能是误输入。",
+    "replacement": "！",
+    "documentId": "doc-76",
+    "sourceRevision": 76,
+    "sourceTextHash": "m-1h4umlx-1e2su21",
+    "originalText": "！！"
+   },
+   {
+    "from": 17,
+    "to": 19,
+    "severity": "warning",
+    "kind": "repeated_punctuation",
+    "message": "连续句点可能是误输入；中文句末通常使用句号。",
+    "replacement": "。",
+    "documentId": "doc-76",
+    "sourceRevision": 76,
+    "sourceTextHash": "m-1h4umlx-1e2su21",
+    "originalText": ".."
+   },
+   {
+    "from": 19,
+    "to": 21,
+    "severity": "warning",
+    "kind": "repeated_punctuation",
+    "message": "连续问号可能是误输入。",
+    "replacement": "？",
+    "documentId": "doc-76",
+    "sourceRevision": 76,
+    "sourceTextHash": "m-1h4umlx-1e2su21",
+    "originalText": "??"
+   },
+   {
+    "from": 21,
+    "to": 22,
+    "severity": "warning",
+    "kind": "quote",
+    "message": "发现没有对应左引号的右引号。",
+    "documentId": "doc-76",
+    "sourceRevision": 76,
+    "sourceTextHash": "m-1h4umlx-1e2su21",
+    "originalText": "”"
+   }
+  ]
+ },
+ {
+  "text": "”..在坐",
+  "issues": [
+   {
+    "from": 0,
+    "to": 1,
+    "severity": "warning",
+    "kind": "quote",
+    "message": "发现没有对应左引号的右引号。",
+    "documentId": "doc-77",
+    "sourceRevision": 77,
+    "sourceTextHash": "5-bz43v0-jcc51s",
+    "originalText": "”"
+   },
+   {
+    "from": 1,
+    "to": 3,
+    "severity": "warning",
+    "kind": "repeated_punctuation",
+    "message": "连续句点可能是误输入；中文句末通常使用句号。",
+    "replacement": "。",
+    "documentId": "doc-77",
+    "sourceRevision": 77,
+    "sourceTextHash": "5-bz43v0-jcc51s",
+    "originalText": ".."
+   }
+  ]
+ },
+ {
+  "text": "中  文！！。.123！！！！你好 世界(半角)！！“。.",
+  "issues": [
+   {
+    "from": 0,
+    "to": 4,
+    "severity": "warning",
+    "kind": "space",
+    "message": "中文字符之间可能有多余空格。",
+    "replacement": "中文",
+    "documentId": "doc-78",
+    "sourceRevision": 78,
+    "sourceTextHash": "t-1yscg2n-bbm7tv",
+    "originalText": "中  文"
+   },
+   {
+    "from": 4,
+    "to": 6,
+    "severity": "warning",
+    "kind": "repeated_punctuation",
+    "message": "连续感叹号可能是误输入。",
+    "replacement": "！",
+    "documentId": "doc-78",
+    "sourceRevision": 78,
+    "sourceTextHash": "t-1yscg2n-bbm7tv",
+    "originalText": "！！"
+   },
+   {
+    "from": 6,
+    "to": 8,
+    "severity": "warning",
+    "kind": "mixed_punctuation",
+    "message": "中英文标点可能重复。",
+    "replacement": "。",
+    "documentId": "doc-78",
+    "sourceRevision": 78,
+    "sourceTextHash": "t-1yscg2n-bbm7tv",
+    "originalText": "。."
+   },
+   {
+    "from": 11,
+    "to": 15,
+    "severity": "warning",
+    "kind": "repeated_punctuation",
+    "message": "连续感叹号可能是误输入。",
+    "replacement": "！",
+    "documentId": "doc-78",
+    "sourceRevision": 78,
+    "sourceTextHash": "t-1yscg2n-bbm7tv",
+    "originalText": "！！！！"
+   },
+   {
+    "from": 16,
+    "to": 19,
+    "severity": "warning",
+    "kind": "space",
+    "message": "中文字符之间可能有多余空格。",
+    "replacement": "好世",
+    "documentId": "doc-78",
+    "sourceRevision": 78,
+    "sourceTextHash": "t-1yscg2n-bbm7tv",
+    "originalText": "好 世"
+   },
+   {
+    "from": 24,
+    "to": 26,
+    "severity": "warning",
+    "kind": "repeated_punctuation",
+    "message": "连续感叹号可能是误输入。",
+    "replacement": "！",
+    "documentId": "doc-78",
+    "sourceRevision": 78,
+    "sourceTextHash": "t-1yscg2n-bbm7tv",
+    "originalText": "！！"
+   },
+   {
+    "from": 26,
+    "to": 27,
+    "severity": "warning",
+    "kind": "quote",
+    "message": "发现没有闭合的左引号。",
+    "documentId": "doc-78",
+    "sourceRevision": 78,
+    "sourceTextHash": "t-1yscg2n-bbm7tv",
+    "originalText": "“"
+   },
+   {
+    "from": 27,
+    "to": 29,
+    "severity": "warning",
+    "kind": "mixed_punctuation",
+    "message": "中英文标点可能重复。",
+    "replacement": "。",
+    "documentId": "doc-78",
+    "sourceRevision": 78,
+    "sourceTextHash": "t-1yscg2n-bbm7tv",
+    "originalText": "。."
+   }
+  ]
+ },
+ {
+  "text": "的的？？；;....：:在坐，,",
+  "issues": [
+   {
+    "from": 2,
+    "to": 4,
+    "severity": "warning",
+    "kind": "repeated_punctuation",
+    "message": "连续问号可能是误输入。",
+    "replacement": "？",
+    "documentId": "doc-79",
+    "sourceRevision": 79,
+    "sourceTextHash": "g-1d9tdyx-1ylyi4d",
+    "originalText": "？？"
+   },
+   {
+    "from": 4,
+    "to": 6,
+    "severity": "warning",
+    "kind": "mixed_punctuation",
+    "message": "中英文标点可能重复。",
+    "replacement": "；",
+    "documentId": "doc-79",
+    "sourceRevision": 79,
+    "sourceTextHash": "g-1d9tdyx-1ylyi4d",
+    "originalText": "；;"
+   },
+   {
+    "from": 7,
+    "to": 10,
+    "severity": "warning",
+    "kind": "ellipsis",
+    "message": "中文省略号通常使用六点“……”。",
+    "replacement": "……",
+    "documentId": "doc-79",
+    "sourceRevision": 79,
+    "sourceTextHash": "g-1d9tdyx-1ylyi4d",
+    "originalText": "..."
+   },
+   {
+    "from": 10,
+    "to": 12,
+    "severity": "warning",
+    "kind": "mixed_punctuation",
+    "message": "中英文标点可能重复。",
+    "replacement": "：",
+    "documentId": "doc-79",
+    "sourceRevision": 79,
+    "sourceTextHash": "g-1d9tdyx-1ylyi4d",
+    "originalText": "：:"
+   },
+   {
+    "from": 14,
+    "to": 16,
+    "severity": "warning",
+    "kind": "mixed_punctuation",
+    "message": "中英文标点可能重复。",
+    "replacement": "，",
+    "documentId": "doc-79",
+    "sourceRevision": 79,
+    "sourceTextHash": "g-1d9tdyx-1ylyi4d",
+    "originalText": "，,"
+   }
+  ]
+ }
+]
