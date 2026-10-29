@@ -26,7 +26,7 @@ import { ProofreadingRunner } from '../ai/proofreading-runner'
 import { WritingDailyService } from '../services/writing-daily-service'
 import { ForeshadowService } from '../services/foreshadow-service'
 import { TimelineService } from '../services/timeline-service'
-import { FocusLockService, assertNoFocusLockAnywhere, assertNotFocusLocked } from '../services/focus-lock-service'
+import { FocusLockService, assertNoFocusLockAnywhere, assertNotFocusLocked, focusEgressCheck } from '../services/focus-lock-service'
 import { readHoverPrefs, writeHoverPrefs } from '../services/hover-prefs-service'
 import { installFocusEgressLock } from '../net/egress-guard'
 
@@ -80,7 +80,7 @@ export function registerIpc(db: AppDatabase, codec: SecretCodec, network?: Netwo
   const foreshadows = new ForeshadowService(db)
   const timeline = new TimelineService(db)
   const focus = new FocusLockService(db)
-  installFocusEgressLock(() => focus.lockedProjects().map((item) => item.title))
+  installFocusEgressLock(focusEgressCheck(focus))
   handle('focus:status', (projectId: string) => focus.status(parse(idSchema, projectId)))
   handle('focus:restore', (projectId: string) => focus.restore(parse(idSchema, projectId)))
   handle('focus:start', (projectId: string, input: unknown) => focus.start(parse(idSchema, projectId), input))

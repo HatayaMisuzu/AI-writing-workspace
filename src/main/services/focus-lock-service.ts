@@ -201,3 +201,18 @@ export function assertNotFocusLocked(focus: Pick<FocusLockService, 'lockedProjec
   const ordered = [...locked.filter((item) => item.projectId === projectId), ...locked.filter((item) => item.projectId !== projectId)]
   throw new FocusLockError('FOCUS_LOCKED', focusLockedMessage(ordered.map((item) => item.title)))
 }
+
+/** 取不到书名时的占位书名。 */
+export const FOCUS_LOCK_PLACEHOLDER_TITLE = '未命名作品'
+/**
+ * 供 installFocusEgressLock：未锁定 → false（唯一的「未锁」值）；锁定 → 书名列表（空书名用占位书名）；
+ * 查询失败 → true（fail-closed，按锁定处理）。
+ */
+export function focusEgressCheck(focus: Pick<FocusLockService, 'lockedProjects'>): () => boolean | readonly string[] {
+  return () => {
+    let locked: FocusLockedProject[]
+    try { locked = focus.lockedProjects() } catch { return true }
+    if (!locked.length) return false
+    return locked.map((item) => item.title?.trim() || FOCUS_LOCK_PLACEHOLDER_TITLE)
+  }
+}

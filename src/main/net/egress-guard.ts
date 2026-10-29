@@ -24,17 +24,21 @@ let rawFetch: typeof fetch = (...args) => globalThis.fetch(...args)
 /** 由 main/index.ts 在启动时安装（与 webRequest 共用同一个 NetworkGate）。传 undefined 卸载。 */
 export function installEgressGate(gate: EgressDecider | undefined): void { installed = gate }
 
-/** 返回 true / 非空书名列表 = 锁定中。 */
+/**
+ * 返回值语义（fail-closed）：只有明确的 false 才算未锁定；true 或任意数组（包括空数组）都算锁定中。
+ * 检查函数抛错也按锁定处理。
+ */
 type FocusLockCheck = () => boolean | readonly string[]
 let focusLocked: FocusLockCheck = () => false
 /** F15：小黑屋锁定期间主进程一律不出站（与 IPC 层 FOCUS_LOCKED 双保险）。传 undefined 卸载。 */
 export function installFocusEgressLock(check: FocusLockCheck | undefined): void { focusLocked = check ?? (() => false) }
-/** 锁定中的书名（未锁定 → undefined；锁定但无书名 → []）。供 webRequest / openExternal 共用。 */
+/** 锁定中的书名（未锁定 → undefined；锁定但取不到书名 → []）。供 webRequest / openExternal 共用。 */
 export function focusLockedTitles(): readonly string[] | undefined {
-  const value = focusLocked()
-  if (value === true) return []
-  if (Array.isArray(value) && value.length) return value
-  return undefined
+  let value: boolean | readonly string[]
+  try { value = focusLocked() } catch { return [] }
+  if (value === false) return undefined
+  if (Array.isArray(value)) return value.filter((title) => typeof title === 'string' && title.trim())
+  return []
 }
 export const isFocusEgressLocked = (): boolean => focusLockedTitles() !== undefined
 

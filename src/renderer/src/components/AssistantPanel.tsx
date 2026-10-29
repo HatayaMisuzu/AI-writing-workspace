@@ -226,7 +226,7 @@ export function AssistantPanel({ project, documentId, documentText, documentRevi
     void intentPromise.then((proposals) => {
       if (proposals.length) setMessages((current) => current.map((item) => item.id === assistantId ? { ...item, proposals } : item))
     }).catch((error) => setMessages((current) => current.map((item) => item.id === assistantId
-      ? { ...item, proposalError: `记忆提案创建失败：${error instanceof Error ? error.message : String(error)}` } : item)))
+      ? { ...item, proposalError: `记忆提案创建失败：${userErrorMessage(error)}` } : item)))
   }
 
   const runDigest = async (): Promise<void> => {
