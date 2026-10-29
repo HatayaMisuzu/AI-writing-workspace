@@ -133,8 +133,8 @@ describe('P3 验收修订（review-PR29）', () => {
     expect((await backup.importProject(join(dir, 'b.aiwproj'))).importNotice).toBeUndefined() // 本书自定义
     t.setGlobal('generation', '本机不同')
     expect((await backup.importProject(join(dir, 'a.aiwproj'))).importNotice).toBe(IMPORT_GLOBAL_SCOPE_NOTICE)
-    t.resetGlobal('generation')
-    expect((await backup.importProject(join(dir, 'a.aiwproj'))).importNotice).toBe(IMPORT_GLOBAL_SCOPE_NOTICE) // 本机全局为空
+    t.resetGlobal('generation') // 源库非空、本机为空 → 指纹不同 → 提示
+    expect((await backup.importProject(join(dir, 'a.aiwproj'))).importNotice).toBe(IMPORT_GLOBAL_SCOPE_NOTICE)
     // 旧备份（P3 前导出，无指纹）：只要源书沿用全局就提示
     const { readFile, writeFile } = await import('node:fs/promises')
     const legacy = JSON.parse(await readFile(join(dir, 'a.aiwproj'), 'utf8')); delete legacy.promptGlobalSha256
@@ -142,6 +142,19 @@ describe('P3 验收修订（review-PR29）', () => {
     t.setGlobal('generation', '源全局')
     expect((await backup.importProject(join(dir, 'legacy.aiwproj'))).importNotice).toBe(IMPORT_GLOBAL_SCOPE_NOTICE)
     expect(t.listGlobal().find((e) => e.mode === 'generation')?.override).toBe('源全局') // 导入作品从不写全局
+  })
+
+  it('指纹：空全局与内置默认归一；同机空全局导出再导入不提示', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'p3fp-')); dirs.push(dir)
+    const { db, a, t } = setup()
+    const empty = t.globalFingerprint()
+    db.raw.prepare("INSERT INTO app_settings(key, value_json, updated_at) VALUES ('prompt_templates_global', ?, 0)").run(JSON.stringify({ generation: DEFAULT_PROMPT_TEMPLATES.generation }))
+    expect(t.globalFingerprint()).toBe(empty) // 显式存成内置默认文本 = 空全局
+    const backup = new BackupService(db)
+    await backup.exportProject(a.id, join(dir, 'a.aiwproj'))
+    db.raw.prepare("DELETE FROM app_settings WHERE key = 'prompt_templates_global'").run()
+    expect(t.isGlobalEmpty()).toBe(true)
+    expect((await backup.importProject(join(dir, 'a.aiwproj'))).importNotice).toBeUndefined() // 两边均为空/内置默认
   })
 
   it('L2：作品不存在时给中文提示', () => {

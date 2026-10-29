@@ -400,9 +400,9 @@ export class BackupService {
       payload.patches.forEach((item) => patchInsert.run(...[idMap.get(item.id as string), projectId, idMap.get(item.document_id as string), item.block_id ?? 'pm-range', item.document_revision ?? -1, item.from_pos, item.to_pos, item.original_hash, item.original_text, item.replacement, item.document_revision === undefined && item.status === 'proposed' ? 'stale' : item.status, item.created_at].map(sqlValue)))
     })
     const imported = new ProjectService(this.db).get(projectId)
-    // M2：沿用全局的书换库后用本机全局。本机全局为空、与源库指纹不同，或旧备份无指纹（无法判断）时提示一行。
+    // M2：沿用全局的书换库后用本机全局。仅当与源库指纹不同，或旧备份无指纹（无法判断）时提示一行；指纹一致（含双方均为空/内置默认）不提示。
     const prompts = new PromptTemplateService(this.db)
-    if (prompts.getScope(projectId) === 'global' && (!payload.promptGlobalSha256 || prompts.isGlobalEmpty() || payload.promptGlobalSha256 !== prompts.globalFingerprint())) {
+    if (prompts.getScope(projectId) === 'global' && (!payload.promptGlobalSha256 || payload.promptGlobalSha256 !== prompts.globalFingerprint())) {
       return { ...imported, importNotice: IMPORT_GLOBAL_SCOPE_NOTICE }
     }
     return imported

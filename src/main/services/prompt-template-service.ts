@@ -141,8 +141,8 @@ export class PromptTemplateService {
     return this.list(targetProjectId)
   }
 
-  /** 全局模板指纹（只用于导入作品时判断源库/本机全局是否一致；不含正文）。 */
-  globalFingerprint(): string { const g = this.readGlobal(); return createHash('sha256').update(JSON.stringify(PROMPT_TEMPLATE_MODES.map((mode) => g[mode] ?? null))).digest('hex') }
+  /** 全局模板指纹（只用于导入作品时判断源库/本机全局是否一致；不含正文）。空全局与等于内置默认的条目归一为 null，故二者指纹相同。 */
+  globalFingerprint(): string { const g = this.readGlobal(); return createHash('sha256').update(JSON.stringify(PROMPT_TEMPLATE_MODES.map((mode) => g[mode] !== undefined && g[mode] !== DEFAULT_PROMPT_TEMPLATES[mode] ? g[mode] : null))).digest('hex') }
   isGlobalEmpty(): boolean { return Object.keys(this.readGlobal()).length === 0 }
 
   /** M2：全局模板单独文件（不进作品备份）。 */
