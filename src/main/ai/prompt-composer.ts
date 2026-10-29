@@ -1,6 +1,8 @@
 import type { AITaskEnvelope, ContextBundle } from '../../shared/domain'
 import { DEFAULT_PROMPT_TEMPLATES, PROMPT_ROLE_LABELS, renderPromptTemplate } from '../../shared/prompt-templates'
 import { historyPolicy } from './history-policy'
+import { CONSISTENCY_OUTPUT_CONTRACT } from '../../shared/consistency-check'
+import type { ContextOmission } from '../../shared/domain'
 import type { ProviderMessage } from './provider'
 
 const CORE_PRINCIPLES = `你是长期陪伴作者创作的 AI 助手，不是作品的作者本人。区分正文事实、作者确认、暂定、灵感、AI推测与废弃内容。未经作者明确确认，不写入设定或正文。不使用评分或机械化最佳方案。对话自然、具体。`
@@ -16,10 +18,16 @@ export const composeProviderMessages = (input: {
   roleTemplate?: string
 }): ProviderMessage[] => {
   const { task, context } = input
-  const contextText = context.items.map((item) => `[${item.kind}] ${item.title}\n${item.content}`).join('\n\n')
-  const roleInstruction = input.roleTemplate === undefined
+  // 修复 3：发给模型的文本同样带「已截断」「已省略」标注，与界面清单一致
+  const contextText = [
+    ...context.items.map((item) => `[${item.kind}] ${item.title}${item.truncated ? '（已截断，部分已省略）' : ''}\n${item.content}`),
+    ...omittedNotice(context.metadata.omitted)
+  ].join('\n\n')
+  const rendered = input.roleTemplate === undefined
     ? DEFAULT_PROMPT_TEMPLATES[task.mode]
     : `${renderPromptTemplate(input.roleTemplate, { role: PROMPT_ROLE_LABELS[task.mode], mode: task.mode, writePermission: task.writePermission, contextPolicy: context.policy })}\n${CUSTOM_TEMPLATE_GUARD}`
+  // P1-6：一致性检查的 JSON 输出契约由代码固定，模板覆盖不能去掉
+  const roleInstruction = task.mode === 'consistency_check' ? `${rendered}\n${CONSISTENCY_OUTPUT_CONTRACT}` : rendered
   const history = historyPolicy(task.mode) === 'creative-thread' ? input.history : []
   return [
     { role: 'system', content: `${CORE_PRINCIPLES}\n当前模式：${task.mode}。${roleInstruction}\n写入权限：${task.writePermission}。\n上下文策略：${context.policy}。` },
@@ -27,6 +35,11 @@ export const composeProviderMessages = (input: {
     ...history,
     { role: 'user', content: task.userIntent }
   ]
+}
+
+const omittedNotice = (omitted: ContextOmission[] | undefined): string[] => {
+  const budget = (omitted ?? []).filter((item) => item.reason === 'budget')
+  return budget.length ? [`[已省略] 因超出预算未发送：${budget.map((item) => item.title).join('、')}`] : []
 }
 
 /**

@@ -44,7 +44,7 @@ describe('P1-4 提示词模板', () => {
   afterEach(async () => { await Promise.all(tempDirs.splice(0).map((path) => rm(path, { recursive: true, force: true }))) })
 
   it('默认模板 = 原硬编码提示词，组装结果逐字不变', () => {
-    expect(PROMPT_TEMPLATE_MODES).toHaveLength(8)
+    expect(PROMPT_TEMPLATE_MODES).toHaveLength(9) // P1-6：新增 consistency_check
     expect(DEFAULT_PROMPT_TEMPLATES.generation).toBe('生成候选文字；不要声称已写入正文。')
     const task: AITaskEnvelope = { mode: 'generation', writePermission: 'proposal', userIntent: '续写', projectId: 'p1' }
     const context: ContextBundle = { projectId: 'p1', policy: 'creative', items: [], metadata: { estimatedTokens: 0, sourceIds: [], excludedKinds: [] } }

@@ -45,7 +45,7 @@ export class ChatService {
     return rows.map(mapMessage)
   }
 
-  startTurn(input: { projectId: string; threadId: string; userMessageId: string; assistantMessageId: string; content: string; mode: AIMode; target?: DocumentTaskTarget; contextSnapshot?: { sources: Array<{ id: string; kind: string }>; omitted: Array<{ id: string; kind: string; reason: string }> } }): void {
+  startTurn(input: { projectId: string; threadId: string; userMessageId: string; assistantMessageId: string; content: string; mode: AIMode; target?: DocumentTaskTarget; contextSnapshot?: { sources: Array<{ id: string; kind: string; truncated?: true }>; omitted: Array<{ id: string; kind: string; reason: string }> } }): void {
     this.getThread(input.projectId, input.threadId)
     const now = Date.now()
     this.db.transaction(() => {

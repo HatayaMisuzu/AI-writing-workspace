@@ -25,7 +25,42 @@ export class ContextEngine {
       if (through === undefined) throw new Error('READER_CHAPTER_REQUIRED')
       return this.buildReader(task.projectId, through, budget, task.excludedIds)
     }
+    if (task.mode === 'consistency_check') return this.buildConsistency(task, budget)
     return this.buildCreative(task, budget)
+  }
+
+  /**
+   * P1-6 记录员·一致性检查：本章正文 + 已确认设定（confirmed 记忆，伏笔除外）+ 人物卡 + 时间线。
+   * 待确认/暂定记忆、伏笔、灵感、大纲、摘要、他章与他书都不进。时间线仅在本模式进上下文。
+   */
+  private buildConsistency(task: AITaskEnvelope, budget: number): ContextBundle {
+    if (!task.documentId) throw Object.assign(new Error('请先打开要检查的章节。'), { code: 'CONSISTENCY_CHAPTER_REQUIRED' })
+    const { projectId } = task
+    const chapter = this.documents.getContent(projectId, task.documentId)
+    const node = this.documents.listTree(projectId).find((item) => item.id === task.documentId)
+    const candidates: Array<ContextItem & { priority: number }> = [{ id: chapter.documentId, kind: 'document', title: `本章 · ${node?.title ?? '当前章节'}`,
+      content: chapter.plainText, projectId, reason: '待检查的本章正文', priority: 100 }]
+    const memories = this.db.raw.prepare("SELECT id, type, content FROM memories WHERE project_id = ? AND status = 'confirmed' AND type != 'foreshadowing' ORDER BY updated_at DESC LIMIT 60")
+      .all(projectId) as Array<{ id: string; type: string; content: string }>
+    memories.forEach((memory) => candidates.push({ id: memory.id, kind: 'memory', title: `设定 · ${memory.type}`, content: memory.content,
+      projectId, reason: '作者已确认的设定', priority: 80 }))
+    const characters = this.db.raw.prepare('SELECT * FROM characters WHERE project_id = ? ORDER BY updated_at DESC LIMIT 40').all(projectId) as Array<Record<string, unknown>>
+    characters.forEach((row) => {
+      const aliases = JSON.parse(row.aliases_json as string) as string[]
+      const fields = JSON.parse(row.fields_json as string) as Record<string, string>
+      const content = [aliases.length ? `别名：${aliases.join('、')}` : '', row.notes as string,
+        ...Object.entries(fields).filter(([, value]) => value).map(([key, value]) => `${key}：${value}`)].filter(Boolean).join('\n')
+      candidates.push({ id: row.id as string, kind: 'character', title: `人物 · ${row.name as string}`, content: content || '（无更多信息）',
+        projectId, reason: '人物卡', priority: chapter.plainText.includes(row.name as string) ? 79 : 70 })
+    })
+    const titles = new Map(this.documents.listTree(projectId).map((item) => [item.id, item.title]))
+    const events = this.db.raw.prepare('SELECT id, story_time_label, title, chapter_id FROM timeline_events WHERE project_id = ? ORDER BY sort_key, created_at LIMIT 200')
+      .all(projectId) as Array<{ id: string; story_time_label: string; title: string; chapter_id: string | null }>
+    events.forEach((event, index) => candidates.push({ id: event.id, kind: 'timeline', title: `时间线 · ${event.title || '未命名事件'}`,
+      content: [`故事时间：${event.story_time_label || '未标注'}`, `顺序：第 ${index + 1} 个事件`, event.chapter_id ? `关联章节：${titles.get(event.chapter_id) ?? event.chapter_id}` : ''].filter(Boolean).join('；'),
+      projectId, reason: '时间线事件（仅一致性检查使用）', priority: 76 - Math.min(5, index / 40) }))
+    return this.budget(projectId, 'consistency', candidates, budget,
+      ['other_chapters', 'pending_memory', 'foreshadows', 'ideas', 'outlines', 'digests', 'story_notes', 'references', 'creative_chat', 'other_projects'], task.excludedIds)
   }
 
   private buildCreative(task: AITaskEnvelope, budget: number): ContextBundle {

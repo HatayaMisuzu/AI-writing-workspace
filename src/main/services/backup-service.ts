@@ -179,7 +179,7 @@ function validateBackup(payload: BackupPayload): void {
   payload.messages.forEach((row) => {
     if (!threadIds.has(row.thread_id as string)) throw new Error('BACKUP_INVALID_MESSAGE_THREAD')
     assertEnum(row.role, ['user', 'assistant'], 'BACKUP_INVALID_MESSAGE_ROLE')
-    assertEnum(row.task_mode, ['discussion', 'brainstorm', 'generation', 'editing', 'organization', 'chapter_digest', 'proofreading', 'reader_review'], 'BACKUP_INVALID_MESSAGE_MODE')
+    assertEnum(row.task_mode, ['discussion', 'brainstorm', 'generation', 'editing', 'organization', 'chapter_digest', 'proofreading', 'reader_review', 'consistency_check'], 'BACKUP_INVALID_MESSAGE_MODE')
     assertEnum(row.status, ['streaming', 'complete', 'error', 'cancelled'], 'BACKUP_INVALID_MESSAGE_STATUS')
   })
   payload.digests.forEach((row) => {

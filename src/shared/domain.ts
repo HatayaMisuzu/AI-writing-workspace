@@ -11,7 +11,9 @@ export type AIMode =
   | 'chapter_digest'
   | 'proofreading'
   | 'reader_review'
-export type RoutedTask = Exclude<AIMode, 'reader_review'>
+  /** P1-6 记录员·一致性检查：只读冲突报告；模型路由沿用 organization。 */
+  | 'consistency_check'
+export type RoutedTask = Exclude<AIMode, 'reader_review' | 'consistency_check'>
 export type WritePermission = 'none' | 'proposal' | 'authorized'
 export type MemoryStatus = 'observed' | 'confirmed' | 'tentative' | 'idea' | 'suggested' | 'rejected' | 'superseded'
 export type MemoryType = 'fact' | 'event' | 'character_state' | 'relationship' | 'decision' | 'idea' | 'question' | 'foreshadowing' | 'style_signal'
@@ -303,7 +305,7 @@ export interface AITaskEnvelope {
 
 export interface ContextItem {
   id: string
-  kind: 'selection' | 'document' | 'nearby' | 'memory' | 'note' | 'search' | 'style' | 'character' | 'digest' | 'reference' | 'outline'
+  kind: 'selection' | 'document' | 'nearby' | 'memory' | 'note' | 'search' | 'style' | 'character' | 'digest' | 'reference' | 'outline' | 'timeline'
   title: string
   content: string
   projectId: string
@@ -322,7 +324,7 @@ export interface ContextOmission {
 
 export interface ContextBundle {
   projectId: string
-  policy: 'creative' | 'reader'
+  policy: 'creative' | 'reader' | 'consistency'
   items: ContextItem[]
   metadata: { estimatedTokens: number; sourceIds: string[]; excludedKinds: string[]; omitted?: ContextOmission[] }
 }

@@ -11,6 +11,9 @@ import { DocumentService } from '../services/document-service'
 import { PromptTemplateService } from '../services/prompt-template-service'
 
 const estimateTokens = (text: string): number => Math.ceil(text.length / 2.2)
+const policyFor = (mode: AITaskEnvelope['mode']): ContextBundle['policy'] => mode === 'reader_review' ? 'reader' : mode === 'consistency_check' ? 'consistency' : 'creative'
+/** P1-6：一致性检查是记录员（organization）的子任务，复用其模型路由，不新增调用通道。 */
+const routeKey = (mode: AITaskEnvelope['mode']): string => mode === 'consistency_check' ? 'organization' : mode
 
 type RuntimeAdapter = Pick<OpenAICompatibleAdapter, 'chat'>
 type RuntimeAdapterFactory = (baseUrl: string, apiKey: string) => RuntimeAdapter
@@ -37,7 +40,7 @@ export class AICreativeRuntime {
         const source = new DocumentService(this.db).getContent(task.target.projectId, task.target.documentId)
         if (source.revision !== task.target.sourceRevision) throw Object.assign(new Error('来源章节已变化，请重新发送请求。'), { code: 'AI_SOURCE_STALE' })
       }
-      const model = this.providers.route(task.mode)
+      const model = this.providers.route(routeKey(task.mode))
       const { config, apiKey } = this.providers.getWithSecret(model.providerId)
       const timeouts = this.providers.resolveTimeouts(model.providerId)
       const { messages, context } = this.plan(task, threadId, model)
@@ -86,7 +89,7 @@ export class AICreativeRuntime {
    * 不解密 API Key、不发起网络请求；未配置模型时按默认窗口估算。
    */
   previewContext(task: AITaskEnvelope, threadId: string): ContextBundle {
-    try { return this.plan(task, threadId, this.providers.route(task.mode)).context }
+    try { return this.plan(task, threadId, this.providers.route(routeKey(task.mode))).context }
     catch { return this.plan(task, threadId, undefined).context }
   }
 
@@ -96,14 +99,14 @@ export class AICreativeRuntime {
     // S7：预算 = 窗口 − 最大输出 − 余量
     const inputLimit = Math.max(256, computeContextInputBudget(contextWindow, maxOutput))
     const systemOnly = this.messageTokens(composeProviderMessages({ roleTemplate: this.templates.getOverride(task.projectId, task.mode), task: { ...task, userIntent: '' }, context: {
-      projectId: task.projectId, policy: task.mode === 'reader_review' ? 'reader' : 'creative', items: [],
+      projectId: task.projectId, policy: policyFor(task.mode), items: [],
       metadata: { estimatedTokens: 0, sourceIds: [], excludedKinds: [] }
     }, history: [] }))
     if (systemOnly >= inputLimit) throw Object.assign(new Error('模型上下文窗口过小，无法容纳基础任务指令。'), { code: 'MODEL_CONTEXT_WINDOW_TOO_SMALL' })
     const userBudget = Math.min(Math.floor(inputLimit * 0.5), inputLimit - systemOnly)
     const providerTask = { ...task, userIntent: task.userIntent.slice(0, Math.max(1, Math.floor(userBudget * 2.2))) }
     const history = this.fitHistory(this.loadHistory(providerTask, threadId), Math.floor(inputLimit * 0.25))
-    const emptyContext: ContextBundle = { projectId: task.projectId, policy: task.mode === 'reader_review' ? 'reader' : 'creative',
+    const emptyContext: ContextBundle = { projectId: task.projectId, policy: policyFor(task.mode),
       items: [], metadata: { estimatedTokens: 0, sourceIds: [], excludedKinds: [] } }
     const fixedTokens = this.messageTokens(composeProviderMessages({ task: providerTask, context: emptyContext, history, roleTemplate: this.templates.getOverride(task.projectId, task.mode) }))
     const builtContext = this.context.build(providerTask, Math.max(0, inputLimit - fixedTokens))
@@ -111,9 +114,10 @@ export class AICreativeRuntime {
   }
 
 
-  private contextSnapshot(context: ContextBundle): { sources: Array<{ id: string; kind: string }>; omitted: Array<{ id: string; kind: string; reason: string }> } {
+  private contextSnapshot(context: ContextBundle): { sources: Array<{ id: string; kind: string; truncated?: true }>; omitted: Array<{ id: string; kind: string; reason: string }> } {
     return {
-      sources: context.items.map((item) => ({ id: item.id, kind: item.kind })),
+      // 修复 3：snapshot 记录哪些来源（如哪章）被截断
+      sources: context.items.map((item) => ({ id: item.id, kind: item.kind, ...(item.truncated ? { truncated: true as const } : {}) })),
       omitted: (context.metadata.omitted ?? []).map((item) => ({ id: item.id, kind: item.kind, reason: item.reason }))
     }
   }

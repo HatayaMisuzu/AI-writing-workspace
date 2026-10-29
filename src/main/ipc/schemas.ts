@@ -75,7 +75,7 @@ export const snapshotReasonSchema = z.enum(['interval', 'large_delete', 'ai_edit
 // R4/S6：上下文来源 id（如 `selection:<docId>`），作者可逐条排除。
 export const contextSourceIdSchema = z.string().min(1).max(300)
 export const aiTaskSchema = z.object({
-  mode: z.enum(['discussion','brainstorm','generation','editing','organization','chapter_digest','proofreading','reader_review']),
+  mode: z.enum(['discussion','brainstorm','generation','editing','organization','chapter_digest','proofreading','reader_review','consistency_check']),
   writePermission: z.enum(['none','proposal','authorized']), userIntent: z.string().min(1).max(200_000),
   projectId: idSchema, documentId: idSchema.optional(), throughChapterId: idSchema.optional(), throughChapterNumber: z.number().optional(),
   selection: z.object({ from: z.number().int().nonnegative(), to: z.number().int().nonnegative(), text: z.string().max(200_000) }).optional(),
@@ -105,7 +105,7 @@ export const writingGoalsInputSchema = z.object({
 }).strict()
 
 // P1-4：提示词模板（变量与长度由 validatePromptTemplate 校验，未知变量拒绝保存）
-export const promptTemplateModeSchema = z.enum(['discussion','brainstorm','generation','editing','organization','chapter_digest','proofreading','reader_review'])
+export const promptTemplateModeSchema = z.enum(['discussion','brainstorm','generation','editing','organization','chapter_digest','proofreading','reader_review','consistency_check'])
 export const promptTemplateTextSchema = z.string().max(PROMPT_TEMPLATE_MAX_LENGTH).superRefine((text, ctx) => {
   const check = validatePromptTemplate(text)
   if (!check.ok) ctx.addIssue({ code: 'custom', message: check.error })
