@@ -8,6 +8,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Character, CharacterHoverPrefs, DocumentContent, DocumentNode, DocumentTaskTarget, LocalLintIssue, ProofreadIssue, TextPatch } from '../../../shared/domain'
 import { textIdentity } from '../../../shared/text-identity'
 import { findTextRange, findTextRanges, plainTextRangeToPm } from '../services/prosemirror-range'
+import { LIVE_WORD_COUNT_DELAY_MS, liveWordCountOf } from '../services/live-word-count'
+import { averageBlockHeight, type BlockMetrics } from '../services/block-height-estimate'
 import { SaveCoordinator, type SaveState } from '../services/save-coordinator'
 import { NameMatcher, termsFromCharacters } from '../../../shared/name-matcher'
 import { CHARACTERS_CHANGED_EVENT, HOVER_DEGRADE_NOTICE, characterHoverPlugin, hitAt, ignoreHoverAt, isHoverDegraded, setHoverMatcher, type DecoratedHit } from '../services/character-hover'
@@ -48,6 +50,18 @@ export function EditorSurface({ node, content, focusMode, onFocusMode, onSaved, 
   const [proofreadError, setProofreadError] = useState<string>()
   const [ignoredIssues, setIgnoredIssues] = useState<Set<string>>(new Set())
   const [liveWordCount, setLiveWordCount] = useState(content.wordCount)
+  const writingPageRef = useRef<HTMLElement>(null)
+  const updateBlockEstimateRef = useRef<() => void>(() => undefined)
+  const wordCountTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const scheduleWordCount = useCallback((): void => {
+    if (wordCountTimer.current) clearTimeout(wordCountTimer.current)
+    wordCountTimer.current = setTimeout(() => {
+      wordCountTimer.current = undefined
+      setLiveWordCount(liveWordCountOf(latestPlainText.current))
+      updateBlockEstimateRef.current()
+    }, LIVE_WORD_COUNT_DELAY_MS)
+  }, [])
+  useEffect(() => () => { if (wordCountTimer.current) clearTimeout(wordCountTimer.current) }, [])
   const onSavedRef = useRef(onSaved)
   const pendingStyleSample = useRef<{ origin: 'ai'; text: string } | undefined>(undefined)
   const renderedDocumentId = useRef(node.id)
@@ -104,11 +118,12 @@ export function EditorSurface({ node, content, focusMode, onFocusMode, onSaved, 
     onUpdate: ({ editor: activeEditor }) => {
       const plainText = activeEditor.getText({ blockSeparator: '\n\n' })
       latestPlainText.current = plainText
-      setLocalIssues([])
-      setIgnoredIssues(new Set())
+      // 按键路径只做必要的事：没有提示时不触发重渲染；字数是全文正则（20 万字约 7–17ms），推迟到停顿后再算
+      setLocalIssues((previous) => previous.length ? [] : previous)
+      setIgnoredIssues((previous) => previous.size ? new Set() : previous)
       const styleSample = pendingStyleSample.current
       pendingStyleSample.current = undefined
-      setLiveWordCount((plainText.match(/[\p{Script=Han}]/gu)?.length ?? 0) + (plainText.match(/[A-Za-z0-9]+/g)?.length ?? 0))
+      scheduleWordCount()
       coordinator.markDirty({ editorJson: activeEditor.getJSON() as Record<string, unknown>, plainText, styleSample })
       coordinator.schedule()
     },
@@ -117,6 +132,45 @@ export function EditorSurface({ node, content, focusMode, onFocusMode, onSaved, 
       onSelection(from === to ? undefined : { fromPm: from, toPm: to, text: activeEditor.state.doc.textBetween(from, to, '\n') })
     }
   }, [node.id])
+
+  // 屏外段落估算高度：按段落字数、当前宽度、行高算平均段高，写到编辑器外层的 CSS 变量（不碰 ProseMirror 的 DOM）
+  useEffect(() => {
+    if (!editor) return
+    const viewDom = (): HTMLElement | undefined => { try { return editor.isDestroyed ? undefined : editor.view.dom as HTMLElement } catch { return undefined } }
+    const measure = (): void => {
+      const page = writingPageRef.current
+      const dom = viewDom()
+      if (!page || !dom) return
+      const paragraph = dom.querySelector('p') ?? dom
+      const style = getComputedStyle(paragraph)
+      const fontSize = parseFloat(style.fontSize) || 18
+      const spacing = parseFloat(style.letterSpacing) || 0
+      const context = document.createElement('canvas').getContext('2d')
+      if (context) context.font = `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`
+      const cjk = (context?.measureText('永').width || fontSize) + spacing
+      const latin = (context ? context.measureText('abcdefghijklmnopqrstuvwxyz0123456789').width / 36 : fontSize * 0.55) + spacing
+      const metrics: BlockMetrics = {
+        contentWidth: dom.clientWidth - (parseFloat(style.paddingLeft) || 0) - (parseFloat(style.paddingRight) || 0),
+        cjkWidth: cjk, latinWidth: latin,
+        lineHeight: parseFloat(style.lineHeight) || fontSize * 1.92,
+        indent: parseFloat(style.textIndent) || 0
+      }
+      const texts: string[] = []
+      editor.state.doc.forEach((child) => { texts.push(child.textContent) })
+      const next = Math.round(averageBlockHeight(texts, metrics) * 10) / 10
+      const current = parseFloat(page.style.getPropertyValue('--block-estimate')) || 0
+      if (Math.abs(next - current) >= 0.1) page.style.setProperty('--block-estimate', `${next}px`)
+    }
+    updateBlockEstimateRef.current = measure
+    let lastWidth = -1
+    const observer = new ResizeObserver(() => {
+      const width = viewDom()?.clientWidth ?? -1
+      if (width !== lastWidth) { lastWidth = width; measure() }
+    })
+    const attach = (): void => { const dom = viewDom(); if (dom) { observer.observe(dom); measure() } }
+    if (viewDom()) attach(); else editor.on('create', attach)
+    return () => { editor.off('create', attach); observer.disconnect(); updateBlockEstimateRef.current = () => undefined }
+  }, [editor, content.documentId, content.revision])
 
   useEffect(() => {
     coordinator.resetRevision(content.revision)
@@ -308,7 +362,7 @@ export function EditorSurface({ node, content, focusMode, onFocusMode, onSaved, 
       <span className="toolbar-spacer" /><span className={`save-indicator ${saveState}`} title={saveError}><Save size={14} />{saveState === 'saved' ? '已保存' : saveState === 'dirty' ? '等待保存' : saveState === 'saving' ? '保存中' : '保存失败，内容仍保留'}</span>
     </div>
     {saveError && <div className="save-error" role="alert">{saveError}</div>}
-    <div className="writing-scroll"><article className="writing-page"><h1>{node.title}</h1><EditorContent editor={editor} /></article></div>
+    <div className="writing-scroll"><article className="writing-page" ref={writingPageRef}><h1>{node.title}</h1><EditorContent editor={editor} /></article></div>
     <div className="editor-status"><span>{liveWordCount.toLocaleString()} 字</span>{visibleLocalIssues.length > 0 && <button className="proofread-count" onClick={() => setProofreadOpen(true)}>{visibleLocalIssues.length} 条校对提示</button>}{hoverDegraded && hoverPrefs?.enabled && <span className="hover-degraded" data-testid="hover-degraded">{HOVER_DEGRADE_NOTICE}</span>}</div>
     {hoverCard && <CharacterHoverCard term={hoverCard.hit.term} position={hoverCard.position} showOpenLink={!blackroomLocked && Boolean(onOpenCharacter)}
       characters={hoverCard.hit.characterIds.map((id) => characters.find((item) => item.id === id)).filter((item): item is Character => Boolean(item))}

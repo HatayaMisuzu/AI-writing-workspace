@@ -145,6 +145,8 @@ button.danger-button { color: #fff; background: var(--danger); border-color: var
 .writing-page h1 { font: 600 30px/1.4 STSong, SimSun, "Noto Serif CJK SC", serif; margin: 0 0 36px; letter-spacing: .06em; }
 .manuscript-editor { outline: 0; min-height: 58vh; font: 18px/1.92 STSong, SimSun, "Noto Serif CJK SC", serif; letter-spacing: .025em; }
 .manuscript-editor p { margin: 0 0 1.05em; text-indent: 2em; }
+/* 按键耗时：长章节每次输入都会强制整篇重排；屏外段落跳过渲染/布局（auto 会记住真实高度；未渲染过的按 --block-estimate 估算，见 block-height-estimate.ts），屏内与可访问性不受影响 */
+.manuscript-editor > * { content-visibility: auto; contain-intrinsic-size: auto var(--block-estimate, 3.6em); }
 .manuscript-editor p.is-editor-empty:first-child::before { content: attr(data-placeholder); float: left; color: #b2b2ac; pointer-events: none; height: 0; text-indent: 2em; }
 .editor-status { padding: 0 16px; display: flex; justify-content: flex-end; align-items: center; gap: 16px; color: var(--muted); font-size: 11px; border-top: 1px solid #efefeb; }
 .proofread-count { color: var(--warning); min-height: 24px; border: 0; background: transparent; padding: 0; font-size: 11px; }

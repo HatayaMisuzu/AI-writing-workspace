@@ -7,6 +7,14 @@ export interface EditorSnapshot {
   styleSample?: { origin: TextOrigin; text: string }
 }
 
+/**
+ * 自动保存节奏：停止输入 700ms 后保存；连续输入时距本轮第一次改动最迟 2000ms 也会保存。
+ * 崩溃/强杀时最多丢失「最近 SAVE_MAX_WAIT_MS 内的输入 + 一次进行中的保存」。
+ * 切章、关窗、退出、进小黑屋、备份等路径都会先 flush()，不受这个上限影响。
+ */
+export const SAVE_IDLE_DELAY_MS = 700
+export const SAVE_MAX_WAIT_MS = 2000
+
 export type SaveState = 'saved' | 'dirty' | 'saving' | 'error'
 
 export class SaveCoordinator {
@@ -20,8 +28,11 @@ export class SaveCoordinator {
     private readonly save: (snapshot: EditorSnapshot) => Promise<DocumentContent>,
     private readonly onSaved: (content: DocumentContent) => void,
     private readonly onState: (state: SaveState, error?: unknown) => void,
-    private readonly delayMs = 700
+    private readonly delayMs = SAVE_IDLE_DELAY_MS,
+    private readonly maxWaitMs = SAVE_MAX_WAIT_MS
   ) { this.revision = initialRevision }
+  /** 本轮未保存改动的开始时间：连续输入时也保证最迟 maxWaitMs 后落盘（防抖不会无限推迟）。 */
+  private dirtySince?: number
 
   markDirty(snapshot: Omit<EditorSnapshot, 'baseRevision'> & { baseRevision?: number }): void {
     this.pending = { ...snapshot, styleSample: snapshot.styleSample ?? this.pending?.styleSample,
@@ -31,11 +42,15 @@ export class SaveCoordinator {
 
   schedule(): void {
     if (this.timer) clearTimeout(this.timer)
-    this.timer = setTimeout(() => { void this.flush().catch(() => undefined) }, this.delayMs)
+    const now = Date.now()
+    this.dirtySince ??= now
+    const wait = Math.max(0, Math.min(this.delayMs, this.dirtySince + this.maxWaitMs - now))
+    this.timer = setTimeout(() => { void this.flush().catch(() => undefined) }, wait)
   }
 
   async flush(): Promise<void> {
     if (this.timer) { clearTimeout(this.timer); this.timer = undefined }
+    this.dirtySince = undefined
     if (!this.drain) this.drain = this.drainPending().finally(() => { this.drain = undefined })
     return this.drain
   }
