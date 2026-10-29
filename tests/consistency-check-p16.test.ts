@@ -11,11 +11,12 @@ import { composeProviderMessages } from '../src/main/ai/prompt-composer'
 import { PromptTemplateService } from '../src/main/services/prompt-template-service'
 import { aiStartSchema, chapterWordRangeSchema, promptTemplateTextSchema } from '../src/main/ipc/schemas'
 import { toUserFacingIpcError } from '../src/main/ipc/validation-error'
-import { CONSISTENCY_OUTPUT_CONTRACT, conflictTargetLabel, consistencyCoverage, coverageWarnings, parseConsistencyReport } from '../src/shared/consistency-check'
+import { CONSISTENCY_OUTPUT_CONTRACT, classifyConflicts, conflictTargetLabel, consistencyCoverage, coverageWarnings, parseConsistencyReport } from '../src/shared/consistency-check'
 import { mapChatHistory } from '../src/renderer/src/services/assistant-history'
 import { READER_REVIEW_DEFAULT_INTENT } from '../src/shared/reader-review'
 import { inputForQuickMode, inputForReaderThrough } from '../src/renderer/src/services/quick-mode-input'
 import type { AIMode, ContextBundle } from '../src/shared/domain'
+import { computeContextInputBudget } from '../src/shared/provider-presets'
 
 const REPORT = JSON.stringify({ conflicts: [{ quote: '林舟左手持剑', location: '第1段', conflictWith: { kind: 'character', title: '林舟' }, explanation: '人物卡写明林舟惯用右手' }] })
 
@@ -235,5 +236,83 @@ describe('PR25 follow-up', () => {
     expect(setting.title).toBe('设定 · 已确认设定：京城冬季封城（fact）')
     const result = promptTemplateTextSchema.safeParse('x'.repeat(5000))
     expect((toUserFacingIpcError(result.error) as Error).message).not.toContain('。。')
+  })
+})
+
+describe('PR25 recheck: runtime keeps chapter floor; rotation; unchecked quotes', () => {
+  const longSettings = (db: ReturnType<typeof createTestDb>, projectId: string) => {
+    const memories = new MemoryService(db)
+    for (let i = 0; i < 12; i += 1) {
+      const memory = memories.create({ projectId, type: 'fact', content: `LONGSET${i}：` + '城中旧规甚多。'.repeat(57), status: 'suggested', sourceType: 'author', sourceId: 'a' })
+      memories.confirm(projectId, memory.id, 'user')
+    }
+  }
+  const chapterText = 'MARK_START' + '林舟左手持剑。'.repeat(570) + 'MARK_END'
+  const runCheck = async (window: number, many: boolean) => {
+    const { db, project, chapterId } = setup(chapterText)
+    if (many) longSettings(db, project.id)
+    const { runtime, sent } = runtimeWith(db, '{"conflicts":[]}', window)
+    const thread = new ChatService(db).createThread(project.id, `w${window}`)
+    const chunks: Array<{ context?: ContextBundle }> = []
+    let error: (Error & { code?: string }) | undefined
+    try { for await (const chunk of runtime.run(`r${window}`, task(project.id, chapterId), thread.id, 'u', 'a')) chunks.push(chunk) }
+    catch (caught) { error = caught as Error & { code?: string } }
+    const history = mapChatHistory(new ChatService(db).listMessages(project.id, thread.id))
+    return { sent, error, context: chunks.find((chunk) => chunk.context)?.context, coverage: history.find((message) => message.id === 'a')?.coverage, chapterId }
+  }
+
+  it('window 700: refuses without calling the model', async () => {
+    const { sent, error } = await runCheck(700, false)
+    expect(sent).toHaveLength(0)
+    expect(error?.code).toBe('CONSISTENCY_CONTEXT_WINDOW_TOO_SMALL')
+    expect(error?.message).toContain('上下文窗口太小，无法做一致性检查')
+  })
+
+  it('12 long settings + window 3000: chapter floor kept, character card not squeezed out, warnings correct', async () => {
+    const { sent, error, context, coverage, chapterId } = await runCheck(3000, true)
+    expect(error).toBeUndefined()
+    expect(sent).toHaveLength(1)
+    const wire = JSON.stringify(sent[0])
+    expect(wire).toContain('MARK_START'); expect(wire).toContain('惯用右手'); expect(wire).toContain('林舟抵达京城')
+    const chapter = context!.items.find((item) => item.id === chapterId)!
+    // 保底：本章 ≥ 25% 上下文预算（输入预算扣除固定指令后），固定指令约占两成，故断言 ≥ 19% 输入预算
+    expect(Math.ceil(chapter.content.length / 2.2)).toBeGreaterThanOrEqual(Math.floor(computeContextInputBudget(3000, 64) * 0.19))
+    expect(coverage!.chapterTruncated).toBe(true)
+    expect(coverage!.chapterOmitted).toBe(false)
+    expect(coverage!.omittedRefs.character).toBe(0)
+    expect(coverage!.omittedRefs.setting).toBeGreaterThan(0)
+    const warnings = coverageWarnings(coverage)
+    expect(warnings[0]).toMatch(/未比对：设定×\d+）/)
+    expect(warnings).toContain('本章过长，只检查了开头部分正文，结果不完整。')
+  })
+
+  it('12 long settings + window 1600: either sends with chapter floor + character card, or refuses without calling the model', async () => {
+    const { sent, error, context, coverage, chapterId } = await runCheck(1600, true)
+    if (error) {
+      expect(sent).toHaveLength(0)
+      expect(error.message).toContain('上下文窗口太小，无法做一致性检查')
+      return
+    }
+    expect(sent).toHaveLength(1)
+    const wire = JSON.stringify(sent[0])
+    expect(wire).toContain('MARK_START'); expect(wire).toContain('惯用右手')
+    expect(Math.ceil(context!.items.find((item) => item.id === chapterId)!.content.length / 2.2)).toBeGreaterThanOrEqual(Math.floor(computeContextInputBudget(1600, 64) * 0.19))
+    expect(coverage!.chapterOmitted).toBe(false)
+    expect(coverage!.omittedRefs.character).toBe(0)
+    expect(coverageWarnings(coverage)[0]).toMatch(/未比对：设定×\d+/)
+  })
+
+  it('quotes from a report on another chapter are all 未校验, never counted as conflicts', () => {
+    const report = JSON.stringify({ conflicts: [
+      { quote: '林舟左手持剑', conflictWith: { kind: 'character', title: '林舟' } },
+      { quote: '林舟拔出长剑斩断了城门', conflictWith: { kind: 'setting', title: '京城' } }] })
+    const parsed = parseConsistencyReport(report)
+    expect(parsed.ok).toBe(true)
+    if (!parsed.ok) return
+    expect(classifyConflicts(parsed.conflicts, false)).toMatchObject({ confirmed: [], notFound: [], unchecked: [{}, {}] })
+    const own = parseConsistencyReport(report, '林舟左手持剑。')
+    if (!own.ok) throw new Error('parse')
+    const split = classifyConflicts(own.conflicts, true)
+    expect([split.confirmed.length, split.notFound.length, split.unchecked.length]).toEqual([1, 1, 0])
   })
 })

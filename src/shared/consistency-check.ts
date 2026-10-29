@@ -89,3 +89,14 @@ export const truncateBySide = (text: string, keepChars: number, side: Truncation
   const keep = Math.max(1, Math.floor(keepChars))
   return side === 'tail' ? text.slice(-keep) : text.slice(0, keep)
 }
+
+/**
+ * PR25 P3-a：把冲突分为「确切冲突 / 引用未在本章找到 / 未校验」。
+ * verifiable=false（报告所属章节不是当前打开的章节，无从比对正文）时一律标「未校验」，不计入确切冲突数。
+ */
+export const classifyConflicts = (conflicts: ConsistencyConflict[], verifiable: boolean): { confirmed: ConsistencyConflict[]; notFound: ConsistencyConflict[]; unchecked: ConsistencyConflict[] } =>
+  verifiable
+    ? { confirmed: conflicts.filter((conflict) => conflict.quoteFound !== false), notFound: conflicts.filter((conflict) => conflict.quoteFound === false), unchecked: [] }
+    : { confirmed: [], notFound: [], unchecked: conflicts }
+
+export const CONSISTENCY_WINDOW_TOO_SMALL = '上下文窗口太小，无法做一致性检查'

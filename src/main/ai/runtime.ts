@@ -6,7 +6,7 @@ import { composeProviderMessages } from './prompt-composer'
 import { OpenAICompatibleAdapter, ProviderService, type ProviderMessage } from './provider'
 import { computeContextInputBudget, DEFAULT_CONTEXT_WINDOW, DEFAULT_MAX_OUTPUT } from '../../shared/provider-presets'
 import { normalizeCandidateCount } from '../../shared/candidate-count'
-import { truncateBySide, truncationSideFor } from '../../shared/consistency-check'
+import { CONSISTENCY_WINDOW_TOO_SMALL, truncateBySide, truncationSideFor } from '../../shared/consistency-check'
 import { ChatService } from '../services/chat-service'
 import { DocumentService } from '../services/document-service'
 import { PromptTemplateService } from '../services/prompt-template-service'
@@ -156,6 +156,7 @@ export class AICreativeRuntime {
     const context: ContextBundle = { ...source, items: source.items.map((item) => ({ ...item })), metadata: { ...source.metadata, omitted: [...(source.metadata.omitted ?? [])] } }
     const fittedHistory = [...history]
     const roleTemplate = this.templates.getOverride(task.projectId, task.mode)
+    if (task.mode === 'consistency_check') return this.fitConsistency(task, context, fittedHistory, roleTemplate, limit)
     while (context.items.length) {
       const messages = composeProviderMessages({ task, context, history: fittedHistory, roleTemplate })
       const overflow = this.messageTokens(messages) - limit
@@ -182,5 +183,42 @@ export class AICreativeRuntime {
     }
     if (this.messageTokens(messages) > limit) throw Object.assign(new Error('模型输入超出上下文预算。'), { code: 'MODEL_CONTEXT_BUDGET_EXCEEDED' })
     return { messages, context }
+  }
+
+  /**
+   * PR25 P2-3：一致性检查的第二层裁剪也守住本章保底（min(本章, 25% 预算)）。
+   * 先把本章截到保底为止（保留开头），再从末尾裁引用（引用已按 设定/人物卡/时间线 轮转排列，
+   * 末尾裁剪仍保持类别均衡，且至少保留一条）；仍放不下 → 不发请求，直接报「上下文窗口太小」。
+   */
+  private fitConsistency(task: AITaskEnvelope, context: ContextBundle, history: ProviderMessage[], roleTemplate: string | undefined, limit: number): { messages: ProviderMessage[]; context: ContextBundle } {
+    const tooSmall = (): Error => Object.assign(new Error(`${CONSISTENCY_WINDOW_TOO_SMALL}（需能容纳本章保底正文和至少一类设定/人物卡/时间线）。`), { code: 'CONSISTENCY_CONTEXT_WINDOW_TOO_SMALL' })
+    const chapter = context.items.find((item) => item.kind === 'document')
+    if (!chapter || !context.items.some((item) => item.kind !== 'document')) throw tooSmall()
+    const floor = Math.max(1, Math.min(estimateTokens(chapter.content), Math.floor(limit * 0.25)))
+    const side = truncationSideFor(context.policy)
+    const sync = (): void => {
+      context.metadata.estimatedTokens = context.items.reduce((sum, item) => sum + estimateTokens(item.content), 0)
+      context.metadata.sourceIds = context.items.map((item) => item.id)
+    }
+    for (;;) {
+      const messages = composeProviderMessages({ task, context, history, roleTemplate })
+      const overflow = this.messageTokens(messages) - limit
+      if (overflow <= 0) return { messages, context }
+      const refs = context.items.filter((item) => item.kind !== 'document')
+      const chapterTokens = estimateTokens(chapter.content)
+      if (chapterTokens > floor) {
+        const keepTokens = Math.max(floor, chapterTokens - overflow - 8)
+        chapter.content = truncateBySide(chapter.content, keepTokens * 2.2, side); chapter.truncated = true
+      } else if (refs.length > 1) {
+        const last = refs.at(-1)!
+        const keepTokens = estimateTokens(last.content) - overflow - 8
+        if (keepTokens <= 0) {
+          context.items.splice(context.items.indexOf(last), 1)
+          context.metadata.omitted!.push({ id: last.id, kind: last.kind, title: last.title, reason: 'budget' })
+        } else { last.content = truncateBySide(last.content, keepTokens * 2.2, side); last.truncated = true }
+      } else if (history.length) history.shift()
+      else throw tooSmall()
+      sync()
+    }
   }
 }

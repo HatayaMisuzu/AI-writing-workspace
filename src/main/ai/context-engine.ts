@@ -65,7 +65,12 @@ export class ContextEngine {
     const excludedKinds = ['other_chapters', 'pending_memory', 'foreshadows', 'ideas', 'outlines', 'digests', 'story_notes', 'references', 'creative_chat', 'other_projects']
     // P2-2：先给设定/人物卡/时间线预留预算（本章至少保底 25%），剩余给本章；本章放不下则截断本章（保留开头）。
     const chapterFloor = Math.min(estimateTokens(chapter.plainText), Math.floor(budget * 0.25))
-    const refs = this.budget(projectId, 'consistency', candidates, Math.max(0, budget - chapterFloor), excludedKinds, task.excludedIds)
+    // PR25 P2-3：设定/人物卡/时间线按类别轮转排列（各类内部仍按优先级），避免人物卡被大量设定挤掉。
+    const byKind = ['memory', 'character', 'timeline'].map((kind) => candidates.filter((item) => item.kind === kind).toSorted((a, b) => b.priority - a.priority))
+    const rotated: Array<ContextItem & { priority: number }> = []
+    for (let round = 0; byKind.some((list) => round < list.length); round += 1)
+      for (const list of byKind) if (round < list.length) rotated.push({ ...list[round], priority: 90 - rotated.length / 1000 })
+    const refs = this.budget(projectId, 'consistency', rotated, Math.max(0, budget - chapterFloor), excludedKinds, task.excludedIds)
     const body = this.budget(projectId, 'consistency', [chapterItem], Math.max(0, budget - refs.metadata.estimatedTokens), excludedKinds, task.excludedIds)
     // 本章放在最后：runtime 若仍超预算，先截断本章而不是设定。
     const items = [...refs.items, ...body.items]
