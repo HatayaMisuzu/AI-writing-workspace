@@ -9,6 +9,8 @@ import { DocumentService } from '../src/main/services/document-service'
 import { ProjectService } from '../src/main/services/project-service'
 import { providerInputSchema } from '../src/main/ipc/schemas'
 import { createTestDb, testCodec } from './helpers'
+import { installEgressGate } from '../src/main/net/egress-guard'
+import { NetworkGate } from '../src/main/network-policy'
 
 // P1-7：本地假 Anthropic SSE 服务器（127.0.0.1，随机端口）；不访问任何真实供应商。
 type Captured = { url: string; headers: IncomingMessage['headers']; body: Record<string, unknown> }
@@ -42,8 +44,11 @@ beforeAll(async () => {
   })
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
   base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1`
+  // P3-1：主进程出站经守门；本地假服务器视为已保存 Provider
+  const gate = new NetworkGate(); gate.setSavedOrigins([new URL(base).origin]); installEgressGate(gate)
 })
-afterAll(async () => { server.closeAllConnections(); await new Promise((resolve) => server.close(resolve)) })
+afterAll(async () => {
+  installEgressGate(undefined); server.closeAllConnections(); await new Promise((resolve) => server.close(resolve)) })
 
 const collect = async (adapter: AnthropicAdapter, extra: Partial<Parameters<AnthropicAdapter['chat']>[0]> = {}): Promise<string> => {
   let out = ''

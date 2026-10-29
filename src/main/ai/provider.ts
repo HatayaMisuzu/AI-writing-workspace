@@ -1,3 +1,4 @@
+import { EgressBlockedError, guardedFetch } from '../net/egress-guard'
 import type { AppErrorShape, ModelConfig, ProviderCapabilities, ProviderConfig, ProviderInput, ProviderType, RoutedTask } from '../../shared/domain'
 import { checkBaseUrl, displayBaseUrl, sameEndpoint, redactSecretsInText, restoreRedactedSecrets } from '../../shared/base-url'
 import { defaultTimeoutsForBaseUrl, isLocalBaseUrl, localConnectionErrorMessage } from '../../shared/provider-presets'
@@ -218,7 +219,7 @@ export function deadlineSignal(external?: AbortSignal, timeoutMs = 60_000): {
 export class OpenAICompatibleAdapter implements ProviderAdapter {
   readonly providerType = 'openai-compatible' as const
   private readonly baseUrl: string
-  constructor(baseUrl: string, private readonly apiKey: string, private readonly fetcher: typeof fetch = fetch) { this.baseUrl = requireValidBaseUrl(baseUrl) }
+  constructor(baseUrl: string, private readonly apiKey: string, private readonly fetcher: typeof fetch = guardedFetch) { this.baseUrl = requireValidBaseUrl(baseUrl) }
 
   private headers(): Record<string, string> {
     const headers: Record<string, string> = { 'content-type': 'application/json' }
@@ -359,13 +360,15 @@ export function toNetworkError(baseUrl: string, error: unknown, signal?: AbortSi
     if (reason instanceof Error && typeof (reason as Error & { code?: unknown }).code === 'string') return reason as AppErrorShape & Error
     return Object.assign(new Error('请求已取消。'), { code: 'PROVIDER_CANCELLED', recoverable: true })
   }
+  // P3-1：出站守门拒绝保持中文原因，不归一为普通网络错误
+  if (error instanceof EgressBlockedError) return Object.assign(error, { recoverable: true }) as AppErrorShape & Error
   const details = redactSecretsInText(error instanceof Error ? error.message : String(error))
   const localMsg = localConnectionErrorMessage(baseUrl)
   return Object.assign(new Error(localMsg ?? '无法连接模型服务，请检查网络与 Base URL。'), { code: 'PROVIDER_NETWORK_ERROR', recoverable: true, details })
 }
 
 /** P1-7：按作者配置的协议类型创建适配器；只发往作者配置的 Base URL。 */
-export function createProviderAdapter(providerType: ProviderType | undefined, baseUrl: string, apiKey: string, fetcher: typeof fetch = fetch): ProviderAdapter {
+export function createProviderAdapter(providerType: ProviderType | undefined, baseUrl: string, apiKey: string, fetcher: typeof fetch = guardedFetch): ProviderAdapter {
   return normalizeProviderType(providerType) === 'anthropic' ? new AnthropicAdapter(baseUrl, apiKey, fetcher) : new OpenAICompatibleAdapter(baseUrl, apiKey, fetcher)
 }
 

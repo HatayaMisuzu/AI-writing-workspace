@@ -1,3 +1,4 @@
+import { guardedFetch } from '../net/egress-guard'
 import type { AppErrorShape } from '../../shared/domain'
 import { redactSecretsInText } from '../../shared/base-url'
 import { DEFAULT_MAX_OUTPUT, defaultTimeoutsForBaseUrl } from '../../shared/provider-presets'
@@ -64,7 +65,7 @@ async function errorFromResponse(response: Response): Promise<AppErrorShape & Er
 export class AnthropicAdapter implements ProviderAdapter {
   readonly providerType = 'anthropic' as const
   private readonly baseUrl: string
-  constructor(baseUrl: string, private readonly apiKey: string, private readonly fetcher: typeof fetch = fetch) { this.baseUrl = requireValidBaseUrl(baseUrl) }
+  constructor(baseUrl: string, private readonly apiKey: string, private readonly fetcher: typeof fetch = guardedFetch) { this.baseUrl = requireValidBaseUrl(baseUrl) }
 
   private headers(): Record<string, string> {
     const headers: Record<string, string> = { 'content-type': 'application/json', 'anthropic-version': ANTHROPIC_VERSION }
