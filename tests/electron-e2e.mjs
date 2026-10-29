@@ -859,6 +859,49 @@ try {
     await waitSaved(page)
   })
 
+  // 滑块可见跳动阈值：单步总高变化 > 0.1%（约 600px / 60 万 px，滑块在 800px 轨道上约 1px）记为一次「明显跳动」
+  const SCROLL_JUMP_RATIO = 0.001
+  const SCROLL_MAX_JUMPS = 0
+  const SCROLL_MAX_DELTA_RATIO = 0.002
+  const SCROLL_MAX_RANGE_RATIO = 0.01
+  await record('M-1 20 万字滚动条稳定：首屏 scrollHeight 与真实值偏差 ≤ 10%，从头滚到尾无明显跳动（单步 >0.1% 的次数为 0、单步 ≤0.2%、极差 ≤1%）', async () => {
+    const page = running.page
+    await page.getByRole('button', { name: '正文', exact: true }).click().catch(() => {})
+    await openChapter(page, '悬停章')
+    await page.locator('.manuscript-editor', { hasText: '林栀推门进来' }).waitFor()
+    await openChapter(page, '长章')
+    await page.locator('.manuscript-editor', { hasText: '第0000段' }).waitFor()
+    await page.waitForTimeout(800)
+    const stats = await page.evaluate(async (jumpRatio) => {
+      const frame = () => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)))
+      const scroller = document.querySelector('.writing-scroll')
+      scroller.scrollTo({ top: 0, behavior: 'instant' }); await frame()
+      const heights = [scroller.scrollHeight]
+      while (scroller.scrollTop + scroller.clientHeight < scroller.scrollHeight - 2) {
+        scroller.scrollTo({ top: scroller.scrollTop + scroller.clientHeight * 0.9, behavior: 'instant' })
+        await frame()
+        heights.push(scroller.scrollHeight)
+        if (heights.length > 5000) break
+      }
+      const style = document.createElement('style')
+      style.textContent = '.manuscript-editor > * { content-visibility: visible !important; }'
+      document.head.append(style); await frame()
+      const truth = scroller.scrollHeight
+      style.remove(); await frame()
+      scroller.scrollTo({ top: 0, behavior: 'instant' })
+      let changes = 0; let maxDelta = 0; let jumps = 0
+      for (let i = 1; i < heights.length; i += 1) { const delta = Math.abs(heights[i] - heights[i - 1]); if (delta > 0) changes += 1; if (delta > truth * jumpRatio) jumps += 1; maxDelta = Math.max(maxDelta, delta) }
+      return { first: heights[0], truth, steps: heights.length, distinct: new Set(heights).size, changes, jumps, maxDelta, range: Math.max(...heights) - Math.min(...heights), last: heights.at(-1), estimate: document.querySelector('.writing-page')?.style.getPropertyValue('--block-estimate') }
+    }, SCROLL_JUMP_RATIO)
+    const deviation = Math.abs(stats.first - stats.truth) / stats.truth
+    const maxDeltaRatio = stats.maxDelta / stats.truth
+    process.stdout.write(`M-1 scroll: ${JSON.stringify(stats)} firstDeviation=${(deviation * 100).toFixed(2)}% maxDelta=${(maxDeltaRatio * 100).toFixed(3)}%\n`)
+    assert.ok(deviation <= 0.10, `首屏 scrollHeight ${stats.first} 与真实 ${stats.truth} 偏差 ${(deviation * 100).toFixed(1)}% 应 ≤ 10%`)
+    assert.ok(stats.jumps <= SCROLL_MAX_JUMPS, `滚动中明显跳动（单步 > ${SCROLL_JUMP_RATIO * 100}%）${stats.jumps} 次应 ≤ ${SCROLL_MAX_JUMPS}（总变化 ${stats.changes} 次，均为像素级）`)
+    assert.ok(stats.range / stats.truth <= SCROLL_MAX_RANGE_RATIO, `滚动全程总高极差 ${stats.range}px 应 ≤ ${SCROLL_MAX_RANGE_RATIO * 100}%`)
+    assert.ok(maxDeltaRatio <= SCROLL_MAX_DELTA_RATIO, `单步最大变化 ${stats.maxDelta}px（${(maxDeltaRatio * 100).toFixed(2)}%）应 ≤ ${SCROLL_MAX_DELTA_RATIO * 100}%`)
+  })
+
   // 按键性能 PR：自动保存改为「停顿 700ms / 连续输入最迟 2000ms」（save-coordinator.ts SAVE_MAX_WAIT_MS）。
   // 数据丢失上限：强杀时最多丢「最近 2000ms 内的输入 + 一次进行中的保存」。这里给进行中的保存 + 按键投递留 500ms 余量。
   const SAVE_MAX_WAIT_MS = 2000
