@@ -5,7 +5,7 @@ import type {
   ContextBundle,
   AITaskEnvelope, Character, ChatCursor, ChatMessage, ChatThread, DigestStatus, DocumentContent, DocumentNode, Idea, LocalLintIssue,
   MemoryItem, MemoryProposal, ModelConfig, NodeOutline, Project, ProjectNote, ProjectType, ProofreadIssue, ProviderConfig,
-  ProviderInput, RoutedTask, SearchResult, Snapshot, TaskModelRoute, TextOrigin, TextPatch, WritingDailyRow, WritingGoals, ChapterWordRange, ChapterStatus, SerialProgress, StockpileSummary, ForeshadowEntry, ForeshadowState, TimelineEvent, TimelineSortMode
+  ProviderInput, RoutedTask, SearchResult, Snapshot, TaskModelRoute, TextOrigin, TextPatch, WritingDailyRow, WritingGoals, ChapterWordRange, ChapterStatus, SerialProgress, StockpileSummary, ForeshadowEntry, ForeshadowState, TimelineEvent, TimelineSortMode, FocusLockInput, FocusLockStatus, FocusLastSession
 } from './domain'
 
 export interface WorkspaceApi {
@@ -135,6 +135,14 @@ export interface WorkspaceApi {
     }): Promise<WritingGoals>
     getChapterWordRange(projectId: string): Promise<ChapterWordRange>
     setChapterWordRange(projectId: string, range: ChapterWordRange): Promise<ChapterWordRange>
+  }
+  focus: {
+    status(projectId: string): Promise<FocusLockStatus>
+    restore(projectId: string): Promise<FocusLockStatus>
+    start(projectId: string, input: FocusLockInput): Promise<FocusLockStatus>
+    finish(projectId: string): Promise<FocusLockStatus>
+    emergencyExit(projectId: string, phrase: string): Promise<FocusLockStatus>
+    lastSession(projectId: string): Promise<FocusLastSession | null>
   }
   prompts: {
     list(projectId: string): Promise<PromptTemplateEntry[]>

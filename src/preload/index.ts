@@ -77,6 +77,11 @@ const api: WorkspaceApi = {
     getChapterWordRange: (projectId) => invoke('writing:get-word-range', projectId),
     setChapterWordRange: (projectId, range) => invoke('writing:set-word-range', projectId, range)
   },
+  focus: {
+    status: (projectId) => invoke('focus:status', projectId), restore: (projectId) => invoke('focus:restore', projectId),
+    start: (projectId, input) => invoke('focus:start', projectId, input), finish: (projectId) => invoke('focus:finish', projectId),
+    emergencyExit: (projectId, phrase) => invoke('focus:emergency-exit', projectId, phrase), lastSession: (projectId) => invoke('focus:last-session', projectId)
+  },
   prompts: {
     list: (projectId) => invoke('prompts:list', projectId),
     set: (projectId, mode, text) => invoke('prompts:set', projectId, mode, text),

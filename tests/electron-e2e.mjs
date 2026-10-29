@@ -110,7 +110,8 @@ const launchViaCdp = async () => {
   const page = context.pages().find((item) => !item.url().startsWith('devtools://')) ?? await context.waitForEvent('page')
   const app = {
     waitForEvent: async (name) => { assert.equal(name, 'close'); await exited },
-    close: async () => { await browser.close().catch(() => {}); if (child.exitCode === null) child.kill(); await exited }
+    close: async () => { await browser.close().catch(() => {}); if (child.exitCode === null) child.kill(); await exited },
+    kill: async () => { if (child.exitCode === null) child.kill('SIGKILL'); await exited; await browser.close().catch(() => {}) }
   }
   return { app, page }
 }
@@ -138,6 +139,19 @@ const finishLaunch = async (app, page) => {
   return { app, page }
 }
 
+// F15：模拟强杀进程（不走关闭流程）
+const killApp = async (running) => {
+  if (running.app.kill) return running.app.kill()
+  const closed = running.app.waitForEvent('close').catch(() => {})
+  running.app.process().kill('SIGKILL')
+  await closed
+}
+// F15：renderer 侧请求计数（本地 file/data/blob/devtools 资源除外）
+const rendererRequests = []
+const watchRendererRequests = (page) => page.on('request', (request) => {
+  const url = request.url()
+  if (!/^(file|data|blob|devtools|chrome-extension):/.test(url)) rendererRequests.push(url)
+})
 const waitSaved = async (page) => {
   await page.getByText('已保存', { exact: true }).waitFor({ timeout: 10_000 })
 }
@@ -466,6 +480,152 @@ try {
     assert.equal(streamed.body.max_tokens, 1_500)
     assert.equal(typeof streamed.body.system, 'string')
     assert.ok(streamed.body.messages.every((message) => message.role !== 'system'))
+  })
+
+
+  // ───── F15 小黑屋（e2e ⑦–⑪）。锁定期间统计：主进程实发（fixture 命中）、渲染进程请求、webRequest 拦截日志 ─────
+  const typeAtEnd = async (page, text) => {
+    const editor = page.locator('.manuscript-editor')
+    await editor.click()
+    await page.keyboard.press('Control+End')
+    await page.keyboard.type(text)
+    await waitSaved(page)
+  }
+  const enterBlackroom = async (page, fill) => {
+    await page.getByRole('button', { name: '小黑屋', exact: true }).click()
+    const dialog = page.getByTestId('blackroom-entry')
+    // 不预填：未选方式、无输入框
+    assert.equal(await dialog.locator('input[type="radio"]:checked').count(), 0)
+    assert.equal(await dialog.getByLabel('目标字数').count(), 0)
+    await fill(dialog)
+    await dialog.getByRole('button', { name: '锁定并开始' }).click()
+    await page.getByTestId('blackroom-bar').waitFor()
+  }
+  const lockedNetwork = { fixture: 0, anthropic: 0, renderer: 0, blocked: 0 }
+  const snapshotNetwork = async (page) => ({ fixture: fixtureHits, anthropic: anthropicRequests.length, renderer: rendererRequests.length, blocked: (await page.evaluate(() => window.workspace.network.blockedLog())).length })
+  const addLockedDelta = async (page, before) => {
+    const after = await snapshotNetwork(page)
+    for (const key of Object.keys(lockedNetwork)) lockedNetwork[key] += after[key] - before[key]
+  }
+  await running.page.locator('.manuscript-editor').waitFor()
+  watchRendererRequests(running.page)
+
+  await record('F15 ⑦ 小黑屋隐藏项全部消失、Esc 不退出、AI IPC 返回 FOCUS_LOCKED', async () => {
+    const page = running.page
+    // 超限拒绝不修正
+    await page.getByRole('button', { name: '小黑屋', exact: true }).click()
+    const dialog = page.getByTestId('blackroom-entry')
+    await dialog.getByLabel('写满字数').check()
+    await dialog.getByLabel('目标字数').fill('50001')
+    await dialog.getByRole('button', { name: '锁定并开始' }).click()
+    await dialog.getByRole('alert').filter({ hasText: '1–50000' }).waitFor()
+    await dialog.getByRole('button', { name: '取消' }).click()
+    await enterBlackroom(page, async (d) => { await d.getByLabel('写满字数').check(); await d.getByLabel('目标字数').fill('8') })
+    const before = await snapshotNetwork(page)
+    for (const name of ['全文检索', '修改提案', '校对', '专注', '小黑屋', '退出专注']) assert.equal(await page.locator('button', { hasText: new RegExp(`^${name}`) }).count(), 0, `锁定期间不应出现「${name}」`)
+    for (const selector of ['.assistant-panel', '.project-sidebar', '.works-rail', '.manuscript-aside-stack', '.proofread-drawer']) assert.equal(await page.locator(selector).count(), 0, `锁定期间不应渲染 ${selector}`)
+    assert.match(await page.getByTestId('blackroom-words').innerText(), /已写 0 \/ 8 字/)
+    await page.keyboard.press('Escape')
+    await page.keyboard.press('Control+Shift+F')
+    assert.equal(await page.getByTestId('blackroom-bar').count(), 1, 'Esc 不应退出小黑屋')
+    assert.equal(await page.getByRole('dialog').count(), 0, '锁定期间 Ctrl+Shift+F 不应打开检索')
+    // Ctrl J 快速灵感仍可用（只记录）
+    await page.keyboard.press('Control+j')
+    await page.getByPlaceholder('记下一闪而过的想法…').waitFor()
+    await page.getByRole('button', { name: '取消' }).click()
+    const rejected = await page.evaluate(async ({ projectId, chapterId }) => {
+      const out = {}
+      const capture = async (name, fn) => { try { await fn(); out[name] = 'resolved' } catch (error) { out[name] = String(error?.message ?? error) } }
+      const task = { mode: 'discussion', writePermission: 'none', userIntent: '锁定中试探', projectId, documentId: chapterId }
+      await capture('preview', () => window.workspace.ai.previewContext({ threadId: crypto.randomUUID(), task }))
+      await capture('digest', () => window.workspace.digests.run(projectId, chapterId))
+      await capture('proofread', () => window.workspace.proofreading.run(projectId, chapterId))
+      await capture('extract', () => window.workspace.memories.extractIntent(projectId, chapterId, '记住：锁定中试探'))
+      const [provider] = await window.workspace.providers.list()
+      const [model] = await window.workspace.providers.models()
+      await capture('providerTest', () => window.workspace.providers.test(provider.id, model.modelId))
+      await capture('providerTestUrl', () => window.workspace.providers.testUrl({ baseUrl: provider.baseUrl, apiKey: 'x', modelId: model.modelId }))
+      out.start = await new Promise((done) => {
+        const requestId = crypto.randomUUID()
+        window.workspace.ai.start({ requestId, threadId: crypto.randomUUID(), userMessageId: crypto.randomUUID(), assistantMessageId: crypto.randomUUID(), task }, (event) => { if (event.type === 'error') done(`${event.code}:${event.message}`); if (event.type === 'done') done('done') })
+      })
+      return out
+    }, { projectId: ids.projectId, chapterId: ids.chapterA })
+    for (const [name, message] of Object.entries(rejected)) assert.match(message, /FOCUS_LOCKED/, `${name} 应返回 FOCUS_LOCKED，实际 ${message}`)
+    await addLockedDelta(page, before)
+  })
+
+  await record('F15 ⑧ 写够 N 字并保存后「出屋」出现，点击才退出', async () => {
+    const page = running.page
+    const before = await snapshotNetwork(page)
+    assert.equal(await page.getByTestId('blackroom-finish').count(), 0)
+    await typeAtEnd(page, '小黑屋里写下')
+    await page.waitForTimeout(1500)
+    assert.equal(await page.getByTestId('blackroom-finish').count(), 0, '未达 8 字不应出现出屋')
+    await typeAtEnd(page, '整整八个字了')
+    await page.getByTestId('blackroom-finish').waitFor({ timeout: 5_000 })
+    assert.match(await page.getByTestId('blackroom-words').innerText(), /已写 1[0-9] \/ 8 字/)
+    await addLockedDelta(page, before)
+    await page.getByTestId('blackroom-finish').click()
+    await page.locator('.assistant-panel').waitFor()
+    await page.locator('.works-rail').waitFor()
+    assert.equal(await page.getByTestId('blackroom-bar').count(), 0)
+    const last = await page.evaluate((projectId) => window.workspace.focus.lastSession(projectId), ids.projectId)
+    assert.equal(last.endedBy, 'reached')
+    assert.ok(last.netWords >= 8)
+  })
+
+  await record('F15 ⑨ 锁定中强杀进程重启后仍锁定，紧急出口输入「我要出屋」离开', async () => {
+    let page = running.page
+    await enterBlackroom(page, async (d) => { await d.getByLabel('写满字数').check(); await d.getByLabel('目标字数').fill('500') })
+    let before = await snapshotNetwork(page)
+    await typeAtEnd(page, '强杀前已保存')
+    await addLockedDelta(page, before)
+    await killApp(running)
+    running = await launch()
+    page = running.page
+    watchRendererRequests(page)
+    before = { fixture: fixtureHits, anthropic: anthropicRequests.length, renderer: rendererRequests.length, blocked: 0 }
+    await page.getByRole('button', { name: '继续写作' }).click()
+    await page.getByTestId('blackroom-bar').waitFor()
+    assert.match(await page.getByTestId('blackroom-words').innerText(), /已写 [1-9]\d* \/ 500 字/)
+    assert.equal(await page.locator('.assistant-panel').count(), 0)
+    assert.equal(await page.locator('.works-rail').count(), 0)
+    const persisted = await page.evaluate(async ({ projectId, chapterA, chapterB }) => (await Promise.all([chapterA, chapterB].map((id) => window.workspace.documents.get(projectId, id)))).map((doc) => doc.plainText).join('\n'), ids)
+    assert.match(persisted, /强杀前已保存/, '强杀前已保存的正文应保留')
+    await addLockedDelta(page, before)
+    before = await snapshotNetwork(page)
+    await page.getByRole('button', { name: '紧急出口' }).click()
+    await page.getByLabel('紧急出屋确认').fill('我要出去')
+    assert.equal(await page.getByRole('button', { name: '确认出屋' }).isDisabled(), true)
+    await page.getByLabel('紧急出屋确认').fill('我要出屋')
+    await addLockedDelta(page, before)
+    await page.getByRole('button', { name: '确认出屋' }).click()
+    await page.locator('.assistant-panel').waitFor()
+    const last = await page.evaluate((projectId) => window.workspace.focus.lastSession(projectId), ids.projectId)
+    assert.equal(last.endedBy, 'emergency')
+  })
+
+  await record('F15 ⑪ 1 分钟时间锁：时间走完「出屋」出现（剩余倒计时）', async () => {
+    const page = running.page
+    await enterBlackroom(page, async (d) => { await d.getByLabel('写满时间').check(); await d.getByLabel('分钟数').fill('1') })
+    const before = await snapshotNetwork(page)
+    assert.match(await page.getByTestId('blackroom-remaining').innerText(), /剩余 0[01]:\d\d/)
+    assert.equal(await page.getByTestId('blackroom-finish').count(), 0)
+    await page.getByTestId('blackroom-finish').waitFor({ timeout: 75_000 })
+    assert.match(await page.getByTestId('blackroom-remaining').innerText(), /剩余 00:00/)
+    await addLockedDelta(page, before)
+    await page.getByTestId('blackroom-finish').click()
+    await page.locator('.assistant-panel').waitFor()
+  })
+
+  await record('F15 ⑩ 锁定期间网络请求为 0（主进程 fixture 命中 / 渲染进程请求 / 拦截日志）', async () => {
+    process.stdout.write(`F15 locked network deltas: ${JSON.stringify(lockedNetwork)}\n`)
+    assert.deepEqual(lockedNetwork, { fixture: 0, anthropic: 0, renderer: 0, blocked: 0 })
+    // 对照：出屋后同一 Provider 测试连接确实会出网（计数手段有效）
+    const hits = fixtureHits + anthropicRequests.length
+    await running.page.evaluate(async () => { const [provider] = await window.workspace.providers.list(); const [model] = await window.workspace.providers.models(); await window.workspace.providers.test(provider.id, model.modelId) })
+    assert.ok(fixtureHits + anthropicRequests.length > hits, '出屋后测试连接应命中 fixture（证明计数器有效）')
   })
 
   process.stdout.write(`Electron E2E: ${results.length} passed\n`)
