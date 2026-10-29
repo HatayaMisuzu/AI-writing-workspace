@@ -236,3 +236,56 @@ describe('P3-e M2: pin state within a conversation', () => {
     expect(context.items[0].id).toBe(ids['杂项甲'])
   })
 })
+
+describe('P3-e M3: creative memory cap keeps keyword relevance (incl. author question)', () => {
+  const build = (fill: number, hirel = true) => {
+    const db = createTestDb()
+    const project = new ProjectService(db).create({ title: '相关度', projectType: 'novel' })
+    const docs = new DocumentService(db)
+    const chapter = docs.listOrderedChapters(project.id)[0]
+    docs.saveContent({ projectId: project.id, documentId: chapter.id, editorJson: { type: 'doc' }, plainText: '雪夜无事。' })
+    const memories = new MemoryService(db)
+    const make = (content: string, updatedAt: number, status: 'confirmed' | 'observed' | 'tentative' = 'confirmed'): string => {
+      const created = memories.create({ projectId: project.id, type: 'fact', content, status: 'suggested', sourceType: 'author', sourceId: 'a' })
+      if (status === 'confirmed') memories.confirm(project.id, created.id, 'user')
+      else db.raw.prepare('UPDATE memories SET status = ? WHERE id = ?').run(status, created.id)
+      db.raw.prepare('UPDATE memories SET updated_at = ? WHERE id = ?').run(updatedAt, created.id)
+      return created.id
+    }
+    const hi = hirel ? make('MARK_HIREL：青铜古镜能照出前世，镜背刻有九尾狐纹', 1) : ''
+    const fills = Array.from({ length: fill }, (_, i) => make(`r${String(i).padStart(2, '0')}：一件古物`, 100 + i, i % 3 === 0 ? 'observed' : i % 3 === 1 ? 'tentative' : 'confirmed'))
+    return { db, project, chapterId: chapter.id, hi, fills, memories }
+  }
+  const intent = '青铜古镜照出前世的设定'
+
+  it('MARK_HIREL (old, highly keyword-relevant via author question) is kept over 12 newer low-relevance confirmed', () => {
+    const { db, project, chapterId, hi } = build(0)
+    const memories = new MemoryService(db)
+    for (let i = 0; i < 12; i += 1) {
+      const created = memories.create({ projectId: project.id, type: 'fact', content: `r${i}：古物`, status: 'suggested', sourceType: 'author', sourceId: 'a' })
+      memories.confirm(project.id, created.id, 'user')
+      db.raw.prepare('UPDATE memories SET updated_at = ? WHERE id = ?').run(100 + i, created.id)
+    }
+    const { runtime } = runtimeWith(db, 16000)
+    const bundle = runtime.previewContext(task(project.id, chapterId, 'discussion', { userIntent: intent }), 'none')
+    const mem = bundle.items.filter((item) => item.kind === 'memory')
+    expect(mem.length).toBe(12)
+    expect(mem.map((item) => item.id)).toContain(hi)
+  })
+
+  for (const count of [1, 5, 11]) {
+    it(`≤12 relevant memories (${count + 1}, mixed status): selected set equals base selection (searchRelevant limit 12, unchanged b3bf091 code path)`, () => {
+      const { db, project, chapterId, memories } = build(count)
+      const { runtime } = runtimeWith(db, 16000)
+      for (const mode of ['discussion', 'generation'] as AIMode[]) {
+        const t = task(project.id, chapterId, mode, { userIntent: `${intent} 古物` })
+        const bundle = runtime.previewContext(t, 'none')
+        const sentSet = new Set(bundle.items.filter((item) => item.kind === 'memory').map((item) => item.id))
+        // base（b3bf091）的创作类记忆入选 = searchRelevant(statuses, signal) 默认 limit 12；该函数本 PR 未改动
+        const signal = [t.userIntent, '', '雪夜无事。'].filter(Boolean).join('\n')
+        const base = new Set(memories.searchRelevant(project.id, ['confirmed', 'observed', 'tentative', 'idea'], signal).map((memory) => memory.id))
+        expect(sentSet).toEqual(base)
+      }
+    })
+  }
+})

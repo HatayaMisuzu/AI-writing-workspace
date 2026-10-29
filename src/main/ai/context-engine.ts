@@ -130,11 +130,13 @@ export class ContextEngine {
     const haystack = [task.selection?.text ?? '', currentText].join('\n')
     const pinned = new Set(task.includedIds ?? [])
     const statuses = ['confirmed', 'observed', 'tentative', 'idea'] as const
-    // P3-e M1：先取全部关键词相关记忆，按 状态权重 > 钉住/已确认/本章提及/更新/id 排序后再截取 12 条
+    // P3-e M1/M3：先取全部关键词相关记忆，按 钉住 > 状态权重 > 本章提及 > 关键词相关度（沿用 base 的 relevanceScore，含作者提问）> 更新 > id 排序，再截取 12 条
     const stateWeightOf = (status: string): number => status === 'confirmed' ? 85 : status === 'observed' ? 78 : status === 'tentative' ? 55 : 40
     const relevant = this.memories.searchRelevant(task.projectId, [...statuses], signal, Number.MAX_SAFE_INTEGER)
-      .map((memory) => ({ memory, rank: rankSetting({ id: memory.id, pinned: pinned.has(memory.id), confirmed: memory.status === 'confirmed', names: memoryEntryNames(memory.content), updatedAt: memory.updatedAt }, haystack) }))
-      .toSorted((a, b) => Number(b.rank.pinned) - Number(a.rank.pinned) || stateWeightOf(b.memory.status) - stateWeightOf(a.memory.status) || compareSettingRank(a.rank, b.rank))
+      .map((memory) => ({ memory, score: relevanceScore(memory.content, signal),
+        rank: rankSetting({ id: memory.id, pinned: pinned.has(memory.id), confirmed: memory.status === 'confirmed', names: memoryEntryNames(memory.content), updatedAt: memory.updatedAt }, haystack) }))
+      .toSorted((a, b) => Number(b.rank.pinned) - Number(a.rank.pinned) || stateWeightOf(b.memory.status) - stateWeightOf(a.memory.status)
+        || Number(b.rank.mentioned) - Number(a.rank.mentioned) || b.score - a.score || compareSettingRank(a.rank, b.rank))
       .slice(0, CREATIVE_MEMORY_LIMIT).map((item) => item.memory)
     const pinnedMemories = this.memories.list(task.projectId, [...statuses]).filter((memory) => pinned.has(memory.id) && !relevant.some((item) => item.id === memory.id))
     for (const memory of [...relevant, ...pinnedMemories]) {
