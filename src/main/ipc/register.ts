@@ -46,7 +46,7 @@ const handle = <T extends unknown[], R>(channel: string, fn: (...args: T) => R |
 }
 
 import {
-  idSchema, shortTextSchema, contentSchema, nonNegativeIntSchema, projectCreateSchema, documentCreateSchema, documentSaveSchema, noteSaveSchema, characterSaveSchema, providerInputSchema, modelSchema, routeSchema, patchProposalSchema, snapshotReasonSchema, aiStartSchema, aiPreviewContextSchema, noteSectionSchema, outlineSaveSchema, batchCreateChaptersSchema, writingGoalsInputSchema, chapterStatusSchema, foreshadowRegisterSchema, foreshadowSetStateSchema, foreshadowUpdateMetaSchema, timelineSortModeSchema, timelineEventSaveSchema, chapterWordRangeSchema, promptTemplateModeSchema, promptTemplateTextSchema
+  idSchema, shortTextSchema, contentSchema, nonNegativeIntSchema, projectCreateSchema, documentCreateSchema, documentSaveSchema, noteSaveSchema, characterSaveSchema, providerInputSchema, modelSchema, routeSchema, patchProposalSchema, snapshotReasonSchema, aiStartSchema, aiPreviewContextSchema, noteSectionSchema, outlineSaveSchema, batchCreateChaptersSchema, writingGoalsInputSchema, chapterStatusSchema, foreshadowRegisterSchema, foreshadowSetStateSchema, foreshadowUpdateMetaSchema, timelineSortModeSchema, timelineEventSaveSchema, chapterWordRangeSchema, promptTemplateModeSchema, promptTemplateTextSchema, promptTemplateScopeSchema, promptCopySourceSchema
 } from './schemas'
 import { toUserFacingIpcError } from './validation-error'
 const parse = <T>(schema: z.ZodType<T>, value: unknown): T => schema.parse(value)
@@ -177,6 +177,12 @@ export function registerIpc(db: AppDatabase, codec: SecretCodec, network?: Netwo
   handle('prompts:list', (projectId: string) => promptTemplates.list(parse(idSchema, projectId)))
   handle('prompts:set', (projectId: string, mode: unknown, text: unknown) => promptTemplates.set(parse(idSchema, projectId), parse(promptTemplateModeSchema, mode), parse(promptTemplateTextSchema, text)))
   handle('prompts:reset', (projectId: string, mode: unknown) => promptTemplates.reset(parse(idSchema, projectId), parse(promptTemplateModeSchema, mode)))
+  handle('prompts:set-scope', (projectId: string, scope: unknown) => promptTemplates.setScope(parse(idSchema, projectId), parse(promptTemplateScopeSchema, scope)))
+  handle('prompts:global-list', () => promptTemplates.listGlobal())
+  handle('prompts:global-set', (mode: unknown, text: unknown) => promptTemplates.setGlobal(parse(promptTemplateModeSchema, mode), parse(promptTemplateTextSchema, text)))
+  handle('prompts:global-reset', (mode: unknown) => promptTemplates.resetGlobal(parse(promptTemplateModeSchema, mode)))
+  handle('prompts:copy-preview', (projectId: string, source: unknown) => promptTemplates.previewCopy(parse(idSchema, projectId), parse(promptCopySourceSchema, source)))
+  handle('prompts:copy-apply', (projectId: string, source: unknown, token: unknown) => promptTemplates.applyCopy(parse(idSchema, projectId), parse(promptCopySourceSchema, source), parse(z.string().regex(/^[0-9a-f]{64}$/), token)))
   handle('linter:run', (text: string) => lintChineseText(text))
   handle('digests:run', (projectId: string, chapterId: string) => digestRunner.run(parse(idSchema, projectId), parse(idSchema, chapterId)))
   handle('digests:list', (projectId: string, chapterId?: string) => digests.list(projectId, chapterId))

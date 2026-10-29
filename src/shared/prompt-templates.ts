@@ -2,7 +2,8 @@ import type { AIMode } from './domain'
 
 /**
  * P1-4 提示词模板：每个 AI 角色（= AIMode）一份默认「角色指令」。
- * 作者覆盖存于 projects.settings_json.promptTemplates[mode]；缺席 = 使用默认。
+ * 本书覆盖存于 projects.settings_json.promptTemplates[mode]；P3：全局覆盖存于 app_settings(prompt_templates_global)，
+ * 本书开关 settings_json.promptTemplateScope（缺省时按「有覆盖=本书自定义，否则沿用全局」推导）。
  * 模板只替换角色指令段；核心原则、写入权限、上下文隔离与输出契约由代码固定，
  * R1–R5 不依赖模板措辞。
  */
@@ -71,4 +72,29 @@ export const readPromptTemplateOverrides = (settings: Record<string, unknown>): 
   return result
 }
 
-export interface PromptTemplateEntry { mode: AIMode; role: string; defaultTemplate: string; override: string | null }
+/** P3：本书开关。global = 沿用全局；project = 本书自定义。 */
+export type PromptTemplateScope = 'global' | 'project'
+/** 实际生效模板的来源：全局 / 本书 / 内置默认。 */
+export type PromptTemplateSource = 'global' | 'project' | 'builtin'
+export const PROMPT_SOURCE_LABELS: Record<PromptTemplateSource, string> = { global: '全局', project: '本书', builtin: '内置默认' }
+export interface ResolvedPromptTemplate { mode: AIMode; source: PromptTemplateSource; text: string }
+
+export interface PromptTemplateEntry {
+  mode: AIMode; role: string; defaultTemplate: string
+  /** 本书覆盖（沿用全局时为休眠值，不生效）。 */
+  override: string | null
+  globalOverride?: string | null
+  effective: string
+  source: PromptTemplateSource
+  scope: PromptTemplateScope
+}
+
+export type PromptCopySource = { kind: 'global' } | { kind: 'project'; projectId: string }
+export interface PromptCopyPreview {
+  targetProjectId: string
+  source: PromptCopySource
+  changes: Array<{ mode: AIMode; role: string; current: string; currentSource: PromptTemplateSource; incoming: string; changed: boolean }>
+  changedCount: number
+  token: string
+}
+export interface GlobalPromptTemplateEntry { mode: AIMode; role: string; defaultTemplate: string; override: string | null }
