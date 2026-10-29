@@ -1,3 +1,4 @@
+import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -122,7 +123,8 @@ describe('F13 ⑨ 导入（预览 → 确认只传 token）', () => {
   }
   it('文件先取大小：超过 1MB / 非普通文件 / 含 NUL 拒绝', async () => {
     const io = (size: number, isFile = true, text = 'a') => ({ stat: (async () => ({ size, isFile: () => isFile })) as never, readFile: async () => text })
-    await expect(readWordlistFile('x', io(1_000_001))).rejects.toThrow(/1MB/)
+    await expect(readWordlistFile('x', io(1_000_001))).rejects.toThrow('词表文件太大，未导入：文件实际大小 1,000,001 字节，上限 1MB（1,000,000 字节）。')
+    await expect(readWordlistFile('x', io(1_000_000))).resolves.toBe('a')
     await expect(readWordlistFile('x', io(1, false))).rejects.toThrow(/普通文件/)
     await expect(readWordlistFile('x', io(3, true, 'a\u0000b'))).rejects.toThrow(/纯文本/)
     await expect(readWordlistFile('x', io(3, true, '在坐'))).resolves.toBe('在坐')
@@ -195,5 +197,17 @@ describe('F13 批量应用（方案 c）：rebase', () => {
     expect(patches.prepare(project.id, a.id, next.revision, '在座').status).toBe('stale')
     patches.reject(project.id, b.id)
     expect(() => patches.rebase({ projectId: project.id, patchId: b.id, fromRevision: next.revision, toRevision: next.revision + 1, fromPm: 4, toPm: 6 })).toThrow('PATCH_NOT_PROPOSED')
+  })
+  it('真实文件：刚好 1MB（1,000,000 字节）可读；多 1 字节拒绝且不读内容，提示写出实际大小与上限', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'rr-wordlist-'))
+    try {
+      const exact = join(dir, 'exact.txt'); const over = join(dir, 'over.txt')
+      await writeFile(exact, 'a'.repeat(1_000_000)); await writeFile(over, 'a'.repeat(1_000_001))
+      expect((await readWordlistFile(exact)).length).toBe(1_000_000)
+      let reads = 0
+      const counting = { stat, readFile: async (path: string, encoding: 'utf8') => { reads += 1; return readFile(path, encoding) } }
+      await expect(readWordlistFile(over, counting)).rejects.toMatchObject({ code: 'WORDLIST_FILE_TOO_LARGE', message: expect.stringContaining('实际大小 1,000,001 字节，上限 1MB') })
+      expect(reads).toBe(0)
+    } finally { await rm(dir, { recursive: true, force: true }) }
   })
 })
