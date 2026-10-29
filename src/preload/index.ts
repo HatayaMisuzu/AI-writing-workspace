@@ -57,9 +57,26 @@ const api: WorkspaceApi = {
   patches: {
     propose: (input) => invoke('patches:propose', input), list: (projectId, documentId) => invoke('patches:list', projectId, documentId),
     prepare: (projectId, id, revision, currentText) => invoke('patches:prepare', projectId, id, revision, currentText),
-    complete: (projectId, id, revision) => invoke('patches:complete', projectId, id, revision), reject: (projectId, id) => invoke('patches:reject', projectId, id)
+    complete: (projectId, id, revision) => invoke('patches:complete', projectId, id, revision), reject: (projectId, id) => invoke('patches:reject', projectId, id),
+    rebase: (input) => invoke('patches:rebase', input)
   },
-  linter: { run: (text) => invoke('linter:run', text) },
+  linter: { run: (projectId, documentId, text, sourceRevision) => invoke('linter:run', projectId, documentId, text, sourceRevision) },
+  lint: {
+    rules: (projectId) => invoke('lint:rules', projectId), setRules: (projectId, rules) => invoke('lint:set-rules', projectId, rules),
+    ignore: (projectId, input) => invoke('lint:ignore', projectId, input), disableTerm: (projectId, term) => invoke('lint:disable-term', projectId, term),
+    checkBook: async (projectId, volumeId, runId, onProgress) => {
+      const listener = (_event: unknown, payload: { runId: string; done: number; total: number }): void => { if (payload.runId === runId) onProgress?.(payload.done, payload.total) }
+      ipcRenderer.on('lint:book-progress', listener)
+      try { return await invoke('lint:check-book', projectId, volumeId ?? null, runId) } finally { ipcRenderer.removeListener('lint:book-progress', listener) }
+    },
+    cancelBookCheck: (runId) => invoke('lint:check-book-cancel', runId)
+  },
+  wordlist: {
+    get: (projectId) => invoke('wordlist:get', projectId), getGlobal: () => invoke('wordlist:get-global'),
+    saveProject: (projectId, text) => invoke('wordlist:save-project', projectId, text), saveGlobal: (text) => invoke('wordlist:save-global', text),
+    exportFile: (scope, projectId) => invoke('wordlist:export', scope, projectId), previewImport: (scope, projectId) => invoke('wordlist:import-preview', scope, projectId),
+    applyImport: (token) => invoke('wordlist:import-apply', token), cancelImport: () => invoke('wordlist:import-cancel')
+  },
   digests: { run: (projectId, chapterId) => invoke('digests:run', projectId, chapterId), list: (projectId, chapterId) => invoke('digests:list', projectId, chapterId), status: (projectId, chapterId) => invoke('digests:status', projectId, chapterId) },
   proofreading: { run: (projectId, documentId) => invoke('proofreading:run', projectId, documentId) },
   providers: {

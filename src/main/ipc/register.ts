@@ -8,7 +8,7 @@ import { ProjectService } from '../services/project-service'
 import { DocumentService } from '../services/document-service'
 import { IdeaService, MemoryService } from '../services/memory-service'
 import { PatchService } from '../services/patch-service'
-import { lintChineseText } from '../services/local-linter'
+import { LintService, readWordlistFile, type WordlistScope } from '../services/lint-service'
 import { atomicWriteFile, BackupService } from '../services/backup-service'
 import { createProviderAdapter, ProviderService, type SecretCodec } from '../ai/provider'
 import { originFromBaseUrl } from '../network-policy'
@@ -49,7 +49,7 @@ const handle = <T extends unknown[], R>(channel: string, fn: (...args: T) => R |
 }
 
 import {
-  idSchema, shortTextSchema, contentSchema, nonNegativeIntSchema, projectCreateSchema, documentCreateSchema, documentSaveSchema, noteSaveSchema, characterSaveSchema, providerInputSchema, modelSchema, routeSchema, patchProposalSchema, snapshotReasonSchema, aiStartSchema, aiPreviewContextSchema, noteSectionSchema, outlineSaveSchema, batchCreateChaptersSchema, writingGoalsInputSchema, chapterStatusSchema, foreshadowRegisterSchema, foreshadowSetStateSchema, foreshadowUpdateMetaSchema, timelineSortModeSchema, timelineEventSaveSchema, chapterWordRangeSchema, promptTemplateModeSchema, promptTemplateTextSchema, promptTemplateScopeSchema, promptCopySourceSchema, hoverPrefsSchema
+  idSchema, shortTextSchema, contentSchema, nonNegativeIntSchema, projectCreateSchema, documentCreateSchema, documentSaveSchema, noteSaveSchema, characterSaveSchema, providerInputSchema, modelSchema, routeSchema, patchProposalSchema, snapshotReasonSchema, aiStartSchema, aiPreviewContextSchema, noteSectionSchema, outlineSaveSchema, batchCreateChaptersSchema, writingGoalsInputSchema, chapterStatusSchema, foreshadowRegisterSchema, foreshadowSetStateSchema, foreshadowUpdateMetaSchema, timelineSortModeSchema, timelineEventSaveSchema, chapterWordRangeSchema, promptTemplateModeSchema, promptTemplateTextSchema, promptTemplateScopeSchema, promptCopySourceSchema, hoverPrefsSchema, lintRunSchema, wordlistTextSchema, wordlistScopeSchema, lintRulesSchema, lintIgnoreSchema, importTokenSchema, patchRebaseSchema
 } from './schemas'
 import { toUserFacingIpcError } from './validation-error'
 const parse = <T>(schema: z.ZodType<T>, value: unknown): T => schema.parse(value)
@@ -181,6 +181,7 @@ export function registerIpc(db: AppDatabase, codec: SecretCodec, network?: Netwo
   handle('patches:list', (projectId: string, documentId?: string) => patches.list(projectId, documentId))
   handle('patches:prepare', (projectId: string, patchId: string, revision: number, currentText: string) => patches.prepare(parse(idSchema, projectId), parse(idSchema, patchId), parse(nonNegativeIntSchema, revision), parse(contentSchema, currentText)))
   handle('patches:complete', (projectId: string, patchId: string, savedRevision: number) => patches.complete(parse(idSchema, projectId), parse(idSchema, patchId), parse(nonNegativeIntSchema, savedRevision)))
+  handle('patches:rebase', (input: unknown) => patches.rebase(parse(patchRebaseSchema, input)))
   handle('patches:reject', (projectId: string, patchId: string) => patches.reject(parse(idSchema, projectId), parse(idSchema, patchId)))
 
   handle('writing:get-day', (projectId: string, date?: string) => writingDaily.getDay(parse(idSchema, projectId), date === undefined ? undefined : parse(z.string().regex(/^\d{4}-\d{2}-\d{2}$/), date)))
@@ -223,7 +224,60 @@ export function registerIpc(db: AppDatabase, codec: SecretCodec, network?: Netwo
   handle('prompts:global-reset', (mode: unknown) => promptTemplates.resetGlobal(parse(promptTemplateModeSchema, mode)))
   handle('prompts:copy-preview', (projectId: string, source: unknown) => promptTemplates.previewCopy(parse(idSchema, projectId), parse(promptCopySourceSchema, source)))
   handle('prompts:copy-apply', (projectId: string, source: unknown, token: unknown) => promptTemplates.applyCopy(parse(idSchema, projectId), parse(promptCopySourceSchema, source), parse(z.string().regex(/^[0-9a-f]{64}$/), token)))
-  handle('linter:run', (text: string) => lintChineseText(text))
+  // F13：本地规则 + 词表（不联网、不调 AI；小黑屋中不运行）
+  const lint = new LintService(db, (projectId) => focus.isLocked(projectId))
+  handle('linter:run', (...args: unknown[]) => { const [projectId, documentId, text, revision] = lintRunSchema.parse(args); return lint.run(projectId, documentId, text, revision) })
+  handle('lint:rules', (projectId: unknown) => lint.getRules(parse(idSchema, projectId)))
+  handle('lint:set-rules', (projectId: unknown, rules: unknown) => lint.setRules(parse(idSchema, projectId), parse(lintRulesSchema, rules)))
+  handle('lint:ignore', (projectId: unknown, input: unknown) => lint.addIgnore(parse(idSchema, projectId), parse(lintIgnoreSchema, input)))
+  handle('lint:disable-term', (projectId: unknown, term: unknown) => lint.disableTerm(parse(idSchema, projectId), parse(z.string().trim().min(1).max(50), term)))
+  handle('wordlist:get', (projectId: unknown) => lint.getWordlists(parse(idSchema, projectId)))
+  handle('wordlist:get-global', () => lint.getGlobalWordlist())
+  handle('wordlist:save-project', (projectId: unknown, text: unknown) => lint.saveProject(parse(idSchema, projectId), parse(wordlistTextSchema, text)))
+  handle('wordlist:save-global', (text: unknown) => lint.saveGlobal(parse(wordlistTextSchema, text)))
+  const scopeArgs = (scope: unknown, projectId: unknown): { scope: WordlistScope; projectId?: string } => {
+    const valid = parse(wordlistScopeSchema, scope)
+    return valid === 'project' ? { scope: valid, projectId: parse(idSchema, projectId) } : { scope: valid }
+  }
+  handle('wordlist:export', async (scope: unknown, projectId?: unknown) => {
+    const target = scopeArgs(scope, projectId)
+    const name = target.scope === 'global' ? '全局词表' : `${projects.get(target.projectId!).title}-词表`
+    const result = await dialog.showSaveDialog({ defaultPath: `${name}.txt`, filters: [{ name: '纯文本词表', extensions: ['txt'] }] })
+    if (result.canceled || !result.filePath) return null
+    await atomicWriteFile(result.filePath, lint.exportText(target.scope, target.projectId))
+    return result.filePath
+  })
+  // 与全局提示词模板相同：预览时文件内容留在主进程（按 token），确认时只传 token
+  const pendingWordlistImports = new Map<string, { scope: WordlistScope; projectId?: string; text: string }>()
+  handle('wordlist:import-preview', async (scope: unknown, projectId?: unknown) => {
+    const target = scopeArgs(scope, projectId)
+    const result = await dialog.showOpenDialog({ properties: ['openFile'], filters: [{ name: '纯文本词表', extensions: ['txt'] }] })
+    if (result.canceled || !result.filePaths[0]) return null
+    const text = await readWordlistFile(result.filePaths[0])
+    const preview = lint.previewImport(target.scope, target.projectId, text)
+    pendingWordlistImports.clear(); pendingWordlistImports.set(preview.token, { ...target, text })
+    return preview
+  })
+  handle('wordlist:import-apply', (token: unknown) => {
+    const key = parse(importTokenSchema, token)
+    const pending = pendingWordlistImports.get(key)
+    if (!pending) throw Object.assign(new Error('词表在预览后已变化，请重新预览后再确认。'), { code: 'WORDLIST_IMPORT_STALE' })
+    const text = lint.applyImport(pending.scope, pending.projectId, pending.text, key)
+    pendingWordlistImports.clear()
+    return text
+  })
+  handle('wordlist:import-cancel', () => { pendingWordlistImports.clear(); return null })
+  ipcMain.handle('lint:check-book', async (event, projectId: unknown, volumeId: unknown, runId: unknown) => {
+    trustedSender(event)
+    try {
+      const id = parse(idSchema, projectId)
+      assertNotFocusLocked(focus, id)
+      const run = parse(idSchema, runId)
+      return await lint.checkBook(id, { volumeId: parse(idSchema.optional(), volumeId ?? undefined), runId: run,
+        onProgress: (done, total) => { if (!event.sender.isDestroyed()) event.sender.send('lint:book-progress', { runId: run, done, total }) } })
+    } catch (error) { throw toUserFacingIpcError(error) }
+  })
+  handle('lint:check-book-cancel', (runId: unknown) => { lint.cancelBookCheck(parse(idSchema, runId)); return null })
   handle('digests:run', (projectId: string, chapterId: string) => { assertNotFocusLocked(focus, parse(idSchema, projectId)); return digestRunner.run(parse(idSchema, projectId), parse(idSchema, chapterId)) })
   handle('digests:list', (projectId: string, chapterId?: string) => digests.list(projectId, chapterId))
   handle('digests:status', (projectId: string, chapterId: string) => digests.status(projectId, chapterId))

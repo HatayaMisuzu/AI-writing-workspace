@@ -71,6 +71,22 @@ export class PatchService {
     return this.get(projectId, patchId)
   }
 
+  /**
+   * F13 批量应用（组长决定 1，方案 c）：同一批提案逐条接受，每接受一条，剩下的按新修订号重算位置。
+   * 只改 revision 与 PM 区间；originalText / originalHash 不变，prepare 仍会校验当前文字，位置算错只会变 stale，不会改错字。
+   */
+  rebase(input: { projectId: string; patchId: string; fromRevision: number; toRevision: number; fromPm: number; toPm: number }): TextPatch {
+    const patch = this.get(input.projectId, input.patchId)
+    if (patch.status !== 'proposed') throw new Error('PATCH_NOT_PROPOSED')
+    if (patch.documentRevision !== input.fromRevision || input.toRevision <= input.fromRevision) throw new Error('PATCH_REVISION_STALE')
+    const persisted = this.documents.getContent(input.projectId, patch.documentId)
+    if (persisted.revision !== input.toRevision) throw new Error('PATCH_REVISION_STALE')
+    if (input.toPm < input.fromPm) throw new Error('PATCH_PM_RANGE_INVALID')
+    this.db.raw.prepare('UPDATE text_patches SET document_revision = ?, from_pos = ?, to_pos = ? WHERE id = ? AND project_id = ? AND status = \'proposed\'')
+      .run(input.toRevision, input.fromPm, input.toPm, input.patchId, input.projectId)
+    return this.get(input.projectId, input.patchId)
+  }
+
   reject(projectId: string, patchId: string): TextPatch {
     const patch = this.get(projectId, patchId)
     if (patch.status !== 'proposed') throw new Error('PATCH_NOT_PROPOSED')

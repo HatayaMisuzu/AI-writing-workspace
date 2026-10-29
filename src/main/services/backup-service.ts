@@ -312,6 +312,13 @@ export class BackupService {
           if (mapped) settings.serialProgressChapterId = mapped
           else delete settings.serialProgressChapterId
         }
+        // F13：「忽略这一处」按 documentId 记录，导入后换成新章节 id；找不到的丢弃
+        if (Array.isArray(settings.lintIgnores)) {
+          settings.lintIgnores = (settings.lintIgnores as Array<Record<string, unknown>>).flatMap((item) => {
+            const mapped = item && typeof item.documentId === 'string' ? idMap.get(item.documentId) : undefined
+            return mapped ? [{ ...item, documentId: mapped }] : []
+          })
+        }
         settingsJson = JSON.stringify(settings)
       }
     } catch { /* keep original settings_json */ }

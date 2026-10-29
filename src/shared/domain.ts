@@ -440,7 +440,43 @@ export interface LocalLintIssue {
   replacement?: string
   sourceTextHash: string
   originalText: string
+  /** F13：规则键（标点用 kind，词表 wordlist:<词>，重复字 repeat:<字>，全半角 halfwidth）；旧 lintChineseText 不填。 */
+  ruleKey?: string
+  /** F13：抽屉分组 */
+  group?: LintGroup
+  /** F13：同一 (ruleKey, originalText) 在本章中的第几处（从 1 开始），「忽略这一处」用 */
+  occurrence?: number
 }
+
+/** F13 本地规则分组（抽屉按此分组显示）。 */
+export type LintGroup = 'punctuation' | 'wordlist_replace' | 'wordlist_hint' | 'repeat_char' | 'halfwidth'
+export const LINT_GROUPS: readonly LintGroup[] = ['punctuation', 'wordlist_replace', 'wordlist_hint', 'repeat_char', 'halfwidth']
+/** F13 作品级规则开关（projects.settings_json.lintRules）。 */
+export interface LintRules {
+  punctuation: boolean
+  wordlist: boolean
+  halfwidth: boolean
+  /** 重复字默认关闭（D3） */
+  repeatChar: boolean
+  /** 要查的字（作者勾选；候选「的/了/是/在」） */
+  repeatChars: string[]
+  /** 叠词白名单（如「看看」「渐渐」），作者可编辑 */
+  reduplicationWhitelist: string[]
+}
+export interface LintResult {
+  issues: LocalLintIssue[]
+  /** 章节超过 20 万字：只跑了标点规则 */
+  longChapter: boolean
+  /** 小黑屋中：保存后的自动检查不运行 */
+  skipped?: 'focus-locked'
+  /** 主进程规则执行耗时（不含 IPC） */
+  elapsedMs: number
+}
+/** 「忽略这一处」：(documentId, ruleKey, originalText, 第 n 次出现) */
+export interface LintIgnore { documentId: string; ruleKey: string; originalText: string; occurrence: number; createdAt: number }
+export interface WordlistState { globalText: string; projectText: string; globalCount: number; projectCount: number }
+export interface BookCheckChapter { documentId: string; title: string; count: number; groups: Partial<Record<LintGroup, number>>; longChapter: boolean }
+export interface BookCheckResult { runId: string; chapters: BookCheckChapter[]; total: number; elapsedMs: number; cancelled: boolean; timedOut: boolean }
 
 export interface AppErrorShape {
   code: string

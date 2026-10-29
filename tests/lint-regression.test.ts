@@ -17,7 +17,7 @@ function lintCorpus(count = 80): string[] {
   for (let i = corpus.length; i < count; i += 1) corpus.push(Array.from({ length: 3 + rand(12) }, () => PIECES[rand(PIECES.length)]).join(''))
   return corpus
 }
-const strip = (text: string, index: number): unknown => lintChineseText(text, `doc-${index}`, index).map(({ id: _id, ...rest }) => rest)
+const strip = (text: string, index: number): unknown => lintChineseText(text, `doc-${index}`, index).map((issue) => Object.fromEntries(Object.entries(issue).filter(([key]) => key !== 'id')))
 
 describe('lintChineseText golden', () => {
   it('输出与 base 完全一致', () => {
