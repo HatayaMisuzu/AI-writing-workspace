@@ -24,6 +24,9 @@ const overflowOf = (kind: ContextOverflow['kind'], label: string, limit: number,
     items: rest.slice(0, OVERFLOW_LIST_LIMIT).map((item) => ({ id: item.id, kind, title: item.title, basis: [...(item.basis ?? []), OVERFLOW_BASIS] })) }] : []
 
 const estimateTokens = (text: string): number => Math.ceil(text.length / 2.2)
+// M1/L4：数量上限只约束未钉住的条目；钉住的全部进入候选，只受预算裁剪（裁掉的照常标出）。
+const withinLimitOrPinned = <T>(items: T[], limit: number, isPinned: (item: T) => boolean): { kept: T[]; rest: T[] } =>
+  ({ kept: items.filter((item, index) => index < limit || isPinned(item)), rest: items.filter((item, index) => index >= limit && !isPinned(item)) })
 const settingName = (content: string): string => { const flat = content.replace(/\s+/g, ' ').trim(); return [...flat].length > 16 ? `${[...flat].slice(0, 16).join('')}…` : flat || '未命名' }
 
 export class ContextEngine {
@@ -72,8 +75,9 @@ export class ContextEngine {
         projectId, reason: '作者已确认的设定', priority: 80, rank, basis: settingBasis(rank) })
     })
     const sortedMemories = memoryCandidates.toSorted((a, b) => compareSettingRank(a.rank!, b.rank!))
-    candidates.push(...sortedMemories.slice(0, CONSISTENCY_MEMORY_LIMIT))
-    const overflow: ContextOverflow[] = overflowOf('memory', '设定', CONSISTENCY_MEMORY_LIMIT, sortedMemories.slice(CONSISTENCY_MEMORY_LIMIT))
+    const memorySplit = withinLimitOrPinned(sortedMemories, CONSISTENCY_MEMORY_LIMIT, (item) => pinned.has(item.id))
+    candidates.push(...memorySplit.kept)
+    const overflow: ContextOverflow[] = overflowOf('memory', '设定', CONSISTENCY_MEMORY_LIMIT, memorySplit.rest)
     const characters = this.db.raw.prepare('SELECT * FROM characters WHERE project_id = ? ORDER BY updated_at DESC, id').all(projectId) as Array<Record<string, unknown>>
     // P3-e M1：人物卡同理，先排序再截取 40 条
     const characterCandidates: Candidate[] = []
@@ -87,8 +91,9 @@ export class ContextEngine {
         projectId, reason: '人物卡', priority: rank.mentioned ? 79 : 70, rank, basis: settingBasis(rank) })
     })
     const sortedCharacters = characterCandidates.toSorted((a, b) => compareSettingRank(a.rank!, b.rank!))
-    candidates.push(...sortedCharacters.slice(0, CONSISTENCY_CHARACTER_LIMIT))
-    overflow.push(...overflowOf('character', '人物卡', CONSISTENCY_CHARACTER_LIMIT, sortedCharacters.slice(CONSISTENCY_CHARACTER_LIMIT)))
+    const characterSplit = withinLimitOrPinned(sortedCharacters, CONSISTENCY_CHARACTER_LIMIT, (item) => pinned.has(item.id))
+    candidates.push(...characterSplit.kept)
+    overflow.push(...overflowOf('character', '人物卡', CONSISTENCY_CHARACTER_LIMIT, characterSplit.rest))
     const titles = new Map(this.documents.listTree(projectId).map((item) => [item.id, item.title]))
     // L4：取全部事件（顺序同 base）；前 200 条照旧，200 条之后只有钉住的进入候选，其余进溢出行。
     const allEvents = this.db.raw.prepare('SELECT id, story_time_label, title, chapter_id FROM timeline_events WHERE project_id = ? ORDER BY sort_key, created_at')
@@ -156,7 +161,7 @@ export class ContextEngine {
         || Number(b.rank.mentioned) - Number(a.rank.mentioned) || b.score - a.score || compareSettingRank(a.rank, b.rank))
     const relevant = rankedRelevant.slice(0, CREATIVE_MEMORY_LIMIT).map((item) => item.memory)
     const overflow: ContextOverflow[] = overflowOf('memory', '记忆', CREATIVE_MEMORY_LIMIT, rankedRelevant.slice(CREATIVE_MEMORY_LIMIT).filter((item) => !item.rank.pinned)
-      .map((item) => ({ id: item.memory.id, title: `${item.memory.type} · ${item.memory.status}`, basis: settingBasis(item.rank) })))
+      .map((item) => ({ id: item.memory.id, title: `记忆 · ${settingName(item.memory.content)}（${item.memory.type} · ${item.memory.status}）`, basis: settingBasis(item.rank) })))
     const pinnedMemories = this.memories.list(task.projectId, [...statuses]).filter((memory) => pinned.has(memory.id) && !relevant.some((item) => item.id === memory.id))
     for (const memory of [...relevant, ...pinnedMemories]) {
       const stateWeight = stateWeightOf(memory.status)
@@ -205,12 +210,13 @@ export class ContextEngine {
       names: [item.character.name, ...item.character.aliases], updatedAt: item.character.updatedAt }, haystack) }))
       // P3-e：钉住的人物卡即使未被提及也带上；8 条上限按确定排序截取
       .filter((item) => item.matched || item.rank.pinned).toSorted((a, b) => compareSettingRank(a.rank, b.rank))
-    ranked.slice(0, CREATIVE_CHARACTER_LIMIT).forEach(({ character, rank }) => candidates.push({
+    const split = withinLimitOrPinned(ranked, CREATIVE_CHARACTER_LIMIT, (item) => item.rank.pinned)
+    split.kept.forEach(({ character, rank }) => candidates.push({
       id: character.id, kind: 'character', title: `人物 · ${character.name}`,
       content: [character.aliases.length ? `别名：${character.aliases.join('、')}` : '', character.notes, JSON.stringify(character.fields)].filter(Boolean).join('\n'),
       projectId, reason: rank.pinned ? '作者钉住的人物卡' : '问题、选区或当前章明确提及该人物', priority: rank.pinned ? PINNED_PRIORITY : 82, rank, basis: settingBasis(rank)
     }))
-    return overflowOf('character', '人物卡', CREATIVE_CHARACTER_LIMIT, ranked.slice(CREATIVE_CHARACTER_LIMIT).filter((item) => !item.rank.pinned)
+    return overflowOf('character', '人物卡', CREATIVE_CHARACTER_LIMIT, split.rest
       .map(({ character, rank }) => ({ id: character.id, title: `人物 · ${character.name}`, basis: settingBasis(rank) })))
   }
 

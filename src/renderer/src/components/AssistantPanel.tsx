@@ -47,6 +47,8 @@ export function AssistantPanel({ project, documentId, documentText, documentRevi
   const [modelRouting, setModelRouting] = useState<{ models: ModelConfig[]; routes: Record<RoutedTask, string | 'default'> }>()
   const [excludedIds, setExcludedIds] = useState<string[]>([])
   const [includedIds, setIncludedIds] = useState<string[]>([])
+  // M2：清单可切换为「检查一致性」将发送的内容，使时间线/设定的超限条目可见、可钉住
+  const [previewConsistency, setPreviewConsistency] = useState(false)
   const [sourcesOpen, setSourcesOpen] = useState(false)
   const [sourcePreview, setSourcePreview] = useState<{ rows: ContextSourceRow[]; tokens: number; overflow?: ContextOverflow[]; error?: string }>()
   const cleanups = useRef(new Map<string, () => void>())
@@ -95,12 +97,12 @@ export function AssistantPanel({ project, documentId, documentText, documentRevi
   useEffect(() => {
     if (!sourcesOpen || !threadId) return
     let active = true
-    const requestedMode = inferMode(input.trim(), mode)
+    const requestedMode = previewConsistency ? 'consistency_check' : inferMode(input.trim(), mode)
     const timer = setTimeout(() => {
       void onEnsureSaved()
         .then(() => window.workspace.ai.previewContext({ threadId, task: { mode: requestedMode,
-          writePermission: requestedMode === 'editing' || requestedMode === 'generation' ? 'proposal' : 'none', userIntent: input.trim(),
-          projectId: project.id, documentId, selection: selection ? { from: selection.fromPm, to: selection.toPm, text: selection.text } : undefined,
+          writePermission: requestedMode === 'editing' || requestedMode === 'generation' ? 'proposal' : 'none', userIntent: previewConsistency ? CONSISTENCY_DEFAULT_INTENT : input.trim(),
+          projectId: project.id, documentId, selection: selection && !previewConsistency ? { from: selection.fromPm, to: selection.toPm, text: selection.text } : undefined,
           excludedIds: excludedIds.length ? excludedIds : undefined,
           includedIds: includedIds.length ? includedIds : undefined,
           throughChapterNumber: requestedMode === 'reader_review' ? Number(readerThrough) : undefined,
@@ -109,7 +111,7 @@ export function AssistantPanel({ project, documentId, documentText, documentRevi
         .catch((error) => { if (active) setSourcePreview({ rows: [], tokens: 0, error: error instanceof Error ? error.message : String(error) }) })
     }, 250)
     return () => { active = false; clearTimeout(timer) }
-  }, [sourcesOpen, threadId, input, mode, project.id, documentId, documentRevision, selection, excludedIds, includedIds, candidateCount, readerThrough, onEnsureSaved])
+  }, [sourcesOpen, threadId, input, mode, project.id, documentId, documentRevision, selection, excludedIds, includedIds, candidateCount, readerThrough, onEnsureSaved, previewConsistency])
 
   const loadEarlier = async (): Promise<void> => {
     if (!threadId || !messages[0]) return
@@ -290,6 +292,7 @@ export function AssistantPanel({ project, documentId, documentText, documentRevi
     </div>
     <div className="chat-compose">
       {sourcesOpen && <div className="context-sources" aria-label="将发送的上下文">
+        <div className="context-preview-target" role="group" aria-label="清单对象"><button type="button" aria-pressed={!previewConsistency} onClick={() => setPreviewConsistency(false)}>当前对话</button><button type="button" data-testid="context-preview-consistency" aria-pressed={previewConsistency} disabled={!documentId} onClick={() => setPreviewConsistency(true)}>检查一致性</button></div>
         {sourcePreview?.error ? <div className="inline-error" role="alert">上下文预览失败：{sourcePreview.error}</div>
           : !sourcePreview ? <div className="context-note">正在整理上下文…</div>
           : <><div className="context-note">将发送 {sourcePreview.rows.filter((row) => row.included).length} 条 · 约 {sourcePreview.tokens} tokens（取消勾选即不发送）<small className="context-pin-hint">{PIN_SCOPE_HINT}</small></div>
