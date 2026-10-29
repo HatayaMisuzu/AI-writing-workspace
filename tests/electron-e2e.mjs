@@ -5,7 +5,7 @@ import { existsSync } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { _electron as electron, chromium } from 'playwright'
 
 const root = resolve(import.meta.dirname, '..')
@@ -143,8 +143,12 @@ const finishLaunch = async (app, page) => {
 const killApp = async (running) => {
   if (running.app.kill) return running.app.kill()
   const closed = running.app.waitForEvent('close').catch(() => {})
-  running.app.process().kill('SIGKILL')
+  const pid = running.app.process().pid
+  // Windows：只杀主进程会留下 GPU/渲染子进程占用 userData，强杀整棵进程树（仍不经关闭流程）
+  if (process.platform === 'win32') spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' })
+  else running.app.process().kill('SIGKILL')
   await closed
+  await new Promise((done) => setTimeout(done, 1500))
 }
 // F15：renderer 侧请求计数（本地 file/data/blob/devtools 资源除外）
 const rendererRequests = []
