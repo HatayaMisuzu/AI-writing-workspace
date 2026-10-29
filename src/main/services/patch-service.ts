@@ -72,6 +72,48 @@ export class PatchService {
   }
 
   /**
+   * PR37 复验 ②「全部接受」：整批一次校验、只拍 1 个 ai_edit 快照（即批量前原文）。
+   * 每条仍按 prepare 的规则校验（修订号 + 原文哈希），不符的标 stale；有可接受的才拍快照。
+   * currentText 是渲染进程在同一修订号下按位置读到的文字（位置由同一事务内的 mapping 逐条重算，见 EditorSurface.applyPatches）。
+   */
+  prepareBatch(projectId: string, documentId: string, documentRevision: number, items: Array<{ patchId: string; currentText: string }>): { ready: TextPatch[]; stale: TextPatch[] } {
+    return this.db.transaction(() => {
+      const persisted = this.documents.getContent(projectId, documentId)
+      const ready: TextPatch[] = []; const stale: TextPatch[] = []
+      for (const item of items) {
+        const patch = this.get(projectId, item.patchId)
+        if (patch.status !== 'proposed' || patch.documentId !== documentId) throw new Error('PATCH_NOT_PROPOSED')
+        if (persisted.revision !== patch.documentRevision || documentRevision !== patch.documentRevision || this.documents.hashRange(item.currentText) !== patch.originalHash) {
+          this.setStatus(projectId, patch.id, 'stale'); stale.push({ ...patch, status: 'stale' })
+        } else ready.push(patch)
+      }
+      if (ready.length) this.documents.createSnapshot(projectId, documentId, 'ai_edit', { patchIds: ready.map((patch) => patch.id), batch: true, coordinateSystem: 'prosemirror' })
+      return { ready, stale }
+    })
+  }
+
+  /** 整批保存（1 次写库）确认后，一次事务把 accepted / stale 状态写回；AI 采纳字数合计后只累计一次。 */
+  completeBatch(projectId: string, savedRevision: number, acceptedIds: string[], staleIds: string[]): { accepted: number; stale: number } {
+    return this.db.transaction(() => {
+      let aiWords = 0
+      for (const id of acceptedIds) {
+        const patch = this.get(projectId, id)
+        if (patch.status !== 'proposed') throw new Error('PATCH_NOT_PROPOSED')
+        const persisted = this.documents.getContent(projectId, patch.documentId)
+        if (persisted.revision !== savedRevision || savedRevision <= patch.documentRevision) throw new Error('PATCH_SAVE_NOT_CONFIRMED')
+        this.setStatus(projectId, id, 'accepted')
+        aiWords += countChineseWords(patch.replacement)
+      }
+      for (const id of staleIds) {
+        if (this.get(projectId, id).status !== 'proposed') throw new Error('PATCH_NOT_PROPOSED')
+        this.setStatus(projectId, id, 'stale')
+      }
+      if (aiWords > 0) this.writingDaily.addAiAcceptedWords(projectId, aiWords)
+      return { accepted: acceptedIds.length, stale: staleIds.length }
+    })
+  }
+
+  /**
    * F13 批量应用（组长决定 1，方案 c）：同一批提案逐条接受，每接受一条，剩下的按新修订号重算位置。
    * 只改 revision 与 PM 区间；originalText / originalHash 不变，prepare 仍会校验当前文字，位置算错只会变 stale，不会改错字。
    */

@@ -58,7 +58,8 @@ const api: WorkspaceApi = {
     propose: (input) => invoke('patches:propose', input), list: (projectId, documentId) => invoke('patches:list', projectId, documentId),
     prepare: (projectId, id, revision, currentText) => invoke('patches:prepare', projectId, id, revision, currentText),
     complete: (projectId, id, revision) => invoke('patches:complete', projectId, id, revision), reject: (projectId, id) => invoke('patches:reject', projectId, id),
-    rebase: (input) => invoke('patches:rebase', input)
+    rebase: (input) => invoke('patches:rebase', input),
+    prepareBatch: (input) => invoke('patches:prepare-batch', input), completeBatch: (input) => invoke('patches:complete-batch', input)
   },
   linter: { run: (projectId, documentId, text, sourceRevision) => invoke('linter:run', projectId, documentId, text, sourceRevision) },
   lint: {

@@ -7,6 +7,7 @@
 import type { Node as ProseMirrorNode } from '@tiptap/pm/model'
 import { Plugin, PluginKey, type EditorState, type Transaction } from '@tiptap/pm/state'
 import { Decoration, DecorationSet, type EditorView } from '@tiptap/pm/view'
+import { isChunkedParagraph } from './long-paragraph-chunks'
 import { MATCHER_LIMITS, type NameHit, type NameMatcher } from '../../../shared/name-matcher'
 
 export const HOVER_DEBOUNCE_MS = 500
@@ -43,6 +44,7 @@ export function hitsInRange(doc: ProseMirrorNode, matcher: NameMatcher, from = 0
   const hits: DecoratedHit[] = []
   doc.nodesBetween(Math.max(0, from), Math.min(doc.content.size, to), (node, pos) => {
     if (!node.isTextblock) return true
+    if (isChunkedParagraph(node)) return false // 超长分块段落不加悬停装饰（会把分块拆碎）
     for (const hit of matcher.match(blockMatchText(node))) hits.push({ ...hit, pmFrom: pos + 1 + hit.from, pmTo: pos + 1 + hit.to })
     return false
   })

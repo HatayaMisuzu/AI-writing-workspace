@@ -188,3 +188,10 @@ export const patchRebaseSchema = z.object({
   projectId: idSchema, patchId: idSchema, fromRevision: nonNegativeIntSchema, toRevision: nonNegativeIntSchema,
   fromPm: nonNegativeIntSchema, toPm: nonNegativeIntSchema
 }).strict()
+export const patchPrepareBatchSchema = z.object({
+  projectId: idSchema, documentId: idSchema, documentRevision: nonNegativeIntSchema,
+  items: z.array(z.object({ patchId: idSchema, currentText: contentSchema }).strict()).min(1).max(500)
+}).strict()
+export const patchCompleteBatchSchema = z.object({
+  projectId: idSchema, savedRevision: nonNegativeIntSchema, acceptedIds: z.array(idSchema).max(500), staleIds: z.array(idSchema).max(500)
+}).strict()

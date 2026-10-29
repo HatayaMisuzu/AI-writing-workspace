@@ -49,7 +49,7 @@ const handle = <T extends unknown[], R>(channel: string, fn: (...args: T) => R |
 }
 
 import {
-  idSchema, shortTextSchema, contentSchema, nonNegativeIntSchema, projectCreateSchema, documentCreateSchema, documentSaveSchema, noteSaveSchema, characterSaveSchema, providerInputSchema, modelSchema, routeSchema, patchProposalSchema, snapshotReasonSchema, aiStartSchema, aiPreviewContextSchema, noteSectionSchema, outlineSaveSchema, batchCreateChaptersSchema, writingGoalsInputSchema, chapterStatusSchema, foreshadowRegisterSchema, foreshadowSetStateSchema, foreshadowUpdateMetaSchema, timelineSortModeSchema, timelineEventSaveSchema, chapterWordRangeSchema, promptTemplateModeSchema, promptTemplateTextSchema, promptTemplateScopeSchema, promptCopySourceSchema, hoverPrefsSchema, lintRunSchema, wordlistTextSchema, wordlistScopeSchema, lintRulesSchema, lintIgnoreSchema, importTokenSchema, patchRebaseSchema
+  idSchema, shortTextSchema, contentSchema, nonNegativeIntSchema, projectCreateSchema, documentCreateSchema, documentSaveSchema, noteSaveSchema, characterSaveSchema, providerInputSchema, modelSchema, routeSchema, patchProposalSchema, snapshotReasonSchema, aiStartSchema, aiPreviewContextSchema, noteSectionSchema, outlineSaveSchema, batchCreateChaptersSchema, writingGoalsInputSchema, chapterStatusSchema, foreshadowRegisterSchema, foreshadowSetStateSchema, foreshadowUpdateMetaSchema, timelineSortModeSchema, timelineEventSaveSchema, chapterWordRangeSchema, promptTemplateModeSchema, promptTemplateTextSchema, promptTemplateScopeSchema, promptCopySourceSchema, hoverPrefsSchema, lintRunSchema, wordlistTextSchema, wordlistScopeSchema, lintRulesSchema, lintIgnoreSchema, importTokenSchema, patchRebaseSchema, patchPrepareBatchSchema, patchCompleteBatchSchema
 } from './schemas'
 import { toUserFacingIpcError } from './validation-error'
 const parse = <T>(schema: z.ZodType<T>, value: unknown): T => schema.parse(value)
@@ -181,6 +181,8 @@ export function registerIpc(db: AppDatabase, codec: SecretCodec, network?: Netwo
   handle('patches:list', (projectId: string, documentId?: string) => patches.list(projectId, documentId))
   handle('patches:prepare', (projectId: string, patchId: string, revision: number, currentText: string) => patches.prepare(parse(idSchema, projectId), parse(idSchema, patchId), parse(nonNegativeIntSchema, revision), parse(contentSchema, currentText)))
   handle('patches:complete', (projectId: string, patchId: string, savedRevision: number) => patches.complete(parse(idSchema, projectId), parse(idSchema, patchId), parse(nonNegativeIntSchema, savedRevision)))
+  handle('patches:prepare-batch', (input: unknown) => { const value = parse(patchPrepareBatchSchema, input); return patches.prepareBatch(value.projectId, value.documentId, value.documentRevision, value.items) })
+  handle('patches:complete-batch', (input: unknown) => { const value = parse(patchCompleteBatchSchema, input); return patches.completeBatch(value.projectId, value.savedRevision, value.acceptedIds, value.staleIds) })
   handle('patches:rebase', (input: unknown) => patches.rebase(parse(patchRebaseSchema, input)))
   handle('patches:reject', (projectId: string, patchId: string) => patches.reject(parse(idSchema, projectId), parse(idSchema, patchId)))
 

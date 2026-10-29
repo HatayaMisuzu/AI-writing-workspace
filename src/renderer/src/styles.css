@@ -140,13 +140,16 @@ button.danger-button { color: #fff; background: var(--danger); border-color: var
 .memory-proposal > div { display: flex; justify-content: flex-end; gap: 7px; margin-top: 8px; }
 .inline-error { margin-top: 7px; color: var(--danger); font-size: 11px; }
 .settings-nav button:disabled { opacity: .48; cursor: not-allowed; }
-.writing-scroll { min-height: 0; overflow: auto; padding: 46px clamp(36px, 7vw, 110px) 120px; scroll-behavior: smooth; }
+.writing-scroll { min-height: 0; overflow: auto; contain: strict; padding: 46px clamp(36px, 7vw, 110px) 120px; scroll-behavior: smooth; }
 .writing-page { max-width: 720px; margin: 0 auto; }
 .writing-page h1 { font: 600 30px/1.4 STSong, SimSun, "Noto Serif CJK SC", serif; margin: 0 0 36px; letter-spacing: .06em; }
 .manuscript-editor { outline: 0; min-height: 58vh; font: 18px/1.92 STSong, SimSun, "Noto Serif CJK SC", serif; letter-spacing: .025em; }
 .manuscript-editor p { margin: 0 0 1.05em; text-indent: 2em; }
 /* 按键耗时：长章节每次输入都会强制整篇重排；屏外段落跳过渲染/布局（auto 会记住真实高度；未渲染过的按 --block-estimate 估算，见 block-height-estimate.ts），屏内与可访问性不受影响 */
 .manuscript-editor > * { content-visibility: auto; contain-intrinsic-size: auto var(--block-estimate, 3.6em); }
+/* 超长单段分块（long-paragraph-chunks.ts）：每块独立断行，屏外块跳过布局；只有第一块保留首行缩进 */
+.manuscript-editor .long-paragraph-chunk { display: block; text-indent: 0; content-visibility: auto; contain-intrinsic-size: auto 1600px; }
+.manuscript-editor .long-paragraph-chunk.first { text-indent: 2em; }
 .manuscript-editor p.is-editor-empty:first-child::before { content: attr(data-placeholder); float: left; color: #b2b2ac; pointer-events: none; height: 0; text-indent: 2em; }
 .editor-status { padding: 0 16px; display: flex; justify-content: flex-end; align-items: center; gap: 16px; color: var(--muted); font-size: 11px; border-top: 1px solid #efefeb; }
 .proofread-count { color: var(--warning); min-height: 24px; border: 0; background: transparent; padding: 0; font-size: 11px; }

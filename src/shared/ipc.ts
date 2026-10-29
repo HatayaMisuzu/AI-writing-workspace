@@ -105,6 +105,10 @@ export interface WorkspaceApi {
     complete(projectId: string, patchId: string, savedRevision: number): Promise<TextPatch>
     reject(projectId: string, patchId: string): Promise<TextPatch>
     rebase(input: { projectId: string; patchId: string; fromRevision: number; toRevision: number; fromPm: number; toPm: number }): Promise<TextPatch>
+    /** PR37 ②：整批一次校验、1 个快照 */
+    prepareBatch(input: { projectId: string; documentId: string; documentRevision: number; items: Array<{ patchId: string; currentText: string }> }): Promise<{ ready: TextPatch[]; stale: TextPatch[] }>
+    /** PR37 ②：整批 1 次保存后一次写回状态 */
+    completeBatch(input: { projectId: string; savedRevision: number; acceptedIds: string[]; staleIds: string[] }): Promise<{ accepted: number; stale: number }>
   }
   linter: { run(projectId: string, documentId: string, text: string, sourceRevision?: number): Promise<import('./domain').LintResult> }
   lint: {

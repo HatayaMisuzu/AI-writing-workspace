@@ -159,6 +159,18 @@ const watchRendererRequests = (page) => page.on('request', (request) => {
 const waitSaved = async (page) => {
   await page.getByText('已保存', { exact: true }).waitFor({ timeout: 10_000 })
 }
+// L2：点抽屉里第一条词表替换的「应用」→ 本地规则总数变成 expectCount 且再过两帧，页面内计时
+const timeApplyFirst = (page, expectCount) => page.evaluate(async (expectCount) => {
+  const frame = () => new Promise((resolve) => requestAnimationFrame(() => resolve()))
+  const count = () => document.querySelector('[data-testid="local-lint"] h3 > span')?.textContent
+  const button = [...document.querySelectorAll('.lint-group[data-group="wordlist_replace"] .proofread-issue button')].find((item) => item.textContent === '应用')
+  if (!button) throw new Error('apply button not found')
+  const started = performance.now()
+  button.click()
+  while (count() !== expectCount) { if (performance.now() - started > 60_000) throw new Error(`apply timeout, count=${count()}`); await frame() }
+  await frame(); await frame()
+  return performance.now() - started
+}, expectCount)
 const openChapter = (page, title) => page.locator('.chapter-row', { hasText: title }).locator('.chapter-open').click()
 
 let running
@@ -1230,11 +1242,102 @@ try {
       await frame(); await frame()
       return performance.now() - started
     })
-    process.stdout.write(`F13 L2 drawer (11704 hits): open ${openMs.toFixed(1)}ms, more ${moreMs.toFixed(1)}ms, ignore ${ignoreMs.toFixed(1)}ms (limit 1000ms)\n`)
+    const applyMs = await timeApplyFirst(page, '11702')
+    process.stdout.write(`F13 L2 drawer (11704 hits): open ${openMs.toFixed(1)}ms, more ${moreMs.toFixed(1)}ms, ignore ${ignoreMs.toFixed(1)}ms, apply ${applyMs.toFixed(1)}ms (limit 1000ms)\n`)
     assert.ok(openMs <= 1000, `抽屉打开 ${openMs.toFixed(1)}ms 应 ≤1000ms`)
     assert.ok(moreMs <= 1000, `点「更多」响应 ${moreMs.toFixed(1)}ms 应 ≤1000ms`)
     assert.ok(ignoreMs <= 1000, `点「忽略这一处」响应 ${ignoreMs.toFixed(1)}ms 应 ≤1000ms`)
+    assert.ok(applyMs <= 1000, `点「应用」响应 ${applyMs.toFixed(1)}ms 应 ≤1000ms`)
+    await waitSaved(page)
     await page.getByRole('button', { name: '关闭校对' }).click()
+    await openChapter(page, '词表批量章')
+    await page.locator('.manuscript-editor', { hasText: '他在坐一' }).waitFor()
+    if (viewport) await page.setViewportSize(viewport)
+  })
+
+  await record('F13 L2 单段长章（19.9 万字一段、11704 条命中）：打开 / 更多 / 忽略 / 应用 ≤1s；全部接受 500 条 ≤30s、1 个快照、Ctrl+Z 一步回到批量前；第 2 轮提示「其余 N 处」刷新', async () => {
+    const page = running.page
+    // 与复验同形：一整段 198968 字（34 字一句 × 5852，每句 2 处「狠狠」= 11704 条），低于 20 万字长章节阈值
+    const seg = '林舟在会上说，他狠狠地看，又狠狠地走了。夜色很深，风也很大，远处灯。'
+    const chapterId = await page.evaluate(async ({ projectId, seg }) => {
+      const tree = await window.workspace.documents.tree(projectId)
+      const volume = tree.find((item) => item.type === 'volume')
+      const text = seg.repeat(5852)
+      const node = await window.workspace.documents.create({ projectId, parentId: volume.id, type: 'chapter', title: '单段长章' })
+      await window.workspace.documents.save({ projectId, documentId: node.id, editorJson: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text }] }] }, plainText: text, expectedRevision: 0 })
+      return node.id
+    }, { projectId: ids.projectId, seg })
+    const viewport = page.viewportSize()
+    await page.setViewportSize({ width: 1600, height: 900 })
+    await page.reload()
+    await page.getByRole('button', { name: '继续写作' }).click()
+    await page.locator('.manuscript-editor').waitFor()
+    await openChapter(page, '单段长章')
+    await page.locator('.editor-status .proofread-count', { hasText: '11704 条校对提示' }).waitFor({ timeout: 60_000 })
+    assert.ok(await page.locator('.manuscript-editor .long-paragraph-chunk').count() > 100, '超长单段应分块显示')
+    const clickAndWait = (spec) => page.evaluate(async (spec) => {
+      const frame = () => new Promise((resolve) => requestAnimationFrame(() => resolve()))
+      const count = () => document.querySelector('[data-testid="local-lint"] h3 > span')?.textContent
+      const shown = () => document.querySelectorAll('.proofread-drawer .proofread-issue').length
+      const button = [...document.querySelectorAll(spec.selector)].find((item) => item.textContent.includes(spec.text))
+      if (!button) throw new Error(`button not found: ${spec.text}`)
+      const started = performance.now()
+      button.click()
+      while (!((spec.shown === undefined || shown() === spec.shown) && (spec.count === undefined || count() === spec.count))) {
+        if (performance.now() - started > 30_000) throw new Error(`timeout: ${spec.text} shown=${shown()} count=${count()}`)
+        await frame()
+      }
+      await frame(); await frame()
+      return performance.now() - started
+    }, spec)
+    const openMs = await clickAndWait({ selector: '.editor-status .proofread-count', text: '11704 条校对提示', shown: 200 })
+    const moreMs = await clickAndWait({ selector: '.proofread-drawer button', text: '更多（再显示 200 条，剩余 11504 条）', shown: 400 })
+    const ignoreMs = await clickAndWait({ selector: '.proofread-drawer .proofread-issue button', text: '忽略这一处', count: '11703', shown: 400 })
+    const applyMs = await timeApplyFirst(page, '11702')
+    process.stdout.write(`F13 L2 single paragraph (198968 chars, 11704 hits): open ${openMs.toFixed(1)}ms, more ${moreMs.toFixed(1)}ms, ignore ${ignoreMs.toFixed(1)}ms, apply ${applyMs.toFixed(1)}ms (limit 1000ms)\n`)
+    assert.ok(openMs <= 1000, `单段长章 抽屉打开 ${openMs.toFixed(1)}ms 应 ≤1000ms`)
+    assert.ok(moreMs <= 1000, `单段长章 点「更多」${moreMs.toFixed(1)}ms 应 ≤1000ms`)
+    assert.ok(ignoreMs <= 1000, `单段长章 点「忽略这一处」${ignoreMs.toFixed(1)}ms 应 ≤1000ms`)
+    assert.ok(applyMs <= 1000, `单段长章 点「应用」${applyMs.toFixed(1)}ms 应 ≤1000ms`)
+    await waitSaved(page)
+    const hits = () => page.evaluate(() => (document.querySelector('.manuscript-editor').textContent.match(/很地/g) ?? []).length)
+    assert.equal(await hits(), 1)
+    const preBatch = await editorText(page)
+    const snapshotsBefore = await page.evaluate(({ projectId, documentId }) => window.workspace.snapshots.list(projectId, documentId), { projectId: ids.projectId, documentId: chapterId })
+    // 第 1 轮：前 500 处生成提案 → 全部接受（计时）
+    assert.match(await page.locator('[data-testid="batch-limit-notice"][data-rule="wordlist:狠狠"]').innerText(), /「狠狠→很」单次最多 500 处：本次只为前 500 处生成提案，其余 11202 处/)
+    await page.getByRole('button', { name: '本章批量应用「狠狠→很」（前 500 处 / 共 11702 处，生成修改提案）' }).click()
+    const drawer = page.locator('.patch-drawer')
+    await drawer.getByRole('button', { name: '全部接受（500 条）' }).waitFor({ timeout: 60_000 })
+    const acceptStarted = Date.now()
+    await drawer.getByRole('button', { name: '全部接受（500 条）' }).click()
+    await page.waitForFunction(() => (document.querySelector('.manuscript-editor').textContent.match(/很地/g) ?? []).length === 501, undefined, { timeout: 60_000 })
+    await waitSaved(page)
+    await page.waitForFunction(() => !document.querySelector('.patch-drawer button.primary')?.textContent?.startsWith('全部接受'), undefined, { timeout: 60_000 })
+    const acceptMs = Date.now() - acceptStarted
+    const patches = await page.evaluate(({ projectId, documentId }) => window.workspace.patches.list(projectId, documentId), { projectId: ids.projectId, documentId: chapterId })
+    const snapshotsAfter = await page.evaluate(({ projectId, documentId }) => window.workspace.snapshots.list(projectId, documentId), { projectId: ids.projectId, documentId: chapterId })
+    const newAiEdits = snapshotsAfter.filter((item) => item.reason === 'ai_edit').length - snapshotsBefore.filter((item) => item.reason === 'ai_edit').length
+    process.stdout.write(`F13 L2 single paragraph accept-all 500: ${acceptMs}ms (limit 30000ms), accepted ${patches.filter((patch) => patch.status === 'accepted').length}, new ai_edit snapshots ${newAiEdits}\n`)
+    assert.ok(acceptMs <= 30_000, `全部接受 500 条 ${acceptMs}ms 应 ≤30000ms`)
+    assert.equal(patches.filter((patch) => patch.status === 'accepted').length, 500)
+    assert.equal(newAiEdits, 1, '整批只拍 1 个 AI 修改前快照')
+    const beforeIds = new Set(snapshotsBefore.map((item) => item.id))
+    assert.equal(snapshotsAfter.find((item) => item.reason === 'ai_edit' && !beforeIds.has(item.id)).plainText, preBatch, '这个快照就是批量前原文')
+    await drawer.getByRole('button', { name: '关闭' }).click()
+    // ③ 第 2 轮：重新检查后提示里的「其余 N 处」随之刷新（11702 − 500 = 11202 处，前 500 → 其余 10702）
+    await page.locator('.editor-status .proofread-count', { hasText: '11202 条校对提示' }).waitFor({ timeout: 60_000 })
+    await openLint(page)
+    await page.locator('[data-testid="batch-limit-notice"][data-rule="wordlist:狠狠"]', { hasText: '其余 10702 处' }).waitFor({ timeout: 30_000 })
+    assert.equal(await page.locator('[data-testid="batch-limit-notice"]').count(), 1)
+    await page.getByRole('button', { name: '本章批量应用「狠狠→很」（前 500 处 / 共 11202 处，生成修改提案）' }).waitFor()
+    await page.getByRole('button', { name: '关闭校对' }).click()
+    // 撤销：一次 Ctrl+Z 回到批量之前
+    await page.locator('.manuscript-editor').click()
+    await page.keyboard.press('Control+z')
+    await page.waitForFunction(() => (document.querySelector('.manuscript-editor').textContent.match(/很地/g) ?? []).length === 1, undefined, { timeout: 30_000 })
+    assert.equal(await editorText(page), preBatch, '一次撤销回到批量前正文')
+    await waitSaved(page)
     await openChapter(page, '词表批量章')
     await page.locator('.manuscript-editor', { hasText: '他在坐一' }).waitFor()
     if (viewport) await page.setViewportSize(viewport)
