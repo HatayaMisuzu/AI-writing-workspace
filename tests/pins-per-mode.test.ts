@@ -114,3 +114,34 @@ describe('钉住按模式分开', () => {
     expect(emptyPinsByScope()).toEqual({ chat: [], consistency: [] })
   })
 })
+
+describe('L-4 按钮计数跟将要发送的模式走（不跟清单标签）', () => {
+  it('复现：当前对话排除一条 → 清单切到一致性 → 收起 → 发讨论：按钮仍显示「排除 1」', async () => {
+    const { scopeContextLabel } = await import('../src/renderer/src/services/context-sources')
+    const chatRows = [{ id: 'mem-1' }, { id: 'mem-2' }]
+    const consistencyRows = [{ id: 'set-1' }]
+    let excl = emptyPinsByScope()
+    const pins = emptyPinsByScope()
+    // 在「当前对话」清单里排除一条
+    excl = updatePinsByScope(excl, 'chat', (current) => toggleExcludedId(current, 'mem-1'))
+    let rows: { chat?: { id: string }[]; consistency?: { id: string }[] } = { chat: chatRows }
+    // 切到一致性标签：该组预览返回，只写入 consistency 组的行
+    rows = { ...rows, consistency: consistencyRows }
+    // 收起清单后发送讨论 → 按钮按 discussion 的 scope 计
+    expect(scopeContextLabel(pinScopeOf('discussion'), excl, pins, rows)).toBe('上下文（排除 1）')
+    // 「检查一致性」按钮显示一致性组自己的计数（这里为空）
+    expect(scopeContextLabel('consistency', excl, pins, rows)).toBe('上下文')
+    // 一致性组排除后各自独立
+    excl = updatePinsByScope(excl, 'consistency', (current) => toggleExcludedId(current, 'set-1'))
+    expect(scopeContextLabel('consistency', excl, pins, rows)).toBe('上下文（排除 1）')
+    expect(scopeContextLabel('chat', excl, pins, rows)).toBe('上下文（排除 1）')
+  })
+  it('旧计数：切换标签后另一组的预览行不会参与本组过滤；未预览过的组按实发排除数计', async () => {
+    const { scopeContextLabel } = await import('../src/renderer/src/services/context-sources')
+    const excl = updatePinsByScope(emptyPinsByScope(), 'chat', () => ['mem-1'])
+    expect(scopeContextLabel('chat', excl, emptyPinsByScope(), {})).toBe('上下文（排除 1）')
+    expect(scopeContextLabel('chat', excl, emptyPinsByScope(), { consistency: [{ id: 'x' }] })).toBe('上下文（排除 1）')
+    // 本组新预览中该条已不在清单 → 不计（保持 #31 的「只算可见」语义）
+    expect(scopeContextLabel('chat', excl, emptyPinsByScope(), { chat: [{ id: 'mem-2' }] })).toBe('上下文')
+  })
+})

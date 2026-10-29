@@ -89,3 +89,14 @@ export const pinsByScopeAfterRequest = (state: PinsByScope, scope: PinScope): Pi
 /** 排除也按模式分开（与钉住同结构）；「排除 N」只算当前清单里可见的已排除条目。 */
 export const visibleExcludedIds = (excludedIds: string[], rows: Pick<ContextSourceRow, 'id'>[] | undefined): string[] =>
   excludedIds.filter((id) => (rows ?? []).some((row) => row.id === id))
+
+/** 每组最近一次清单预览的行（按发出预览时的模式归组，不会被另一标签的结果覆盖）。 */
+export type RowsByScope = { chat?: Pick<ContextSourceRow, 'id'>[]; consistency?: Pick<ContextSourceRow, 'id'>[] }
+/**
+ * L-4：按钮计数跟「将要发送的那个模式」走，而不是跟清单当前标签走。
+ * 该组预览过 → 只算该组清单里可见的已排除条目；从未预览 → 按该组实际会发送的排除数计。
+ */
+export const scopeContextLabel = (scope: PinScope, exclusions: PinsByScope, pins: PinsByScope, rows: RowsByScope): string => {
+  const scopeRows = rows[scope]
+  return contextButtonLabel(scopeRows ? visibleExcludedIds(exclusions[scope], scopeRows) : exclusions[scope], pins[scope])
+}

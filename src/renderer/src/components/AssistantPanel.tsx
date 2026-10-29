@@ -6,7 +6,7 @@ import { inputForQuickMode, inputForReaderThrough } from '../services/quick-mode
 import { CONSISTENCY_DEFAULT_INTENT, consistencyCoverage } from '../../../shared/consistency-check'
 import { ConsistencyReportView } from './ConsistencyReportView'
 import type { EditorSelection } from './EditorSurface'
-import { OVERFLOW_TRUNCATED_NOTE, overflowSummary, basisLabel, contextButtonLabel, PIN_SCOPE_HINT, isPinnable, isRowChecked, omittedLabel, toContextSourceRows, toggleExcludedId, toggleIncludedId, emptyPinsByScope, pinScopeOf, pinsByScopeAfterRequest, updatePinsByScope, visibleExcludedIds, type ContextSourceRow, type PinsByScope } from '../services/context-sources'
+import { OVERFLOW_TRUNCATED_NOTE, overflowSummary, basisLabel, PIN_SCOPE_HINT, isPinnable, isRowChecked, omittedLabel, toContextSourceRows, toggleExcludedId, toggleIncludedId, emptyPinsByScope, pinScopeOf, pinsByScopeAfterRequest, updatePinsByScope, scopeContextLabel, type ContextSourceRow, type PinsByScope, type RowsByScope } from '../services/context-sources'
 import { activeCandidateText, canProposeGenerationPatch, mapChatHistory, resolveDisplayedModelMode, resolveModelDisplayName, retryInputForMessage, type AssistantHistoryMessage } from '../services/assistant-history'
 
 type ContextSummary = { count: number; tokens: number; items: ContextSourceRow[] }
@@ -59,6 +59,7 @@ export function AssistantPanel({ project, documentId, documentText, documentRevi
   const setExcludedIds = (update: (current: string[]) => string[]): void => setExclusionsByScope((state) => updatePinsByScope(state, activeScope, update))
   const setIncludedIds = (update: (current: string[]) => string[]): void => setPinsByScope((state) => updatePinsByScope(state, activeScope, update))
   const [sourcesOpen, setSourcesOpen] = useState(false)
+  const [rowsByScope, setRowsByScope] = useState<RowsByScope>({})
   const [sourcePreview, setSourcePreview] = useState<{ rows: ContextSourceRow[]; tokens: number; overflow?: ContextOverflow[]; error?: string }>()
   const cleanups = useRef(new Map<string, () => void>())
   const streamed = useRef(new Map<string, string>())
@@ -79,7 +80,7 @@ export function AssistantPanel({ project, documentId, documentText, documentRevi
     const history = await window.workspace.chat.listMessages(project.id, thread.id, undefined, 50)
     followLatest.current = true
     setThreads(available); setThreadId(thread.id); setMessages(mapChatHistory(history)); setHasEarlier(history.length === 50); setLoadingHistory(false)
-    setExclusionsByScope(emptyPinsByScope()); setPinsByScope(emptyPinsByScope()) // 排除项不持久化
+    setExclusionsByScope(emptyPinsByScope()); setPinsByScope(emptyPinsByScope()); setRowsByScope({}) // 排除项不持久化
   }, [project.id])
 
   useEffect(() => { void loadThread().catch((error) => { setLoadingHistory(false); setMessages([{ id: crypto.randomUUID(), role: 'assistant',
@@ -116,7 +117,12 @@ export function AssistantPanel({ project, documentId, documentText, documentRevi
           includedIds: includedIds.length ? includedIds : undefined,
           throughChapterNumber: requestedMode === 'reader_review' ? Number(readerThrough) : undefined,
           candidateCount: requestedMode === 'generation' ? normalizeCandidateCount(candidateCount) : undefined } }))
-        .then((bundle) => { if (active) setSourcePreview({ rows: toContextSourceRows(bundle), tokens: bundle.metadata.estimatedTokens, overflow: bundle.metadata.overflow }) })
+        .then((bundle) => {
+          if (!active) return
+          const rows = toContextSourceRows(bundle)
+          setSourcePreview({ rows, tokens: bundle.metadata.estimatedTokens, overflow: bundle.metadata.overflow })
+          setRowsByScope((current) => ({ ...current, [pinScopeOf(requestedMode)]: rows }))
+        })
         .catch((error) => { if (active) setSourcePreview({ rows: [], tokens: 0, error: error instanceof Error ? error.message : String(error) }) })
     }, 250)
     return () => { active = false; clearTimeout(timer) }
@@ -133,7 +139,7 @@ export function AssistantPanel({ project, documentId, documentText, documentRevi
     setThreads((current) => [thread, ...current]); setThreadId(thread.id); setMessages([]); setHasEarlier(false); setInput('')
     // O1：与切换对话一致，清空上下文排除态
     setExclusionsByScope(emptyPinsByScope()); setPinsByScope(emptyPinsByScope())
-    setSourcePreview(undefined)
+    setSourcePreview(undefined); setRowsByScope({})
   }
 
   const submit = async (override?: { mode: AIMode; text: string }): Promise<void> => {
@@ -300,7 +306,7 @@ export function AssistantPanel({ project, documentId, documentText, documentRevi
   const panel = <aside ref={drawerRef} className={drawer ? 'assistant-panel assistant-drawer' : 'assistant-panel'} {...(drawer ? { role: 'dialog', 'aria-modal': true, 'aria-label': '同行者', tabIndex: -1 } : {})}>
     <header><div><h2>同行者</h2><span className="scope-notice">{modelName} · 仅使用《{project.title}》</span></div><div className="assistant-head-actions"><button className="icon-button" disabled={Boolean(runningId)} title="新对话" onClick={() => void newThread()}><MessageSquarePlus size={17} /></button><button className="icon-button" title={drawer ? '关闭同行者' : '收起同行者'} aria-label={drawer ? '关闭同行者' : undefined} onClick={onCollapse}><ChevronRight size={18} /></button></div></header>
     <div className="thread-picker"><label htmlFor="assistant-thread">对话</label><select id="assistant-thread" value={threadId ?? ''} disabled={Boolean(runningId) || loadingHistory} onChange={(event) => void loadThread(event.target.value)}>{threads.map((thread) => <option key={thread.id} value={thread.id}>{thread.title} · {new Date(thread.updatedAt).toLocaleDateString()}</option>)}</select></div>
-    <div className="assistant-tools"><button disabled={!documentId || digestBusy} onClick={() => void runDigest()}><FileSearch size={14} />{digestBusy ? '理解中…' : '理解本章'}</button><button disabled={!documentId || Boolean(runningId) || !threadId} title="只读冲突报告：本章正文 vs 已确认设定、人物卡、时间线" onClick={() => void submit({ mode: 'consistency_check', text: CONSISTENCY_DEFAULT_INTENT })}><FileSearch size={14} />检查一致性</button><span className={digestStatus?.state === 'stale' ? 'stale' : ''}>{digestLabel(digestStatus)}</span></div>
+    <div className="assistant-tools"><button disabled={!documentId || digestBusy} onClick={() => void runDigest()}><FileSearch size={14} />{digestBusy ? '理解中…' : '理解本章'}</button><button disabled={!documentId || Boolean(runningId) || !threadId} title="只读冲突报告：本章正文 vs 已确认设定、人物卡、时间线" onClick={() => void submit({ mode: 'consistency_check', text: CONSISTENCY_DEFAULT_INTENT })}><FileSearch size={14} />检查一致性{scopeContextLabel('consistency', exclusionsByScope, pinsByScope, rowsByScope) !== '上下文' && <small data-testid="consistency-context-count">{scopeContextLabel('consistency', exclusionsByScope, pinsByScope, rowsByScope).replace(/^上下文/, '')}</small>}</button><span className={digestStatus?.state === 'stale' ? 'stale' : ''}>{digestLabel(digestStatus)}</span></div>
     <div className="chat-scroll" ref={chatScroll} onScroll={(event) => {
       const node = event.currentTarget
       followLatest.current = node.scrollHeight - node.scrollTop - node.clientHeight < 80
@@ -365,7 +371,7 @@ export function AssistantPanel({ project, documentId, documentText, documentRevi
         {mode === 'reader_review' && <label className="candidate-count-picker" title="读者读到第 N 章（按章树顺序）">读到第
           <input aria-label="读到第 N 章" type="number" min={1} step={1} style={{ width: 52 }} value={readerThrough} disabled={Boolean(runningId)}
             onChange={(event) => { const value = event.target.value; setReaderThrough(value); setInput((current) => inputForReaderThrough(current, value)) }} />章</label>}
-        <button className={sourcesOpen ? 'active' : ''} aria-expanded={sourcesOpen} onClick={() => setSourcesOpen((open) => !open)}>{contextButtonLabel(visibleExcludedIds(excludedIds, sourcePreview?.rows), includedIds)}</button>
+        <button className={sourcesOpen ? 'active' : ''} aria-expanded={sourcesOpen} onClick={() => setSourcesOpen((open) => !open)}>{scopeContextLabel(pinScopeOf(inputMode), exclusionsByScope, pinsByScope, rowsByScope)}</button>
       </div>{runningId ? <button className="send-button" title="取消请求" onClick={() => void window.workspace.ai.cancel(runningId)}><Square size={14} /></button> : <button className="send-button" disabled={!input.trim() || !threadId} aria-label="发送" onClick={() => void submit()}><Send size={15} /></button>}</div>
     </div>
   </aside>
