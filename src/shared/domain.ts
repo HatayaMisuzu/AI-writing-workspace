@@ -1,3 +1,4 @@
+import type { ConsistencyCoverage } from './consistency-check'
 export type ProjectType = 'novel' | 'webnovel' | 'screenplay' | 'other'
 export type DocumentType = 'volume' | 'chapter' | 'scene' | 'note'
 /** S11：本地章节状态（与平台无关）。 */
@@ -11,7 +12,9 @@ export type AIMode =
   | 'chapter_digest'
   | 'proofreading'
   | 'reader_review'
-export type RoutedTask = Exclude<AIMode, 'reader_review'>
+  /** P1-6 记录员·一致性检查：只读冲突报告；模型路由沿用 organization。 */
+  | 'consistency_check'
+export type RoutedTask = Exclude<AIMode, 'reader_review' | 'consistency_check'>
 export type WritePermission = 'none' | 'proposal' | 'authorized'
 export type MemoryStatus = 'observed' | 'confirmed' | 'tentative' | 'idea' | 'suggested' | 'rejected' | 'superseded'
 export type MemoryType = 'fact' | 'event' | 'character_state' | 'relationship' | 'decision' | 'idea' | 'question' | 'foreshadowing' | 'style_signal'
@@ -303,7 +306,7 @@ export interface AITaskEnvelope {
 
 export interface ContextItem {
   id: string
-  kind: 'selection' | 'document' | 'nearby' | 'memory' | 'note' | 'search' | 'style' | 'character' | 'digest' | 'reference' | 'outline'
+  kind: 'selection' | 'document' | 'nearby' | 'memory' | 'note' | 'search' | 'style' | 'character' | 'digest' | 'reference' | 'outline' | 'timeline'
   title: string
   content: string
   projectId: string
@@ -322,7 +325,7 @@ export interface ContextOmission {
 
 export interface ContextBundle {
   projectId: string
-  policy: 'creative' | 'reader'
+  policy: 'creative' | 'reader' | 'consistency'
   items: ContextItem[]
   metadata: { estimatedTokens: number; sourceIds: string[]; excludedKinds: string[]; omitted?: ContextOmission[] }
 }
@@ -345,6 +348,8 @@ export interface ChatMessage {
   createdAt: number
   status: 'streaming' | 'complete' | 'error' | 'cancelled'
   target?: DocumentTaskTarget
+  /** P1-6：一致性检查的比对覆盖情况（由 snapshot 推导，不存正文）。 */
+  coverage?: ConsistencyCoverage
 }
 
 export interface ChatCursor { createdAt: number; id: string }

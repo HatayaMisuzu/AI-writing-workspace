@@ -5,8 +5,10 @@ import { MemoryService } from '../services/memory-service'
 import { StyleEngine } from './style-engine'
 import { relevanceScore } from './relevance'
 import { validateReaderChapterNumber } from '../../shared/reader-review'
+import { truncateBySide, truncationSideFor } from '../../shared/consistency-check'
 
 const estimateTokens = (text: string): number => Math.ceil(text.length / 2.2)
+const settingName = (content: string): string => { const flat = content.replace(/\s+/g, ' ').trim(); return [...flat].length > 16 ? `${[...flat].slice(0, 16).join('')}…` : flat || '未命名' }
 
 export class ContextEngine {
   private readonly documents: DocumentService
@@ -25,7 +27,55 @@ export class ContextEngine {
       if (through === undefined) throw new Error('READER_CHAPTER_REQUIRED')
       return this.buildReader(task.projectId, through, budget, task.excludedIds)
     }
+    if (task.mode === 'consistency_check') return this.buildConsistency(task, budget)
     return this.buildCreative(task, budget)
+  }
+
+  /**
+   * P1-6 记录员·一致性检查：本章正文 + 已确认设定（confirmed 记忆，伏笔除外）+ 人物卡 + 时间线。
+   * 待确认/暂定记忆、伏笔、灵感、大纲、摘要、他章与他书都不进。时间线仅在本模式进上下文。
+   */
+  private buildConsistency(task: AITaskEnvelope, budget: number): ContextBundle {
+    if (!task.documentId) throw Object.assign(new Error('请先打开要检查的章节。'), { code: 'CONSISTENCY_CHAPTER_REQUIRED' })
+    const { projectId } = task
+    const chapter = this.documents.getContent(projectId, task.documentId)
+    const node = this.documents.listTree(projectId).find((item) => item.id === task.documentId)
+    const chapterItem: ContextItem & { priority: number } = { id: chapter.documentId, kind: 'document', title: `本章 · ${node?.title ?? '当前章节'}`,
+      content: chapter.plainText, projectId, reason: '待检查的本章正文', priority: 100 }
+    const candidates: Array<ContextItem & { priority: number }> = []
+    const memories = this.db.raw.prepare("SELECT id, type, content FROM memories WHERE project_id = ? AND status = 'confirmed' AND type != 'foreshadowing' ORDER BY updated_at DESC LIMIT 60")
+      .all(projectId) as Array<{ id: string; type: string; content: string }>
+    memories.forEach((memory) => candidates.push({ id: memory.id, kind: 'memory', title: `设定 · ${settingName(memory.content)}（${memory.type}）`, content: memory.content,
+      projectId, reason: '作者已确认的设定', priority: 80 }))
+    const characters = this.db.raw.prepare('SELECT * FROM characters WHERE project_id = ? ORDER BY updated_at DESC LIMIT 40').all(projectId) as Array<Record<string, unknown>>
+    characters.forEach((row) => {
+      const aliases = JSON.parse(row.aliases_json as string) as string[]
+      const fields = JSON.parse(row.fields_json as string) as Record<string, string>
+      const content = [aliases.length ? `别名：${aliases.join('、')}` : '', row.notes as string,
+        ...Object.entries(fields).filter(([, value]) => value).map(([key, value]) => `${key}：${value}`)].filter(Boolean).join('\n')
+      candidates.push({ id: row.id as string, kind: 'character', title: `人物 · ${row.name as string}`, content: content || '（无更多信息）',
+        projectId, reason: '人物卡', priority: chapter.plainText.includes(row.name as string) ? 79 : 70 })
+    })
+    const titles = new Map(this.documents.listTree(projectId).map((item) => [item.id, item.title]))
+    const events = this.db.raw.prepare('SELECT id, story_time_label, title, chapter_id FROM timeline_events WHERE project_id = ? ORDER BY sort_key, created_at LIMIT 200')
+      .all(projectId) as Array<{ id: string; story_time_label: string; title: string; chapter_id: string | null }>
+    events.forEach((event, index) => candidates.push({ id: event.id, kind: 'timeline', title: `时间线 · ${event.title || '未命名事件'}`,
+      content: [`故事时间：${event.story_time_label || '未标注'}`, `顺序：第 ${index + 1} 个事件`, event.chapter_id ? `关联章节：${titles.get(event.chapter_id) ?? event.chapter_id}` : ''].filter(Boolean).join('；'),
+      projectId, reason: '时间线事件（仅一致性检查使用）', priority: 76 - Math.min(5, index / 40) }))
+    const excludedKinds = ['other_chapters', 'pending_memory', 'foreshadows', 'ideas', 'outlines', 'digests', 'story_notes', 'references', 'creative_chat', 'other_projects']
+    // P2-2：先给设定/人物卡/时间线预留预算（本章至少保底 25%），剩余给本章；本章放不下则截断本章（保留开头）。
+    const chapterFloor = Math.min(estimateTokens(chapter.plainText), Math.floor(budget * 0.25))
+    // PR25 P2-3：设定/人物卡/时间线按类别轮转排列（各类内部仍按优先级），避免人物卡被大量设定挤掉。
+    const byKind = ['memory', 'character', 'timeline'].map((kind) => candidates.filter((item) => item.kind === kind).toSorted((a, b) => b.priority - a.priority))
+    const rotated: Array<ContextItem & { priority: number }> = []
+    for (let round = 0; byKind.some((list) => round < list.length); round += 1)
+      for (const list of byKind) if (round < list.length) rotated.push({ ...list[round], priority: 90 - rotated.length / 1000 })
+    const refs = this.budget(projectId, 'consistency', rotated, Math.max(0, budget - chapterFloor), excludedKinds, task.excludedIds)
+    const body = this.budget(projectId, 'consistency', [chapterItem], Math.max(0, budget - refs.metadata.estimatedTokens), excludedKinds, task.excludedIds)
+    // 本章放在最后：runtime 若仍超预算，先截断本章而不是设定。
+    const items = [...refs.items, ...body.items]
+    return { projectId, policy: 'consistency', items, metadata: { estimatedTokens: refs.metadata.estimatedTokens + body.metadata.estimatedTokens,
+      sourceIds: items.map((item) => item.id), excludedKinds, omitted: [...(body.metadata.omitted ?? []), ...(refs.metadata.omitted ?? [])] } }
   }
 
   private buildCreative(task: AITaskEnvelope, budget: number): ContextBundle {
@@ -204,7 +254,7 @@ export class ContextEngine {
       const remaining = maxTokens - estimatedTokens
       if (remaining <= 0) { seen.add(key); omitted.push({ id: item.id, kind: item.kind, title: item.title, reason: 'budget' }); continue }
       const itemTokens = estimateTokens(item.content)
-      const fitted = itemTokens <= remaining ? item : { ...item, content: item.content.slice(0, Math.max(1, Math.floor(remaining * 2.2))), truncated: true }
+      const fitted = itemTokens <= remaining ? item : { ...item, content: truncateBySide(item.content, remaining * 2.2, truncationSideFor(policy)), truncated: true }
       const fittedTokens = estimateTokens(fitted.content)
       if (!fitted.content.trim()) continue
       items.push(fitted); seen.add(key); estimatedTokens += fittedTokens

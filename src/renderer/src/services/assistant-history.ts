@@ -14,6 +14,7 @@ export interface AssistantHistoryMessage {
   candidates?: string[]
   activeCandidateIndex?: number
   target?: DocumentTaskTarget
+  coverage?: ChatMessage['coverage']
 }
 
 export function mapChatHistory(messages: ChatMessage[]): AssistantHistoryMessage[] {
@@ -31,7 +32,8 @@ export function mapChatHistory(messages: ChatMessage[]): AssistantHistoryMessage
       createdAt: message.createdAt,
       replyToUserId: message.role === 'assistant' ? latestUserId : undefined,
       historical: true,
-      target: message.target
+      target: message.target,
+      coverage: message.coverage
     }
   })
 }

@@ -5,6 +5,7 @@ import { ProjectService } from '../src/main/services/project-service'
 import { DocumentService } from '../src/main/services/document-service'
 import { MemoryService } from '../src/main/services/memory-service'
 import { ChatService } from '../src/main/services/chat-service'
+import type { ContextBundle } from '../src/shared/domain'
 import { ContextEngine } from '../src/main/ai/context-engine'
 import { ProviderService, type ProviderMessage } from '../src/main/ai/provider'
 import { AICreativeRuntime } from '../src/main/ai/runtime'
@@ -154,5 +155,27 @@ describe('hygiene: IPC zod rejection is readable Chinese', () => {
     expect(toUserFacingIpcError(new ZodError(z.string().safeParse(1).error!.issues))).toBeInstanceOf(Error)
     const plain = new Error('READER_CHAPTER_REQUIRED')
     expect(toUserFacingIpcError(plain)).toBe(plain)
+  })
+})
+
+describe('PR25 P2-1: reader truncation decided in one place keeps the chapter end (end-to-end)', () => {
+  for (const window of [3000, 1600]) it(`context-engine + runtime, window ${window}: kept end marker reaches the model`, async () => {
+    const body = (i: number) => `MARK_C${i}_START` + `第${i}章雨夜。`.repeat(800) + `MARK_C${i}_END`
+    const { db, project } = setup(body)
+    const { runtime, sent } = runtimeWith(db, window)
+    const thread = new ChatService(db).createThread(project.id, '截断')
+    const chunks: Array<{ context?: ContextBundle }> = []
+    for await (const chunk of runtime.run(`r${window}`, task(project.id, 2), thread.id, `u${window}`, `a${window}`)) chunks.push(chunk)
+    const context = chunks.find((chunk) => chunk.context)!.context!
+    const wire = sent[0].map((message) => message.content).join('\n')
+    const truncated = context.items.filter((item) => item.truncated)
+    expect(truncated.length).toBeGreaterThan(0)
+    for (const item of context.items) {
+      const n = Number(/^第 (\d+) 章/.exec(item.title)![1])
+      expect(wire).toContain(`MARK_C${n}_END`)
+      expect(body(n).endsWith(item.content)).toBe(true)
+      expect(wire).toContain(item.content)
+    }
+    expect(wire).toContain('MARK_C2_END')
   })
 })

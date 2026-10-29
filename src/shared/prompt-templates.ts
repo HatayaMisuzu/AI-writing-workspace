@@ -7,12 +7,12 @@ import type { AIMode } from './domain'
  * R1–R5 不依赖模板措辞。
  */
 export const PROMPT_TEMPLATE_MODES: AIMode[] = [
-  'discussion', 'brainstorm', 'generation', 'editing', 'organization', 'chapter_digest', 'proofreading', 'reader_review'
+  'discussion', 'brainstorm', 'generation', 'editing', 'organization', 'chapter_digest', 'proofreading', 'reader_review', 'consistency_check'
 ]
 
 export const PROMPT_ROLE_LABELS: Record<AIMode, string> = {
   discussion: '参谋', brainstorm: '点子', generation: '执笔', editing: '润色',
-  organization: '记录员·整理', chapter_digest: '记录员·章节理解', proofreading: '校对', reader_review: '读者视角审稿'
+  organization: '记录员·整理', chapter_digest: '记录员·章节理解', proofreading: '校对', reader_review: '读者视角审稿', consistency_check: '记录员·一致性检查'
 }
 
 /** 默认模板 = 原硬编码 MODE_RULES，逐字不变。 */
@@ -24,7 +24,8 @@ export const DEFAULT_PROMPT_TEMPLATES: Record<AIMode, string> = {
   organization: '整理现有想法，不改变语义，不升级状态。',
   chapter_digest: '输出符合任务契约的章节理解结构，不评分，不升级记忆状态。',
   proofreading: '区分确定错误与风格选择，不静默重写。',
-  reader_review: '只基于给定 Reader Context（第 1..N 章正文），像普通读者一样输出只读审稿报告：分「读者疑问」「追读风险」两部分，每条注明具体章节；不提供改写稿或补丁，不建议修改设定。'
+  reader_review: '只基于给定 Reader Context（第 1..N 章正文），像普通读者一样输出只读审稿报告：分「读者疑问」「追读风险」两部分，每条注明具体章节；不提供改写稿或补丁，不建议修改设定。',
+  consistency_check: '只基于给定的本章正文与已确认设定、人物卡、时间线，找出本章正文与它们之间的矛盾；每条冲突引用本章原文并注明与哪条设定/人物/时间线事件冲突。只读：不改写正文、不建议修改设定、不提出补丁或记忆提案；没有冲突就返回空列表。'
 }
 
 /** 允许的模板变量（{{name}}）。 */

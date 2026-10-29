@@ -6,11 +6,15 @@ import { composeProviderMessages } from './prompt-composer'
 import { OpenAICompatibleAdapter, ProviderService, type ProviderMessage } from './provider'
 import { computeContextInputBudget, DEFAULT_CONTEXT_WINDOW, DEFAULT_MAX_OUTPUT } from '../../shared/provider-presets'
 import { normalizeCandidateCount } from '../../shared/candidate-count'
+import { CONSISTENCY_WINDOW_TOO_SMALL, truncateBySide, truncationSideFor } from '../../shared/consistency-check'
 import { ChatService } from '../services/chat-service'
 import { DocumentService } from '../services/document-service'
 import { PromptTemplateService } from '../services/prompt-template-service'
 
 const estimateTokens = (text: string): number => Math.ceil(text.length / 2.2)
+const policyFor = (mode: AITaskEnvelope['mode']): ContextBundle['policy'] => mode === 'reader_review' ? 'reader' : mode === 'consistency_check' ? 'consistency' : 'creative'
+/** P1-6：一致性检查是记录员（organization）的子任务，复用其模型路由，不新增调用通道。 */
+const routeKey = (mode: AITaskEnvelope['mode']): string => mode === 'consistency_check' ? 'organization' : mode
 
 type RuntimeAdapter = Pick<OpenAICompatibleAdapter, 'chat'>
 type RuntimeAdapterFactory = (baseUrl: string, apiKey: string) => RuntimeAdapter
@@ -37,7 +41,7 @@ export class AICreativeRuntime {
         const source = new DocumentService(this.db).getContent(task.target.projectId, task.target.documentId)
         if (source.revision !== task.target.sourceRevision) throw Object.assign(new Error('来源章节已变化，请重新发送请求。'), { code: 'AI_SOURCE_STALE' })
       }
-      const model = this.providers.route(task.mode)
+      const model = this.providers.route(routeKey(task.mode))
       const { config, apiKey } = this.providers.getWithSecret(model.providerId)
       const timeouts = this.providers.resolveTimeouts(model.providerId)
       const { messages, context } = this.plan(task, threadId, model)
@@ -86,7 +90,7 @@ export class AICreativeRuntime {
    * 不解密 API Key、不发起网络请求；未配置模型时按默认窗口估算。
    */
   previewContext(task: AITaskEnvelope, threadId: string): ContextBundle {
-    try { return this.plan(task, threadId, this.providers.route(task.mode)).context }
+    try { return this.plan(task, threadId, this.providers.route(routeKey(task.mode))).context }
     catch { return this.plan(task, threadId, undefined).context }
   }
 
@@ -96,14 +100,14 @@ export class AICreativeRuntime {
     // S7：预算 = 窗口 − 最大输出 − 余量
     const inputLimit = Math.max(256, computeContextInputBudget(contextWindow, maxOutput))
     const systemOnly = this.messageTokens(composeProviderMessages({ roleTemplate: this.templates.getOverride(task.projectId, task.mode), task: { ...task, userIntent: '' }, context: {
-      projectId: task.projectId, policy: task.mode === 'reader_review' ? 'reader' : 'creative', items: [],
+      projectId: task.projectId, policy: policyFor(task.mode), items: [],
       metadata: { estimatedTokens: 0, sourceIds: [], excludedKinds: [] }
     }, history: [] }))
     if (systemOnly >= inputLimit) throw Object.assign(new Error('模型上下文窗口过小，无法容纳基础任务指令。'), { code: 'MODEL_CONTEXT_WINDOW_TOO_SMALL' })
     const userBudget = Math.min(Math.floor(inputLimit * 0.5), inputLimit - systemOnly)
     const providerTask = { ...task, userIntent: task.userIntent.slice(0, Math.max(1, Math.floor(userBudget * 2.2))) }
     const history = this.fitHistory(this.loadHistory(providerTask, threadId), Math.floor(inputLimit * 0.25))
-    const emptyContext: ContextBundle = { projectId: task.projectId, policy: task.mode === 'reader_review' ? 'reader' : 'creative',
+    const emptyContext: ContextBundle = { projectId: task.projectId, policy: policyFor(task.mode),
       items: [], metadata: { estimatedTokens: 0, sourceIds: [], excludedKinds: [] } }
     const fixedTokens = this.messageTokens(composeProviderMessages({ task: providerTask, context: emptyContext, history, roleTemplate: this.templates.getOverride(task.projectId, task.mode) }))
     const builtContext = this.context.build(providerTask, Math.max(0, inputLimit - fixedTokens))
@@ -111,9 +115,10 @@ export class AICreativeRuntime {
   }
 
 
-  private contextSnapshot(context: ContextBundle): { sources: Array<{ id: string; kind: string }>; omitted: Array<{ id: string; kind: string; reason: string }> } {
+  private contextSnapshot(context: ContextBundle): { sources: Array<{ id: string; kind: string; truncated?: true }>; omitted: Array<{ id: string; kind: string; reason: string }> } {
     return {
-      sources: context.items.map((item) => ({ id: item.id, kind: item.kind })),
+      // 修复 3：snapshot 记录哪些来源（如哪章）被截断
+      sources: context.items.map((item) => ({ id: item.id, kind: item.kind, ...(item.truncated ? { truncated: true as const } : {}) })),
       omitted: (context.metadata.omitted ?? []).map((item) => ({ id: item.id, kind: item.kind, reason: item.reason }))
     }
   }
@@ -151,6 +156,7 @@ export class AICreativeRuntime {
     const context: ContextBundle = { ...source, items: source.items.map((item) => ({ ...item })), metadata: { ...source.metadata, omitted: [...(source.metadata.omitted ?? [])] } }
     const fittedHistory = [...history]
     const roleTemplate = this.templates.getOverride(task.projectId, task.mode)
+    if (task.mode === 'consistency_check') return this.fitConsistency(task, context, fittedHistory, roleTemplate, limit)
     while (context.items.length) {
       const messages = composeProviderMessages({ task, context, history: fittedHistory, roleTemplate })
       const overflow = this.messageTokens(messages) - limit
@@ -164,7 +170,8 @@ export class AICreativeRuntime {
         context.metadata.omitted!.push({ id: last.id, kind: last.kind, title: last.title, reason: 'budget' })
       } else {
         const keep = Math.floor(keepTokens * 2.2)
-        last.content = reader ? last.content.slice(-keep) : last.content.slice(0, keep); last.truncated = true
+        // P2-1：保留端与 context-engine 同源（truncationSideFor），两次截断叠加后仍保留同一端
+        last.content = truncateBySide(last.content, keep, truncationSideFor(context.policy)); last.truncated = true
       }
       context.metadata.estimatedTokens = context.items.reduce((sum, item) => sum + estimateTokens(item.content), 0)
       context.metadata.sourceIds = context.items.map((item) => item.id)
@@ -176,5 +183,42 @@ export class AICreativeRuntime {
     }
     if (this.messageTokens(messages) > limit) throw Object.assign(new Error('模型输入超出上下文预算。'), { code: 'MODEL_CONTEXT_BUDGET_EXCEEDED' })
     return { messages, context }
+  }
+
+  /**
+   * PR25 P2-3：一致性检查的第二层裁剪也守住本章保底（min(本章, 25% 预算)）。
+   * 先把本章截到保底为止（保留开头），再从末尾裁引用（引用已按 设定/人物卡/时间线 轮转排列，
+   * 末尾裁剪仍保持类别均衡，且至少保留一条）；仍放不下 → 不发请求，直接报「上下文窗口太小」。
+   */
+  private fitConsistency(task: AITaskEnvelope, context: ContextBundle, history: ProviderMessage[], roleTemplate: string | undefined, limit: number): { messages: ProviderMessage[]; context: ContextBundle } {
+    const tooSmall = (): Error => Object.assign(new Error(`${CONSISTENCY_WINDOW_TOO_SMALL}（需能容纳本章保底正文和至少一类设定/人物卡/时间线）。`), { code: 'CONSISTENCY_CONTEXT_WINDOW_TOO_SMALL' })
+    const chapter = context.items.find((item) => item.kind === 'document')
+    if (!chapter || !context.items.some((item) => item.kind !== 'document')) throw tooSmall()
+    const floor = Math.max(1, Math.min(estimateTokens(chapter.content), Math.floor(limit * 0.25)))
+    const side = truncationSideFor(context.policy)
+    const sync = (): void => {
+      context.metadata.estimatedTokens = context.items.reduce((sum, item) => sum + estimateTokens(item.content), 0)
+      context.metadata.sourceIds = context.items.map((item) => item.id)
+    }
+    for (;;) {
+      const messages = composeProviderMessages({ task, context, history, roleTemplate })
+      const overflow = this.messageTokens(messages) - limit
+      if (overflow <= 0) return { messages, context }
+      const refs = context.items.filter((item) => item.kind !== 'document')
+      const chapterTokens = estimateTokens(chapter.content)
+      if (chapterTokens > floor) {
+        const keepTokens = Math.max(floor, chapterTokens - overflow - 8)
+        chapter.content = truncateBySide(chapter.content, keepTokens * 2.2, side); chapter.truncated = true
+      } else if (refs.length > 1) {
+        const last = refs.at(-1)!
+        const keepTokens = estimateTokens(last.content) - overflow - 8
+        if (keepTokens <= 0) {
+          context.items.splice(context.items.indexOf(last), 1)
+          context.metadata.omitted!.push({ id: last.id, kind: last.kind, title: last.title, reason: 'budget' })
+        } else { last.content = truncateBySide(last.content, keepTokens * 2.2, side); last.truncated = true }
+      } else if (history.length) history.shift()
+      else throw tooSmall()
+      sync()
+    }
   }
 }
