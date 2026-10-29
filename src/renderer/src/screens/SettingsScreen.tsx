@@ -1,6 +1,6 @@
 import { Check, Plus, Save, Server, TestTube2, XCircle } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import type { ModelConfig, ProviderConfig, RoutedTask } from '../../../shared/domain'
+import type { ModelConfig, ProviderConfig, ProviderType, RoutedTask } from '../../../shared/domain'
 import { SETTINGS_PROJECT_HINTS } from '../services/settings-hints'
 import { userErrorMessage } from '../../../shared/user-error'
 import { BASE_URL_QUERY_SECRET_HINT, checkBaseUrl, hasSecretQuery } from '../../../shared/base-url'
@@ -19,16 +19,16 @@ const capabilityLabel = (capabilities: ModelConfig['capabilities']): string => [
 ].filter(Boolean).join(' · ')
 
 type ProviderForm = {
-  displayName: string; baseUrl: string; apiKey: string
+  providerType: ProviderType; displayName: string; baseUrl: string; apiKey: string
   firstTokenTimeoutMs: string; totalTimeoutMs: string
 }
 
 const blankForm = (): ProviderForm => ({
-  displayName: 'OpenAI-compatible', baseUrl: '', apiKey: '', firstTokenTimeoutMs: '', totalTimeoutMs: ''
+  providerType: 'openai-compatible', displayName: 'OpenAI-compatible', baseUrl: '', apiKey: '', firstTokenTimeoutMs: '', totalTimeoutMs: ''
 })
 
 const formFromProvider = (selected: ProviderConfig): ProviderForm => ({
-  displayName: selected.displayName, baseUrl: selected.baseUrl, apiKey: '',
+  providerType: selected.providerType, displayName: selected.displayName, baseUrl: selected.baseUrl, apiKey: '',
   firstTokenTimeoutMs: selected.firstTokenTimeoutMs ? String(selected.firstTokenTimeoutMs) : '',
   totalTimeoutMs: selected.totalTimeoutMs ? String(selected.totalTimeoutMs) : ''
 })
@@ -36,7 +36,7 @@ const formFromProvider = (selected: ProviderConfig): ProviderForm => ({
 const formFromPreset = (preset: ProviderPreset): ProviderForm => {
   const timeouts = preset.baseUrl ? defaultTimeoutsForBaseUrl(preset.baseUrl) : defaultTimeoutsForBaseUrl('http://localhost')
   return {
-    displayName: preset.displayName, baseUrl: preset.baseUrl, apiKey: '',
+    providerType: 'openai-compatible', displayName: preset.displayName, baseUrl: preset.baseUrl, apiKey: '',
     firstTokenTimeoutMs: String(timeouts.firstTokenTimeoutMs),
     totalTimeoutMs: String(timeouts.totalTimeoutMs)
   }
@@ -83,7 +83,7 @@ export function SettingsScreen(): React.JSX.Element {
     if (firstTokenTimeoutMs !== undefined && (!Number.isFinite(firstTokenTimeoutMs) || firstTokenTimeoutMs <= 0)) throw new Error('首 token 超时须为正整数毫秒。')
     if (totalTimeoutMs !== undefined && (!Number.isFinite(totalTimeoutMs) || totalTimeoutMs <= 0)) throw new Error('总超时须为正整数毫秒。')
     await window.workspace.providers.save({
-      id, providerType: 'openai-compatible', displayName: form.displayName, baseUrl: form.baseUrl,
+      id, providerType: form.providerType, displayName: form.displayName, baseUrl: form.baseUrl,
       apiKey: form.apiKey || undefined, firstTokenTimeoutMs, totalTimeoutMs
     })
     setSelectedId(id)
@@ -113,10 +113,10 @@ export function SettingsScreen(): React.JSX.Element {
     const urlCheck = checkBaseUrl(form.baseUrl)
     if (!urlCheck.ok) throw new Error(urlCheck.message)
     if (!draftModelId) throw new Error('请先填写 Model ID，或保存服务并添加已启用模型。')
-    const savedSame = Boolean(selectedId && selected && !selected.baseUrlError && form.baseUrl === selected.baseUrl)
+    const savedSame = Boolean(selectedId && selected && !selected.baseUrlError && form.baseUrl === selected.baseUrl && form.providerType === selected.providerType)
     const result = savedSame && selectedId && activeModel
       ? await window.workspace.providers.test(selectedId, activeModel.modelId)
-      : await window.workspace.providers.testUrl({ baseUrl: form.baseUrl, apiKey: form.apiKey || undefined, modelId: draftModelId })
+      : await window.workspace.providers.testUrl({ baseUrl: form.baseUrl, apiKey: form.apiKey || undefined, modelId: draftModelId, providerType: form.providerType })
     setNotice({ ok: result.ok, text: result.ok ? '连接成功。' : `连接失败：${result.message ?? '未知错误'} 正文与本地保存不受影响。` })
   })
   const updateModel = (item: ModelConfig, changes: Partial<ModelConfig>): Promise<void> => run(async () => {
@@ -150,9 +150,9 @@ export function SettingsScreen(): React.JSX.Element {
         <aside className="provider-list"><h2>服务提供者</h2>{providers.map((provider) => <button key={provider.id} className={selectedId === provider.id ? 'active' : ''} onClick={() => setSelectedId(provider.id)}><Server size={16} /><span>{provider.displayName}</span>{provider.baseUrlError && <small className="provider-warning" title={provider.baseUrlError}>需修正地址</small>}</button>)}
           <button className="add-provider" onClick={() => { setSelectedId(undefined); setForm(blankForm()) }}><Plus size={16} />添加服务</button></aside>
         <div className="provider-form"><h2>{selected ? selected.displayName : '添加 API 服务'}</h2>
-          <label><span>API 格式</span><input value="OpenAI-compatible" disabled /></label>
+          <label><span>API 格式</span><select data-testid="provider-type" value={form.providerType} onChange={(event) => setForm({ ...form, providerType: event.target.value === 'anthropic' ? 'anthropic' : 'openai-compatible' })}><option value="openai-compatible">OpenAI-compatible（/chat/completions）</option><option value="anthropic">Anthropic Messages（/messages，max_tokens 取模型最大输出）</option></select></label>
           <label><span>显示名称</span><input value={form.displayName} onChange={(event) => setForm({ ...form, displayName: event.target.value })} /></label>
-          <label><span>API Base URL</span><input value={form.baseUrl} onChange={(event) => setForm({ ...form, baseUrl: event.target.value })} placeholder="https://api.example.com/v1" /></label>
+          <label><span>API Base URL</span><input value={form.baseUrl} onChange={(event) => setForm({ ...form, baseUrl: event.target.value })} placeholder={form.providerType === 'anthropic' ? 'Anthropic 服务地址，含 /v1' : 'https://api.example.com/v1'} /></label>
           {form.baseUrl.trim() && !checkBaseUrl(form.baseUrl).ok ? <div className="inline-error" role="alert">{(checkBaseUrl(form.baseUrl) as { message: string }).message}</div>
             : hasSecretQuery(form.baseUrl) ? <div className="context-note" role="note">{BASE_URL_QUERY_SECRET_HINT}</div>
             : selected?.baseUrlError && form.baseUrl === selected.baseUrl ? <div className="inline-error" role="alert">需修正地址：{selected.baseUrlError} 原地址已隐藏，请重新填写地址，并在 Key 栏重新填写 Key 后再保存；在此之前不会发送任何请求。</div> : null}

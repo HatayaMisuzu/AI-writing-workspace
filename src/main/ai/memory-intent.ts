@@ -1,8 +1,9 @@
+import type { ProviderType } from '../../shared/domain'
 import { z } from 'zod'
 import type { MemoryIntentResult, MemoryType } from '../../shared/domain'
 import type { AppDatabase } from '../database/database'
 import { MemoryService } from '../services/memory-service'
-import { OpenAICompatibleAdapter, ProviderService, type ProviderMessage } from './provider'
+import { createProviderAdapter, ProviderService, withModelMaxTokens, type ProviderAdapter, type ProviderMessage } from './provider'
 
 const proposalSchema = z.object({
   type: z.enum(['fact', 'event', 'character_state', 'relationship', 'decision', 'idea', 'question', 'foreshadowing']),
@@ -61,12 +62,12 @@ const CONTRACT = `判断作者是否明确要求把某项创作决定保存为�
 {"shouldPropose":true|false,"proposals":[{"type":"fact|event|character_state|relationship|decision|idea|question|foreshadowing","content":"简洁、可独立理解的中文事实","confidence":0.0}]}
 只有作者明确说“保存、确定采用、以后按此设定”才 shouldPropose=true。疑问、否定、反事实、仅讨论可能性、“不要记/别定/暂时想想”、引用角色说“记住”都必须 false。最多3条。你不能确认记忆。`
 
-type AdapterFactory = (baseUrl: string, apiKey: string) => Pick<OpenAICompatibleAdapter, 'complete'>
+type AdapterFactory = (baseUrl: string, apiKey: string, providerType?: ProviderType) => Pick<ProviderAdapter, 'complete'>
 
 export class MemoryIntentRunner {
   private readonly memories: MemoryService
   constructor(private readonly db: AppDatabase, private readonly providers: ProviderService,
-    private readonly adapterFactory: AdapterFactory = (baseUrl, apiKey) => new OpenAICompatibleAdapter(baseUrl, apiKey)) {
+    private readonly adapterFactory: AdapterFactory = (baseUrl, apiKey, providerType) => createProviderAdapter(providerType, baseUrl, apiKey)) {
     this.memories = new MemoryService(db)
   }
 
@@ -84,7 +85,7 @@ export class MemoryIntentRunner {
     try {
       const model = this.providers.route('discussion')
       const { config, apiKey } = this.providers.getWithSecret(model.providerId)
-      const adapter = this.adapterFactory(config.baseUrl, apiKey)
+      const adapter = withModelMaxTokens(this.adapterFactory(config.baseUrl, apiKey, config.providerType), config.providerType, model.maxOutput)
       const messages: ProviderMessage[] = [{ role: 'system', content: CONTRACT }, { role: 'user', content }]
       const raw = await adapter.complete({ model: model.modelId, messages })
       result = await this.parseWithRepair(adapter, model.modelId, messages, raw)
@@ -93,7 +94,7 @@ export class MemoryIntentRunner {
     return this.memories.createProposals(projectId, sourceId, result.proposals)
   }
 
-  private async parseWithRepair(adapter: Pick<OpenAICompatibleAdapter, 'complete'>, model: string, messages: ProviderMessage[], raw: string): Promise<MemoryIntentResult> {
+  private async parseWithRepair(adapter: Pick<ProviderAdapter, 'complete'>, model: string, messages: ProviderMessage[], raw: string): Promise<MemoryIntentResult> {
     try { return resultSchema.parse(JSON.parse(raw)) }
     catch (error) {
       const repaired = await adapter.complete({ model, messages: [...messages, { role: 'assistant', content: raw },

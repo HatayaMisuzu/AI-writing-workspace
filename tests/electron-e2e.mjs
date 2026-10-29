@@ -51,6 +51,30 @@ const address = fixture.address()
 assert(address && typeof address === 'object')
 const baseUrl = `http://127.0.0.1:${address.port}/v1`
 
+// P1-7：本地假 Anthropic Messages 服务器（只在 127.0.0.1）；记录请求头/体供断言。
+const anthropicRequests = []
+const anthropicFixture = createServer(async (request, response) => {
+  let raw = ''
+  for await (const chunk of request) raw += chunk
+  const body = JSON.parse(raw || '{}')
+  anthropicRequests.push({ url: request.url, headers: request.headers, body })
+  if (!body.stream) {
+    response.writeHead(200, { 'content-type': 'application/json' })
+    response.end(JSON.stringify({ type: 'message', content: [{ type: 'text', text: 'OK' }], usage: { input_tokens: 1, output_tokens: 1 } }))
+    return
+  }
+  const event = (type, data) => `event: ${type}\ndata: ${JSON.stringify({ type, ...data })}\n\n`
+  response.writeHead(200, { 'content-type': 'text/event-stream' })
+  response.write(event('message_start', { message: { usage: { input_tokens: 10, output_tokens: 1 } } }))
+  response.write(event('content_block_delta', { index: 0, delta: { type: 'text_delta', text: 'Anthropic' } }))
+  response.write(event('content_block_delta', { index: 0, delta: { type: 'text_delta', text: ' 候选' } }))
+  response.write(event('message_delta', { delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 2 } }))
+  response.end(event('message_stop', {}))
+})
+anthropicFixture.listen(0, '127.0.0.1')
+await once(anthropicFixture, 'listening')
+const anthropicBaseUrl = `http://127.0.0.1:${anthropicFixture.address().port}/v1`
+
 const record = async (name, operation) => {
   const started = Date.now()
   await operation()
@@ -419,9 +443,35 @@ try {
     assert.equal(state, 'cancelled')
   })
 
+  await record('P1-7 Anthropic 协议：测试连接 + 续写走 /messages（system 单独、max_tokens、头）', async () => {
+    streamDelay = 0
+    const tested = await running.page.evaluate(async ({ anthropicBaseUrl }) => {
+      const providerId = crypto.randomUUID()
+      const unsaved = await window.workspace.providers.testUrl({ baseUrl: anthropicBaseUrl, apiKey: 'anthropic-fixture-key', modelId: 'claude-fixture', providerType: 'anthropic' })
+      await window.workspace.providers.save({ id: providerId, providerType: 'anthropic', displayName: 'E2E Anthropic', baseUrl: anthropicBaseUrl, apiKey: 'anthropic-fixture-key' })
+      await window.workspace.providers.saveModel({ id: crypto.randomUUID(), providerId, modelId: 'claude-fixture', displayName: 'Claude Fixture',
+        capabilities: { streaming: true, tools: false, structuredOutput: false, cancellation: true, maxContextTokens: 8_000 }, enabled: true, isDefault: true, contextWindow: 8_000, maxOutput: 1_500 })
+      const saved = await window.workspace.providers.test(providerId, 'claude-fixture')
+      return { unsaved, saved }
+    }, { anthropicBaseUrl })
+    assert.deepEqual(tested, { unsaved: { ok: true }, saved: { ok: true } })
+    await running.page.getByPlaceholder('和同行者聊聊这部作品…').fill('请续写 Anthropic 一句')
+    await running.page.getByRole('button', { name: '发送' }).click()
+    await running.page.getByText('Anthropic 候选', { exact: true }).first().waitFor({ timeout: 15_000 })
+    const streamed = anthropicRequests.find((item) => item.body.stream === true)
+    assert.ok(streamed, '应收到 Anthropic 流式请求')
+    assert.equal(streamed.url, '/v1/messages')
+    assert.equal(streamed.headers['x-api-key'], 'anthropic-fixture-key')
+    assert.equal(streamed.headers['anthropic-version'], '2023-06-01')
+    assert.equal(streamed.body.max_tokens, 1_500)
+    assert.equal(typeof streamed.body.system, 'string')
+    assert.ok(streamed.body.messages.every((message) => message.role !== 'system'))
+  })
+
   process.stdout.write(`Electron E2E: ${results.length} passed\n`)
 } finally {
   if (running?.app) await running.app.close().catch(() => {})
   fixture.close()
+  anthropicFixture.close()
   await rm(userData, { recursive: true, force: true })
 }

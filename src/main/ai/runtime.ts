@@ -1,9 +1,10 @@
+import type { ProviderType } from '../../shared/domain'
 import type { AITaskEnvelope, ContextBundle } from '../../shared/domain'
 import type { AppDatabase } from '../database/database'
 import { ContextEngine } from './context-engine'
 import { historyPolicy } from './history-policy'
 import { composeProviderMessages } from './prompt-composer'
-import { OpenAICompatibleAdapter, ProviderService, type ProviderMessage } from './provider'
+import { createProviderAdapter, ProviderService, withModelMaxTokens, type ProviderAdapter, type ProviderMessage } from './provider'
 import { computeContextInputBudget, DEFAULT_CONTEXT_WINDOW, DEFAULT_MAX_OUTPUT } from '../../shared/provider-presets'
 import { normalizeCandidateCount } from '../../shared/candidate-count'
 import { CONSISTENCY_WINDOW_TOO_SMALL, truncateBySide, truncationSideFor } from '../../shared/consistency-check'
@@ -16,8 +17,8 @@ const policyFor = (mode: AITaskEnvelope['mode']): ContextBundle['policy'] => mod
 /** P1-6：一致性检查是记录员（organization）的子任务，复用其模型路由，不新增调用通道。 */
 const routeKey = (mode: AITaskEnvelope['mode']): string => mode === 'consistency_check' ? 'organization' : mode
 
-type RuntimeAdapter = Pick<OpenAICompatibleAdapter, 'chat'>
-type RuntimeAdapterFactory = (baseUrl: string, apiKey: string) => RuntimeAdapter
+type RuntimeAdapter = Pick<ProviderAdapter, 'chat'>
+type RuntimeAdapterFactory = (baseUrl: string, apiKey: string, providerType?: ProviderType) => RuntimeAdapter
 
 export class AICreativeRuntime {
   private readonly context: ContextEngine
@@ -26,7 +27,7 @@ export class AICreativeRuntime {
   private readonly controllers = new Map<string, AbortController>()
 
   constructor(private readonly db: AppDatabase, private readonly providers: ProviderService,
-    private readonly adapterFactory: RuntimeAdapterFactory = (baseUrl, apiKey) => new OpenAICompatibleAdapter(baseUrl, apiKey)) {
+    private readonly adapterFactory: RuntimeAdapterFactory = (baseUrl, apiKey, providerType) => createProviderAdapter(providerType, baseUrl, apiKey)) {
     this.context = new ContextEngine(db); this.chat = new ChatService(db); this.templates = new PromptTemplateService(db)
   }
 
@@ -47,7 +48,7 @@ export class AICreativeRuntime {
       const { messages, context } = this.plan(task, threadId, model)
       this.chat.startTurn({ projectId: task.projectId, threadId, userMessageId, assistantMessageId, content: task.userIntent, mode: task.mode, target: task.target, contextSnapshot: this.contextSnapshot(context) })
       started = true
-      const adapter = this.adapterFactory(config.baseUrl, apiKey)
+      const adapter = withModelMaxTokens(this.adapterFactory(config.baseUrl, apiKey, config.providerType), config.providerType, model.maxOutput)
       // S8：仅 generation 使用候选数；其余模式固定 1 次请求。
       const count = task.mode === 'generation' ? normalizeCandidateCount(task.candidateCount) : 1
       const candidates: string[] = []

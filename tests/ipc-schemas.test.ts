@@ -58,7 +58,8 @@ describe('IPC zod schemas — rejection paths', () => {
   it('providerInputSchema rejects unsupported provider types and malformed base URLs', () => {
     const base = { id: 'prov', providerType: 'openai-compatible', displayName: '本地', baseUrl: 'http://localhost:11434/v1' }
     expect(providerInputSchema.safeParse(base).success).toBe(true)
-    expect(rejects(providerInputSchema, { ...base, providerType: 'anthropic' })).toBe(true)
+    expect(rejects(providerInputSchema, { ...base, providerType: 'gemini' })).toBe(true) // P1-7：anthropic 已支持，其余仍拒绝
+    expect(providerInputSchema.safeParse({ ...base, providerType: 'anthropic' }).success).toBe(true)
     expect(rejects(providerInputSchema, { ...base, displayName: ' ' })).toBe(true)
     for (const baseUrl of ['', 'not a url', 'http://', 'https://exa mple.com', `http://a.com/${'x'.repeat(2_000)}`]) {
       expect(rejects(providerInputSchema, { ...base, baseUrl }), baseUrl).toBe(true)

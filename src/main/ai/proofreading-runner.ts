@@ -1,3 +1,4 @@
+import type { ProviderType } from '../../shared/domain'
 import { randomUUID } from 'node:crypto'
 import { z } from 'zod'
 import type { ProofreadIssue } from '../../shared/domain'
@@ -5,7 +6,7 @@ import type { AppDatabase } from '../database/database'
 import { DocumentService } from '../services/document-service'
 import { PromptTemplateService } from '../services/prompt-template-service'
 import { withRoleTemplate } from './prompt-composer'
-import { OpenAICompatibleAdapter, ProviderService, type ProviderMessage } from './provider'
+import { createProviderAdapter, ProviderService, withModelMaxTokens, type ProviderAdapter, type ProviderMessage } from './provider'
 import { splitText, type TextChunk } from './text-chunks'
 
 const issueSchema = z.object({
@@ -34,12 +35,12 @@ const occurrences = (text: string, target: string): number[] => {
 }
 
 const parseJson = (raw: string): unknown => JSON.parse(raw.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1] ?? raw)
-type AdapterFactory = (baseUrl: string, apiKey: string) => Pick<OpenAICompatibleAdapter, 'complete'>
+type AdapterFactory = (baseUrl: string, apiKey: string, providerType?: ProviderType) => Pick<ProviderAdapter, 'complete'>
 
 export class ProofreadingRunner {
   private readonly documents: DocumentService
   constructor(private readonly db: AppDatabase, private readonly providers: ProviderService,
-    private readonly adapterFactory: AdapterFactory = (baseUrl, apiKey) => new OpenAICompatibleAdapter(baseUrl, apiKey)) {
+    private readonly adapterFactory: AdapterFactory = (baseUrl, apiKey, providerType) => createProviderAdapter(providerType, baseUrl, apiKey)) {
     this.documents = new DocumentService(db)
   }
 
@@ -48,7 +49,7 @@ export class ProofreadingRunner {
     const content = this.documents.getContent(projectId, documentId)
     const model = this.providers.route('proofreading')
     const { config, apiKey } = this.providers.getWithSecret(model.providerId)
-    const adapter = this.adapterFactory(config.baseUrl, apiKey)
+    const adapter = withModelMaxTokens(this.adapterFactory(config.baseUrl, apiKey, config.providerType), config.providerType, model.maxOutput)
     const maxChars = Math.max(128, Math.floor((model.capabilities.maxContextTokens ?? 16_000) * 0.6 * 2.2))
     const chunks = splitText(content.plainText, maxChars)
     const collected: Array<{ issue: z.infer<typeof issueSchema>; chunk: TextChunk }> = []
@@ -71,7 +72,7 @@ export class ProofreadingRunner {
     })
   }
 
-  private async completeIssues(adapter: Pick<OpenAICompatibleAdapter, 'complete'>, model: string, messages: ProviderMessage[]): Promise<z.infer<typeof responseSchema>> {
+  private async completeIssues(adapter: Pick<ProviderAdapter, 'complete'>, model: string, messages: ProviderMessage[]): Promise<z.infer<typeof responseSchema>> {
     const raw = await adapter.complete({ model, messages })
     try { return responseSchema.parse(parseJson(raw)) }
     catch (firstError) {

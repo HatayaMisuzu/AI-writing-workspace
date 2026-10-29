@@ -1,9 +1,10 @@
+import type { ProviderType } from '../../shared/domain'
 import type { AppDatabase } from '../database/database'
 import { chapterDigestSchema, ChapterDigestService, type ChapterDigestPayload } from './chapter-digest-service'
 import { ContextEngine } from './context-engine'
 import { PromptTemplateService } from '../services/prompt-template-service'
 import { withRoleTemplate } from './prompt-composer'
-import { OpenAICompatibleAdapter, ProviderService, type ProviderMessage } from './provider'
+import { createProviderAdapter, ProviderService, withModelMaxTokens, type ProviderAdapter, type ProviderMessage } from './provider'
 import { DocumentService } from '../services/document-service'
 import { splitText } from './text-chunks'
 
@@ -11,7 +12,7 @@ const DIGEST_CONTRACT = `只输出一个 JSON 对象，不要 Markdown，不要�
 {"summary":"string","events":[],"characterChanges":[],"reveals":[],"openQuestions":[],"memoryCandidates":[{"type":"fact|event|character_state|relationship|decision|idea|question|foreshadowing|style_signal","content":"string","confidence":0.0,"readerVisibleFrom":1}],"possibleContradictions":[]}
 所有数组允许为空。memoryCandidates 只是 suggested，禁止声称已确认。`
 
-type AdapterFactory = (baseUrl: string, apiKey: string) => Pick<OpenAICompatibleAdapter, 'complete'>
+type AdapterFactory = (baseUrl: string, apiKey: string, providerType?: ProviderType) => Pick<ProviderAdapter, 'complete'>
 const parseJson = (raw: string): unknown => JSON.parse(raw.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1] ?? raw)
 
 export class ChapterDigestRunner {
@@ -20,7 +21,7 @@ export class ChapterDigestRunner {
   private readonly requestSequence = new Map<string, number>()
 
   constructor(private readonly db: AppDatabase, private readonly providers: ProviderService,
-    private readonly adapterFactory: AdapterFactory = (baseUrl, apiKey) => new OpenAICompatibleAdapter(baseUrl, apiKey)) {
+    private readonly adapterFactory: AdapterFactory = (baseUrl, apiKey, providerType) => createProviderAdapter(providerType, baseUrl, apiKey)) {
     this.context = new ContextEngine(db); this.digests = new ChapterDigestService(db)
   }
 
@@ -36,7 +37,7 @@ export class ChapterDigestRunner {
     const sourceRevision = source.revision
     const model = this.providers.route('chapter_digest')
     const { config, apiKey } = this.providers.getWithSecret(model.providerId)
-    const adapter = this.adapterFactory(config.baseUrl, apiKey)
+    const adapter = withModelMaxTokens(this.adapterFactory(config.baseUrl, apiKey, config.providerType), config.providerType, model.maxOutput)
     const context = this.context.build({ mode: 'chapter_digest', writePermission: 'none', userIntent: '理解并结构化当前章节', projectId, documentId: chapterId })
     const contextText = context.items.map((item) => `[${item.kind}] ${item.title}\n${item.content}`).join('\n\n')
     const maxChars = Math.max(128, Math.floor((model.capabilities.maxContextTokens ?? 16_000) * 0.6 * 2.2))
@@ -84,7 +85,7 @@ export class ChapterDigestRunner {
     }
   }
 
-  private async completePayload(adapter: Pick<OpenAICompatibleAdapter, 'complete'>, model: string, messages: ProviderMessage[]): Promise<{ payload: ChapterDigestPayload; repaired: boolean }> {
+  private async completePayload(adapter: Pick<ProviderAdapter, 'complete'>, model: string, messages: ProviderMessage[]): Promise<{ payload: ChapterDigestPayload; repaired: boolean }> {
     const raw = await adapter.complete({ model, messages })
     try { return { payload: chapterDigestSchema.parse(parseJson(raw)), repaired: false } }
     catch (error) {
