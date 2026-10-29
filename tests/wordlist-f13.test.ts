@@ -1,3 +1,4 @@
+// F13 词表解析 / 合并 / 导入预览的纯函数单测（不依赖数据库与 Electron）
 import { describe, expect, it } from 'vitest'
 import { mergeWordlists, parseWordlist, planWordlistImport, serializeWordlist, WORDLIST_LIMITS } from '../src/shared/wordlist'
 
