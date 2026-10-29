@@ -297,6 +297,13 @@ button.danger-button { color: #fff; background: var(--danger); border-color: var
   .workspace-screen:has(.assistant-panel) { grid-template-columns: 250px minmax(430px, 1fr); }.assistant-collapsed { display: flex; }
   .recent-row { grid-template-columns: 1fr 1fr; }.recent-work:nth-child(3) { display: none; }
 }
+/* 窄屏抽屉：≤1080px 同行者默认收起为 48px 按钮列；打开后以 fixed 覆盖层出现，不改变编辑区宽度 */
+@media (max-width: 1080px) {
+  .workspace-screen:has(.assistant-collapsed) { grid-template-columns: 250px minmax(430px, 1fr) 48px; }
+  .assistant-panel.assistant-drawer { display: grid; position: fixed; top: 0; right: 0; bottom: 0; width: min(380px, calc(100vw - 48px)); z-index: 60; box-shadow: -8px 0 24px rgba(0, 0, 0, .18); outline: none; }
+  .assistant-drawer .context-sources { max-height: 40vh; }
+  .assistant-backdrop { position: fixed; inset: 0; z-index: 59; background: rgba(20, 24, 22, .28); }
+}
 @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; transition: none !important; animation: none !important; } }
 .context-sources { max-height: 220px; overflow: auto; border-bottom: 1px solid #eeeeea; font-size: 10px; }.context-sources ul { list-style: none; margin: 0; padding: 4px 10px 8px; }.context-sources li { margin: 6px 0; }.context-sources label { display: grid; grid-template-columns: auto 1fr; gap: 2px 6px; }.context-sources label span, .context-sources label small { grid-column: 2; color: var(--muted); }.context-sources li.omitted strong, .context-inspector li.omitted strong { color: var(--muted); text-decoration: line-through; }
 .context-basis { color: var(--accent, #7a5c2e) !important; }.context-pin { margin-left: 22px; font-size: 10px; padding: 0 6px; }

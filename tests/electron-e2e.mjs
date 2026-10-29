@@ -486,6 +486,71 @@ try {
     assert.ok(streamed.body.messages.every((message) => message.role !== 'system'))
   })
 
+  // 窄屏（≤1080px）：同行者默认收起，抽屉覆盖在编辑区上方；上下文清单 / 钉住在抽屉里可用；编辑区宽度不变
+  await record('窄屏 900/1024：同行者抽屉可开关、清单可钉住、编辑区宽度不变', async () => {
+    const page = running.page
+    const editor = page.locator('.manuscript-editor')
+    const original = page.viewportSize()
+    await page.setViewportSize({ width: 1400, height: 860 })
+    await editor.click(); await page.keyboard.press('End'); await page.keyboard.type('窄屏甲登场。')
+    await waitSaved(page)
+    await page.evaluate(async () => {
+      const [project] = await window.workspace.projects.list()
+      await window.workspace.characters.save({ projectId: project.id, name: '窄屏甲', notes: '窄屏抽屉验收人物' })
+    })
+    const shotDir = process.env.INKSTONE_E2E_SHOT_DIR
+    for (const width of [900, 1024]) {
+      await page.setViewportSize({ width, height: 800 })
+      const openButton = page.getByRole('button', { name: '打开同行者' })
+      await openButton.waitFor()
+      assert.equal(await page.locator('.assistant-panel').count(), 0, `${width}px：面板默认收起`)
+      assert.equal(await openButton.getAttribute('aria-expanded'), 'false')
+      const before = (await editor.boundingBox()).width
+      // 编辑区宽度以「抽屉收起时」为准（本章细纲侧栏在窄屏下本就占宽，非本 PR 范围，见 PR 正文遗留问题）
+      assert.ok(before > 0, `${width}px：编辑区可见（${before}）`)
+      if (width === 900) { await openButton.focus(); await page.keyboard.press('Enter') } else await openButton.click()
+      const drawer = page.getByRole('dialog', { name: '同行者' })
+      await drawer.waitFor()
+      assert.equal(await openButton.getAttribute('aria-expanded'), 'true')
+      assert.equal((await editor.boundingBox()).width, before, `${width}px：抽屉打开时编辑区宽度不变`)
+      const contextButton = drawer.getByRole('button', { name: /^上下文/ })
+      if (!(await drawer.locator('.context-sources').isVisible())) await contextButton.click()
+      const row = drawer.locator('.context-sources li', { hasText: '人物 · 窄屏甲' })
+      await row.waitFor({ timeout: 10_000 })
+      const labelBefore = await contextButton.innerText()
+      await row.getByRole('button', { name: '钉住', exact: true }).click()
+      await page.waitForFunction((prev) => [...document.querySelectorAll('.assistant-drawer button')].some((b) => /^上下文/.test(b.textContent ?? '') && b.textContent !== prev && /钉住 1/.test(b.textContent ?? '')), labelBefore)
+      assert.match(await contextButton.innerText(), /钉住 1/)
+      if (shotDir) await page.screenshot({ path: join(shotDir, `narrow-${width}.png`) })
+      // 焦点陷阱：连续 Tab / Shift+Tab 焦点始终在抽屉内
+      const inDrawer = () => page.evaluate(() => Boolean(document.querySelector('.assistant-drawer')?.contains(document.activeElement)))
+      const tabStops = await drawer.evaluate((node) => node.querySelectorAll('button, [href], input, select, textarea, summary, [tabindex]:not([tabindex="-1"])').length)
+      for (let i = 0; i < tabStops + 3; i += 1) { await page.keyboard.press('Tab'); assert.ok(await inDrawer(), `${width}px：Tab 第 ${i + 1} 次焦点仍在抽屉内`) }
+      for (let i = 0; i < 5; i += 1) { await page.keyboard.press('Shift+Tab'); assert.ok(await inDrawer(), `${width}px：Shift+Tab 第 ${i + 1} 次焦点仍在抽屉内`) }
+      // 在抽屉里排除一条上下文，「排除 N」计数变化，再恢复
+      const firstCheckbox = drawer.locator('.context-sources li input[type="checkbox"]:not([disabled])').first()
+      await firstCheckbox.uncheck()
+      await page.waitForFunction(() => [...document.querySelectorAll('.assistant-drawer button')].some((b) => /^上下文（.*排除 1/.test(b.textContent ?? '')))
+      await drawer.locator('.context-sources li input[type="checkbox"]:not(:checked):not([disabled])').first().check()
+      await page.waitForFunction(() => [...document.querySelectorAll('.assistant-drawer button')].some((b) => /^上下文/.test(b.textContent ?? '') && !/排除/.test(b.textContent ?? '')))
+      await drawer.locator('.context-sources li', { hasText: '人物 · 窄屏甲' }).getByRole('button', { name: '取消钉住' }).click()
+      await page.waitForFunction(() => [...document.querySelectorAll('.assistant-drawer button')].some((b) => (b.textContent ?? '') === '上下文'))
+      if (width === 900) await page.keyboard.press('Escape')
+      else await page.getByTestId('assistant-backdrop').click({ position: { x: 20, y: 400 } })
+      await drawer.waitFor({ state: 'detached' })
+      assert.equal(await page.locator('.assistant-backdrop').count(), 0)
+      assert.equal((await editor.boundingBox()).width, before, `${width}px：关闭后编辑区宽度正常`)
+      await editor.click(); await page.keyboard.press('End'); await page.keyboard.type(`宽${width}`)
+      assert.match(await editor.innerText(), new RegExp(`宽${width}`))
+      // 关闭按钮也可关闭
+      await openButton.click(); await drawer.waitFor()
+      await drawer.getByRole('button', { name: '关闭同行者' }).click(); await drawer.waitFor({ state: 'detached' })
+    }
+    await waitSaved(page)
+    await page.setViewportSize(original ?? { width: 1400, height: 860 })
+    await page.locator('.assistant-panel').waitFor()
+  })
+
 
   // ───── F15 小黑屋（e2e ⑦–⑪）。锁定期间统计：主进程实发（fixture 命中）、渲染进程请求、webRequest 拦截日志 ─────
   const typeAtEnd = async (page, text) => {
@@ -620,6 +685,40 @@ try {
     assert.match(await page.getByTestId('blackroom-remaining').innerText(), /剩余 00:00/)
     await addLockedDelta(page, before)
     await page.getByTestId('blackroom-finish').click()
+    await page.locator('.assistant-panel').waitFor()
+  })
+
+  await record('F15 × 窄屏 900px：抽屉开着时进入小黑屋 → 抽屉关闭、打开按钮不可见、网络 0', async () => {
+    const page = running.page
+    const original = page.viewportSize()
+    await page.setViewportSize({ width: 900, height: 800 })
+    const openButton = page.getByRole('button', { name: '打开同行者' })
+    await openButton.click()
+    const drawer = page.getByRole('dialog', { name: '同行者' })
+    await drawer.waitFor()
+    // 抽屉遮罩覆盖编辑区工具栏，鼠标点不到「小黑屋」；这里以 DOM click 事件触发同一按钮，验证「抽屉开着时上锁」这一状态组合
+    await page.locator('.editor-toolbar button', { hasText: '小黑屋' }).dispatchEvent('click')
+    const dialog = page.getByTestId('blackroom-entry')
+    await dialog.getByLabel('写满字数').check()
+    await dialog.getByLabel('目标字数').fill('1000')
+    await dialog.getByRole('button', { name: '锁定并开始' }).click()
+    await page.getByTestId('blackroom-bar').waitFor()
+    const before = await snapshotNetwork(page)
+    await drawer.waitFor({ state: 'detached' })
+    assert.equal(await page.locator('.assistant-drawer').count(), 0, '锁定后抽屉应关闭')
+    assert.equal(await page.locator('.assistant-backdrop').count(), 0, '锁定后遮罩应消失')
+    assert.equal(await openButton.count(), 0, '锁定后「打开同行者」按钮不可见')
+    assert.equal(await page.locator('.assistant-panel').count(), 0)
+    await page.waitForTimeout(1500)
+    assert.equal(await openButton.count(), 0)
+    await page.getByRole('button', { name: '紧急出口' }).click()
+    await page.getByLabel('紧急出屋确认').fill('我要出屋')
+    await addLockedDelta(page, before)
+    await page.getByRole('button', { name: '确认出屋' }).click()
+    await page.getByTestId('blackroom-bar').waitFor({ state: 'detached' })
+    await openButton.waitFor()
+    assert.equal(await page.locator('.assistant-drawer').count(), 0, '出屋后抽屉保持关闭')
+    await page.setViewportSize(original ?? { width: 1400, height: 860 })
     await page.locator('.assistant-panel').waitFor()
   })
 

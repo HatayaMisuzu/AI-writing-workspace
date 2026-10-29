@@ -19,6 +19,7 @@ const renderSnippet = (snippet: string): React.ReactNode[] => {
   return parseSearchSnippet(snippet).map((segment, index) => segment.highlighted ? <mark key={index}>{segment.text}</mark> : segment.text)
 }
 
+const NARROW_QUERY = '(max-width: 1080px)'
 export function WorkspaceScreen({ project, onProjectChanged, onSettings, onRegisterBeforeLeave, onFocusLockChange }: {
   project: Project; onProjectChanged(): void; onSettings(): void; onRegisterBeforeLeave(handler?: () => Promise<void>): void; onFocusLockChange?(locked: boolean): void
 }): React.JSX.Element {
@@ -36,6 +37,16 @@ export function WorkspaceScreen({ project, onProjectChanged, onSettings, onRegis
   const [timelineFocus, setTimelineFocus] = useState<string>()
   const [characterFocus, setCharacterFocus] = useState<string>()
   const [assistantCollapsed, setAssistantCollapsed] = useState(false)
+  // 窄屏（≤1080px，与 styles.css 断点一致）：同行者默认收起，点按钮以抽屉打开
+  const [narrow, setNarrow] = useState(() => window.matchMedia(NARROW_QUERY).matches)
+  const [drawerOpen, setDrawerOpen] = useState(false)
+  useEffect(() => {
+    const query = window.matchMedia(NARROW_QUERY)
+    const onChange = (): void => { setNarrow(query.matches); if (!query.matches) setDrawerOpen(false) }
+    query.addEventListener('change', onChange)
+    return () => query.removeEventListener('change', onChange)
+  }, [])
+  const toggleDrawer = useCallback(() => setDrawerOpen((open) => !open), [])
   const [focusMode, setFocusMode] = useState(false)
   // F15 小黑屋：锁状态以主进程为准（墙钟），界面每秒及窗口重新获得焦点时刷新
   const [lockStatus, setLockStatus] = useState<FocusLockStatus>()
@@ -117,6 +128,8 @@ export function WorkspaceScreen({ project, onProjectChanged, onSettings, onRegis
     return () => { active = false }
   }, [project.id])
   useEffect(() => { onFocusLockChange?.(locked) }, [locked, onFocusLockChange])
+  // 锁定时窄屏抽屉一并关闭（抽屉与「打开同行者」按钮都随 AssistantPanel 不渲染）
+  useEffect(() => { if (locked) setDrawerOpen(false) }, [locked])
   useEffect(() => () => onFocusLockChange?.(false), [onFocusLockChange])
   useEffect(() => {
     if (!locked) return
@@ -266,7 +279,7 @@ export function WorkspaceScreen({ project, onProjectChanged, onSettings, onRegis
         : <section className="project-view placeholder-view"><FilePlus2 size={34} /><h1>内容</h1><p>这是辅助层，不要求作者维护复杂结构。</p></section>}
       <footer className="workspace-status"><span className="saved-dot" />本地项目<span>本章 {content?.wordCount.toLocaleString() ?? 0} 字</span>{rangeHint && <span className={`word-range-hint ${rangeHint.state}`} data-testid="word-range-hint">{rangeHint.text}</span>}<span>全书 {totalWords.toLocaleString()} 字</span><span>项目内容严格隔离</span></footer>
     </div>
-    {!hideChrome && <AssistantPanel project={project} documentId={selected?.id} documentText={content?.plainText} documentRevision={content?.revision} selection={selection} collapsed={assistantCollapsed} onCollapse={() => setAssistantCollapsed(!assistantCollapsed)} onCreatePatch={createPatch} onBeforeAI={freezeAITarget} onEnsureSaved={flushAll} onOpenDocument={openTargetDocument} onOpenSettings={onSettings} />}
+    {!hideChrome && <AssistantPanel project={project} documentId={selected?.id} documentText={content?.plainText} documentRevision={content?.revision} selection={selection} collapsed={narrow ? !drawerOpen : assistantCollapsed} onCollapse={narrow ? toggleDrawer : () => setAssistantCollapsed(!assistantCollapsed)} narrow={narrow} drawer={narrow && drawerOpen} onCreatePatch={createPatch} onBeforeAI={freezeAITarget} onEnsureSaved={flushAll} onOpenDocument={openTargetDocument} onOpenSettings={onSettings} />}
     {ideaOpen && <div className="quick-idea-popover"><header><strong>快速记录灵感</strong><kbd>Ctrl J</kbd></header><textarea autoFocus value={ideaText} onChange={(event) => setIdeaText(event.target.value)} placeholder="记下一闪而过的想法…" /><div><button onClick={() => { setIdeaText(''); setIdeaOpen(false) }}>取消</button><button className="primary" onClick={async () => { if (ideaText.trim()) await window.workspace.ideas.create(project.id, ideaText); setIdeaText(''); setIdeaOpen(false) }}>保存并返回正文</button></div></div>}
     {blackroomEntryOpen && !locked && <BlackroomEntryDialog onClose={() => setBlackroomEntryOpen(false)} onStart={startBlackroom} />}
     {blackroomExitOpen && locked && <BlackroomEmergencyDialog onClose={() => setBlackroomExitOpen(false)} onConfirm={emergencyExitBlackroom} />}
