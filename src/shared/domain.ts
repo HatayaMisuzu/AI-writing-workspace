@@ -334,8 +334,23 @@ export interface ContextBundle {
   projectId: string
   policy: 'creative' | 'reader' | 'consistency'
   items: ContextItem[]
-  metadata: { estimatedTokens: number; sourceIds: string[]; excludedKinds: string[]; omitted?: ContextOmission[] }
+  metadata: { estimatedTokens: number; sourceIds: string[]; excludedKinds: string[]; omitted?: ContextOmission[]; overflow?: ContextOverflow[] }
 }
+
+/** L4：因数量上限（12/8/60/40/200）未进入候选的相关条目。只用于清单可见与钉住，不进入发送内容。 */
+export interface ContextOverflowItem { id: string; kind: ContextItem['kind']; title: string; basis: string[] }
+export interface ContextOverflow {
+  kind: 'memory' | 'character' | 'timeline'
+  /** 清单中的类别名：记忆 / 设定 / 人物卡 / 时间线 */
+  label: string
+  limit: number
+  /** 上限外的相关条目总数（不含已钉住而入选的） */
+  total: number
+  /** 按现有排序的前 OVERFLOW_LIST_LIMIT 条 */
+  items: ContextOverflowItem[]
+  listTruncated: boolean
+}
+export const OVERFLOW_LIST_LIMIT = 50
 
 export interface SearchResult {
   projectId: string

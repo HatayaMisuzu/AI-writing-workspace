@@ -51,13 +51,13 @@ export class ChatService {
     return rows.map(mapMessage)
   }
 
-  startTurn(input: { projectId: string; threadId: string; userMessageId: string; assistantMessageId: string; content: string; mode: AIMode; target?: DocumentTaskTarget; contextSnapshot?: { sources: Array<{ id: string; kind: string; truncated?: true; basis?: string[] }>; omitted: Array<{ id: string; kind: string; reason: string; basis?: string[] }>; template?: { mode: AIMode; source: 'global' | 'project' | 'builtin'; text: string } } }): void {
+  startTurn(input: { projectId: string; threadId: string; userMessageId: string; assistantMessageId: string; content: string; mode: AIMode; target?: DocumentTaskTarget; contextSnapshot?: { sources: Array<{ id: string; kind: string; truncated?: true; basis?: string[] }>; omitted: Array<{ id: string; kind: string; reason: string; basis?: string[] }>; overflow?: Array<{ kind: string; limit: number; total: number; ids: string[] }>; template?: { mode: AIMode; source: 'global' | 'project' | 'builtin'; text: string } } }): void {
     this.getThread(input.projectId, input.threadId)
     const now = Date.now()
     this.db.transaction(() => {
       // S6：只记 id/类型/排除原因，不存正文
       const context = (input.target || input.contextSnapshot)
-        ? JSON.stringify({ ...(input.target ? { target: input.target } : {}), ...(input.contextSnapshot ? { sources: input.contextSnapshot.sources, omitted: input.contextSnapshot.omitted, ...(input.contextSnapshot.template ? { template: input.contextSnapshot.template } : {}) } : {}) })
+        ? JSON.stringify({ ...(input.target ? { target: input.target } : {}), ...(input.contextSnapshot ? { sources: input.contextSnapshot.sources, omitted: input.contextSnapshot.omitted, ...(input.contextSnapshot.overflow ? { overflow: input.contextSnapshot.overflow } : {}), ...(input.contextSnapshot.template ? { template: input.contextSnapshot.template } : {}) } : {}) })
         : null
       this.db.raw.prepare(`INSERT INTO chat_messages(id, thread_id, project_id, role, content, task_mode, context_snapshot_json, status, created_at)
         VALUES (?, ?, ?, 'user', ?, ?, ?, 'complete', ?)`).run(input.userMessageId, input.threadId, input.projectId, input.content, input.mode, context, now)

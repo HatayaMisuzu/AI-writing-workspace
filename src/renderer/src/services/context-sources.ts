@@ -1,4 +1,8 @@
-import type { ContextBundle, ContextItem, ContextOmission } from '../../../shared/domain'
+import { OVERFLOW_LIST_LIMIT, type ContextBundle, type ContextItem, type ContextOmission, type ContextOverflow } from '../../../shared/domain'
+
+/** L4：上限外相关条目的一行摘要与展开说明。 */
+export const overflowSummary = (group: Pick<ContextOverflow, 'total' | 'label'>): string => `另有 ${group.total} 条相关${group.label}因上限未带上`
+export const OVERFLOW_TRUNCATED_NOTE = `仅显示前 ${OVERFLOW_LIST_LIMIT} 条`
 
 /** 上下文清单中的一行：已发送（included）或未发送（omitted，含原因）。 */
 export interface ContextSourceRow {

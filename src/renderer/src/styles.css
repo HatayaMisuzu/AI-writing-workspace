@@ -131,6 +131,9 @@ button.danger-button { color: #fff; background: var(--danger); border-color: var
 .save-error, .navigation-error { padding: 7px 14px; color: #8f392f; background: #fff0ec; border-bottom: 1px solid #e9c4bd; font-size: 12px; }
 .app-error { position: fixed; z-index: 200; top: 42px; left: 50%; transform: translateX(-50%); display: flex; gap: 14px; align-items: center; max-width: 720px; padding: 10px 14px; color: #8f392f; background: #fff0ec; border: 1px solid #e9c4bd; border-radius: 8px; box-shadow: var(--shadow); }
 .app-error button { color: inherit; }
+/* L6：导入提示是说明，不是警告 */
+.app-notice { position: fixed; z-index: 200; top: 42px; left: 50%; transform: translateX(-50%); display: flex; gap: 14px; align-items: center; max-width: 720px; padding: 10px 14px; color: var(--muted); background: #f4f6f8; border: 1px solid #d6dde3; border-radius: 8px; box-shadow: var(--shadow); }
+.app-notice button { color: inherit; }
 .memory-proposal { margin-top: 10px; padding: 10px; border: 1px solid #b9d5d1; border-radius: 8px; background: #f1f8f7; }
 .memory-proposal p { margin: 6px 0; }
 .memory-proposal > span { color: var(--muted); font-size: 11px; }
@@ -513,3 +516,5 @@ button.link { border: 0; background: none; padding: 0; color: var(--accent, #2f6
 .consistency-warning { margin-bottom: 6px; padding: 6px 8px; border-radius: 6px; background: #fff4e5; color: #8a4b00; font-size: 12px; }
 .consistency-unverified { opacity: .75; }
 .context-pin-hint { display: block; color: var(--muted); }
+.context-preview-target { display: flex; gap: 4px; margin-bottom: 6px; }
+.context-preview-target button[aria-pressed="true"] { font-weight: 600; }

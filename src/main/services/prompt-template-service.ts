@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { readFile, stat } from 'node:fs/promises'
 import type { AIMode } from '../../shared/domain'
 import type { AppDatabase } from '../database/database'
 import {
@@ -13,6 +14,16 @@ type SettingsBag = Record<string, unknown>
 export const GLOBAL_PROMPT_TEMPLATES_KEY = 'prompt_templates_global'
 export const GLOBAL_TEMPLATE_FILE_FORMAT = 'inkstone-prompt-templates-global'
 const MAX_GLOBAL_FILE_CHARS = 1_000_000
+/** L8：全局模板文件大小上限（字节）；超出时只 stat，不读文件。 */
+export const MAX_GLOBAL_FILE_BYTES = 1024 * 1024
+
+/** L8：先 stat 取大小，超过 1MB 直接拒绝（中文），不读取文件内容。 */
+export async function readGlobalTemplateFile(path: string, io: { stat: typeof stat; readFile: (path: string, encoding: 'utf8') => Promise<string> } = { stat, readFile }): Promise<string> {
+  const info = await io.stat(path)
+  if (!info.isFile()) throw Object.assign(new Error('不是有效的全局模板文件：不是普通文件。'), { code: 'PROMPT_GLOBAL_FILE_INVALID' })
+  if (info.size > MAX_GLOBAL_FILE_BYTES) throw Object.assign(new Error('不是有效的全局模板文件：文件超过 1MB。'), { code: 'PROMPT_GLOBAL_FILE_INVALID' })
+  return io.readFile(path, 'utf8')
+}
 
 const templateError = (message: string): Error => Object.assign(new Error(message), { code: 'PROMPT_TEMPLATE_INVALID' })
 

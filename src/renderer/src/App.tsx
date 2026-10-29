@@ -45,7 +45,7 @@ export function App(): React.JSX.Element {
   return <div className="app-shell">
     <TitleBar title={title} />
     {appError && <div className="app-error" role="alert"><span>{appError}</span><button onClick={() => setAppError(undefined)}>关闭</button></div>}
-    {appNotice && <div className="app-error" role="status" data-testid="app-notice"><span>{appNotice}</span><button onClick={() => setAppNotice(undefined)}>关闭</button></div>}
+    {appNotice && <div className="app-notice" role="status" data-testid="app-notice"><span>{appNotice}</span><button onClick={() => setAppNotice(undefined)}>关闭</button></div>}
     <div className="app-body">
       <WorksRail projects={projects.filter((project) => !project.archived)} activeId={active?.id} onLibrary={() => void navigate({ type: 'library' })} onOpen={open} onCreate={() => setCreateOpen(true)} onSettings={() => void navigate({ type: 'settings' })} onSearch={() => void navigate({ type: 'library' })} />
       <div className="screen-host">

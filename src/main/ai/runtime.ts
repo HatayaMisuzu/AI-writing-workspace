@@ -116,11 +116,13 @@ export class AICreativeRuntime {
   }
 
 
-  private contextSnapshot(context: ContextBundle): { sources: Array<{ id: string; kind: string; truncated?: true; basis?: string[] }>; omitted: Array<{ id: string; kind: string; reason: string; basis?: string[] }> } {
+  private contextSnapshot(context: ContextBundle): { sources: Array<{ id: string; kind: string; truncated?: true; basis?: string[] }>; omitted: Array<{ id: string; kind: string; reason: string; basis?: string[] }>; overflow?: Array<{ kind: string; limit: number; total: number; ids: string[] }> } {
     return {
       // 修复 3：snapshot 记录哪些来源（如哪章）被截断；P3-e：并记录入选/省略依据（与发送内容同一份 context）
       sources: context.items.map((item) => ({ id: item.id, kind: item.kind, ...(item.truncated ? { truncated: true as const } : {}), ...(item.basis ? { basis: item.basis } : {}) })),
-      omitted: (context.metadata.omitted ?? []).map((item) => ({ id: item.id, kind: item.kind, reason: item.reason, ...(item.basis ? { basis: [...item.basis, ...(item.reason === 'budget' ? ['预算不足省略'] : [])] } : {}) }))
+      omitted: (context.metadata.omitted ?? []).map((item) => ({ id: item.id, kind: item.kind, reason: item.reason, ...(item.basis ? { basis: [...item.basis, ...(item.reason === 'budget' ? ['预算不足省略'] : [])] } : {}) })),
+      // L4：上限外条目只记类别 / 计数 / 清单所列 id（与预览同一份 context；不进发送内容）
+      ...(context.metadata.overflow?.length ? { overflow: context.metadata.overflow.map((item) => ({ kind: item.kind, limit: item.limit, total: item.total, ids: item.items.map((entry) => entry.id) })) } : {})
     }
   }
 
