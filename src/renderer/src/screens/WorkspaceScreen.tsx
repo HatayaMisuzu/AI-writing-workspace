@@ -1,4 +1,3 @@
-import { syncSelectedTitle } from '../services/selected-node'
 import { displayProjectTitle } from '../services/project-title'
 import { BookmarkPlus, FilePlus2, Lightbulb, Search, SidebarClose, SlidersHorizontal } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -214,7 +213,7 @@ export function WorkspaceScreen({ project, onProjectChanged, onSettings, onRegis
           setSelected(undefined); setContent(undefined); setSelection(undefined)
         }
       }
-      setNodeEditor(undefined); const nextTree = await refreshTree(); setSelected((current) => syncSelectedTitle(current, nextTree)); onProjectChanged()
+      setNodeEditor(undefined); await refreshTree(); onProjectChanged()
     } catch (error) { setNavigationError(`操作失败：${error instanceof Error ? error.message : String(error)}`) }
   }
   const createNode = async (): Promise<void> => {
