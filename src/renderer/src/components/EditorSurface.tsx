@@ -14,6 +14,8 @@ import { SaveCoordinator, type SaveState } from '../services/save-coordinator'
 import { BATCH_PROPOSE_LIMIT, LINT_PAGE_SIZE, batchSlice, pageLintGroups } from '../services/lint-drawer-paging'
 import { shiftIssuesAfterEdit, type AppliedLocalEdit } from '../services/lint-incremental'
 import { longParagraphChunksPlugin } from '../services/long-paragraph-chunks'
+import { docEdgeNavigationPlugin, revealDocEdge } from '../services/doc-edge-navigation'
+import { revealPos } from '../services/find-highlight'
 import { isStaleContent } from '../services/content-adoption'
 import { createFrameCoalescer } from '../services/frame-coalescer'
 import { NameMatcher, termsFromCharacters } from '../../../shared/name-matcher'
@@ -124,6 +126,8 @@ export function EditorSurface({ node, content, focusMode, onFocusMode, onSaved, 
   const [hoverDegraded, setHoverDegraded] = useState(false)
   const shortcutRef = useRef<(() => void) | undefined>(undefined)
   const chunkExtension = useMemo(() => Extension.create({ name: 'longParagraphChunks', addProseMirrorPlugins: () => [longParagraphChunksPlugin()] }), [])
+  const docEdgeExtension = useMemo(() => Extension.create({ name: 'docEdgeNavigation',
+    addProseMirrorPlugins: () => [docEdgeNavigationPlugin({ reveal: (_view, _pos, edge) => { void revealDocEdge(writingPageRef.current?.parentElement, edge) } })] }), [])
   const hoverExtension = useMemo(() => Extension.create({ name: 'characterHover',
     addProseMirrorPlugins: () => [characterHoverPlugin({ onShortcut: () => shortcutRef.current?.() })] }), [])
   useEffect(() => {
@@ -139,7 +143,7 @@ export function EditorSurface({ node, content, focusMode, onFocusMode, onSaved, 
     { ignoredTerms: hoverPrefs.ignoredTerms, enabledSingleTerms: hoverPrefs.enabledSingleTerms }) : null, [characters, hoverPrefs])
 
   const editor = useEditor({
-    extensions: [StarterKit, CharacterCount, Placeholder.configure({ placeholder: '从这里开始写……' }), hoverExtension, chunkExtension],
+    extensions: [StarterKit, CharacterCount, Placeholder.configure({ placeholder: '从这里开始写……' }), hoverExtension, chunkExtension, docEdgeExtension],
     content: content.editorJson,
     editorProps: { attributes: { class: 'manuscript-editor', spellcheck: 'false' } },
     onUpdate: ({ editor: activeEditor }) => {
@@ -445,7 +449,10 @@ export function EditorSurface({ node, content, focusMode, onFocusMode, onSaved, 
   const jumpToLocalIssue = (issue: LocalLintIssue): void => {
     if (!editor) return
     const range = plainTextRangeToPm(editor.state.doc, issue.from, issue.to)
-    if (range) editor.chain().focus().setTextSelection(range).scrollIntoView().run()
+    if (!range) return
+    // 不用 ProseMirror 的 scrollIntoView（tiptap focus 默认也会下一帧 scrollIntoView）：分块超长段上会卡死，改用 revealPos 瞬时滚动
+    editor.chain().focus(null, { scrollIntoView: false }).setTextSelection(range).run()
+    void revealPos(editor.view, scrollerOf(), range.from)
   }
 
   const runAiProofread = async (): Promise<void> => {
