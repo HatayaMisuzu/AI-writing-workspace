@@ -2099,6 +2099,105 @@ try {
     assert.ok(fixtureHits + anthropicRequests.length > hits, '出屋后测试连接应命中 fixture（证明计数器有效）')
   })
 
+  // ───── PR45：>6000 字长段（无格式分块 / 粗体不分块）Ctrl+End 与校对「定位」到段末 <1s（Linux / Windows 都断言）─────
+  // 放在最后：旧路径对照（TEMP DIAG）可能把渲染进程卡死数十秒，不影响前面的用例
+  const edgeCases = (() => {
+    const seg = '林舟在会上说，他慢慢地看，又慢慢地走了。夜色很深，风也很大，远处灯。'
+    const body = seg.repeat(210) // 7140 字
+    const tail = '末尾他狠狠地走。'
+    return [
+      { title: '段末跳转无格式长段', content: [{ type: 'text', text: body + tail }], chunked: true },
+      { title: '段末跳转粗体长段', content: [{ type: 'text', text: body.slice(0, 3000) }, { type: 'text', text: body.slice(3000, 3400), marks: [{ type: 'bold' }] }, { type: 'text', text: body.slice(3400) + tail }], chunked: false }
+    ]
+  })()
+  const withCap = (promise, ms, label) => Promise.race([promise, new Promise((_, fail) => setTimeout(() => fail(new Error(`${label} 超过 ${ms}ms 未返回`)), ms))])
+  const caretAtEndVisible = () => {
+    const editor = document.querySelector('.manuscript-editor'); const sel = getSelection()
+    if (!sel || !sel.focusNode || !editor.contains(sel.focusNode)) return false
+    const rest = document.createRange(); rest.setStart(sel.focusNode, sel.focusOffset); rest.setEnd(editor, editor.childNodes.length)
+    if (rest.toString() !== '' || !sel.isCollapsed) return false
+    const range = sel.getRangeAt(0); const rects = range.getClientRects(); const rect = rects.length ? rects[rects.length - 1] : (sel.focusNode.nodeType === 1 ? sel.focusNode : sel.focusNode.parentElement).getBoundingClientRect()
+    const box = document.querySelector('.writing-scroll').getBoundingClientRect()
+    return rect.bottom > box.top && rect.top < box.bottom
+  }
+  const timeCtrlEnd = async (page, label) => {
+    await page.evaluate(() => { document.querySelector('.writing-scroll').scrollTop = 0; document.querySelector('.manuscript-editor').focus() })
+    await page.keyboard.press('Control+Home')
+    const started = Date.now()
+    await withCap(page.keyboard.press('Control+End'), 120_000, `${label} Ctrl+End`)
+    await page.waitForFunction(caretAtEndVisible, undefined, { timeout: 120_000, polling: 'raf' })
+    return Date.now() - started
+  }
+  const timeLocate = (page) => page.evaluate(async () => {
+    const frame = () => new Promise((resolve) => requestAnimationFrame(() => resolve()))
+    document.querySelector('.writing-scroll').scrollTop = 0
+    const button = [...document.querySelectorAll('.proofread-drawer .proofread-issue button')].find((item) => item.textContent === '定位')
+    if (!button) throw new Error('定位 button not found')
+    const box = () => document.querySelector('.writing-scroll').getBoundingClientRect()
+    const ok = () => { const sel = getSelection(); if (!sel || sel.toString() !== '狠狠' || !sel.rangeCount) return false; const r = sel.getRangeAt(0).getBoundingClientRect(); const b = box(); return r.bottom > b.top && r.top < b.bottom }
+    const started = performance.now()
+    button.click()
+    while (!ok()) { if (performance.now() - started > 120_000) throw new Error('locate timeout'); await frame() }
+    await frame(); await frame()
+    return performance.now() - started
+  })
+  const openEdgeCase = async (page, item) => {
+    await page.reload()
+    await page.getByRole('button', { name: '继续写作' }).click()
+    await page.locator('.manuscript-editor').waitFor()
+    await openChapter(page, item.title)
+    await page.locator('.manuscript-editor', { hasText: '林舟在会上说' }).waitFor({ timeout: 30_000 })
+    assert.equal(await page.locator('.manuscript-editor .long-paragraph-chunk').count() > 0, item.chunked, `${item.title} 分块状态`)
+    if (!item.chunked) assert.ok(await page.locator('.manuscript-editor strong').count() > 0, '段内确有粗体')
+  }
+  const openLocateDrawer = async (page) => {
+    await page.locator('.editor-status .proofread-count', { hasText: '1 条校对提示' }).waitFor({ timeout: 30_000 })
+    await page.locator('.editor-status .proofread-count').click()
+    await page.locator('.proofread-drawer .proofread-issue button', { hasText: '定位' }).first().waitFor()
+  }
+
+  await record('PR45 >6000 字长段（无格式分块 / 粗体）Ctrl+End 与校对「定位」到段末，光标到位且 <1s', async () => {
+    const page = running.page
+    const viewport = page.viewportSize()
+    await page.setViewportSize({ width: 1600, height: 900 })
+    for (const item of edgeCases) {
+      await page.evaluate(async ({ projectId, item }) => {
+        const tree = await window.workspace.documents.tree(projectId)
+        const volume = tree.find((entry) => entry.type === 'volume')
+        const node = await window.workspace.documents.create({ projectId, parentId: volume.id, type: 'chapter', title: item.title })
+        await window.workspace.documents.save({ projectId, documentId: node.id, editorJson: { type: 'doc', content: [{ type: 'paragraph', content: item.content }] }, plainText: item.content.map((part) => part.text).join(''), expectedRevision: 0 })
+      }, { projectId: ids.projectId, item })
+    }
+    const timings = []
+    for (const item of edgeCases) {
+      await openEdgeCase(page, item)
+      const ctrlEndMs = await timeCtrlEnd(page, item.title)
+      await openLocateDrawer(page)
+      const locateMs = await timeLocate(page)
+      await page.getByRole('button', { name: '关闭校对' }).click()
+      timings.push({ title: item.title, ctrlEndMs, locateMs })
+      process.stdout.write(`PR45 doc-end ${process.platform} ${item.title}: Ctrl+End ${ctrlEndMs}ms, locate ${locateMs.toFixed(1)}ms (limit 1000ms)\n`)
+    }
+    for (const t of timings) {
+      assert.ok(t.ctrlEndMs < 1000, `${t.title} Ctrl+End ${t.ctrlEndMs}ms 应 <1000ms`)
+      assert.ok(t.locateMs < 1000, `${t.title} 定位 ${t.locateMs.toFixed(1)}ms 应 <1000ms`)
+    }
+    // TEMP DIAG（合并前删除）：旧路径（原生 Ctrl+End / scrollIntoView 定位）对照计时 + CPU profile，只记录不断言
+    await page.evaluate(() => window.localStorage.setItem('inkstone.diag.nativeDocEdge', '1'))
+    for (const item of [...edgeCases].reverse()) {
+      try {
+        await openEdgeCase(page, item)
+        await openLocateDrawer(page)
+        const locateMs = await cpuProfile(page, `pr45-old-locate ${item.title}`, () => withCap(timeLocate(page), 130_000, 'old locate'), join(process.cwd(), 'e2e-artifacts', `pr45-old-locate-${item.chunked ? 'plain' : 'bold'}-${process.platform}.cpuprofile`))
+        process.stdout.write(`PR45 DIAG old-path ${process.platform} ${item.title}: locate ${locateMs.toFixed(1)}ms\n`)
+        await page.getByRole('button', { name: '关闭校对' }).click()
+        const ctrlEndMs = await cpuProfile(page, `pr45-old-ctrlend ${item.title}`, () => timeCtrlEnd(page, `old ${item.title}`), join(process.cwd(), 'e2e-artifacts', `pr45-old-ctrlend-${item.chunked ? 'plain' : 'bold'}-${process.platform}.cpuprofile`))
+        process.stdout.write(`PR45 DIAG old-path ${process.platform} ${item.title}: Ctrl+End ${ctrlEndMs}ms\n`)
+      } catch (error) { process.stdout.write(`PR45 DIAG old-path ${process.platform} ${item.title}: ${error.message}\n`); break }
+    }
+    if (viewport) await page.setViewportSize(viewport).catch(() => undefined)
+  })
+
   process.stdout.write(`Electron E2E: ${results.length} passed\n`)
 } finally {
   if (running?.app) await running.app.close().catch(() => {})
