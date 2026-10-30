@@ -192,9 +192,11 @@ export interface ForeshadowEntry {
 }
 
 /** P3 PR-2b 全书替换：一次批量写入的结果（每章 revision +1）。 */
-export interface BookReplaceResult { batchId: string; chapters: number; hits: number; contents: Array<{ documentId: string; revision: number }> }
+/** timing：main 侧分阶段耗时（毫秒，仅诊断） */
+export interface BookBatchTiming { readMs: number; bodyMs: number; commitMs: number }
+export interface BookReplaceResult { batchId: string; chapters: number; hits: number; contents: Array<{ documentId: string; revision: number }>; timing?: BookBatchTiming }
 /** 整批恢复：替换后又改过（changed）或已删除（deleted）的章跳过并列出。 */
-export interface BookRestoreResult { batchId: string; restored: Array<{ documentId: string; revision: number }>; skipped: Array<{ documentId: string; title: string; reason: 'changed' | 'deleted' }> }
+export interface BookRestoreResult { batchId: string; restored: Array<{ documentId: string; revision: number }>; skipped: Array<{ documentId: string; title: string; reason: 'changed' | 'deleted' }>; timing?: BookBatchTiming }
 
 export interface Snapshot {
   id: string

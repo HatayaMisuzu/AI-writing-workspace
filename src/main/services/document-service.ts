@@ -314,7 +314,8 @@ export class DocumentService {
     if (new Set(input.items.map((item) => item.documentId)).size !== input.items.length) throw new Error('BOOK_REPLACE_DUPLICATE_DOCUMENT')
     const batchId = randomUUID()
     const hits = input.items.reduce((sum, item) => sum + item.hits, 0)
-    const contents = this.db.transaction(() => { const fts = this.ftsRowidMap(input.projectId); return input.items.map((item, index) => {
+    const t0 = performance.now(); let t1 = t0; let t2 = t0
+    const contents = this.db.transaction(() => { const fts = this.ftsRowidMap(input.projectId); t1 = performance.now(); const out = input.items.map((item, index) => {
       const node = this.assertNode(input.projectId, item.documentId)
       if (node.type !== 'chapter' && node.type !== 'scene') throw new Error('BOOK_REPLACE_NOT_CHAPTER')
       const current = this.rawContent(input.projectId, item.documentId)
@@ -327,8 +328,9 @@ export class DocumentService {
       const revision = this.writeContentInTx({ projectId: input.projectId, documentId: item.documentId, editorJson: item.editorJson, plainText: item.plainText, writingStats: 'skip', styleSamples: 'skip' }, current, fts)
       this.onBatchStep('write', index)
       return { documentId: item.documentId, revision }
-    }) })
-    return { batchId, chapters: contents.length, hits, contents }
+    }); t2 = performance.now(); return out })
+    const timing = { readMs: Math.round(t1 - t0), bodyMs: Math.round(t2 - t1), commitMs: Math.round(performance.now() - t2) }
+    return { batchId, chapters: contents.length, hits, contents, timing }
   }
 
   /**
@@ -336,12 +338,14 @@ export class DocumentService {
    * 一个事务内逐章：替换后又改过（当前 revision ≠ 快照 revision + 1）或章已删除 → 跳过并列出；否则先拍 pre_restore 再写回。
    */
   restoreBatch(projectId: string, batchId: string): BookRestoreResult {
+    const t0 = performance.now()
     const rows = this.db.raw.prepare(`SELECT s.id, s.document_id, s.revision, s.content, s.plain_text FROM snapshots s
       WHERE s.project_id = ? AND s.reason = 'manual'
         AND json_extract(s.metadata_json, '$.kind') = 'book_replace' AND json_extract(s.metadata_json, '$.batchId') = ?
       ORDER BY s.created_at, s.rowid`).all(projectId, batchId) as Array<{ id: string; document_id: string; revision: number; content: string; plain_text: string }>
     if (!rows.length) throw new Error('BOOK_REPLACE_BATCH_NOT_FOUND')
-    return this.db.transaction(() => {
+    const t1 = performance.now(); let t2 = t1
+    const result = this.db.transaction(() => {
       const fts = this.ftsRowidMap(projectId)
       const restored: Array<{ documentId: string; revision: number }> = []
       const skipped: Array<{ documentId: string; title: string; reason: 'changed' | 'deleted' }> = []
@@ -357,8 +361,10 @@ export class DocumentService {
         this.onBatchStep('write', index)
         restored.push({ documentId: row.document_id, revision })
       })
+      t2 = performance.now()
       return { batchId, restored, skipped }
     })
+    return { ...result, timing: { readMs: Math.round(t1 - t0), bodyMs: Math.round(t2 - t1), commitMs: Math.round(performance.now() - t2) } }
   }
 
   createSnapshot(projectId: string, documentId: string, reason: Snapshot['reason'], metadata: Record<string, unknown> = {}): Snapshot {

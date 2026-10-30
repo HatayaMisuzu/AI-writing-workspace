@@ -91,7 +91,7 @@ export function BookFindView({ projectId, chapters, onOpenHit, onBeforeReplace, 
       const t2 = performance.now()
       // 分阶段耗时（e2e 读取；无网络、无副作用）
       const timingTarget = window as unknown as { __bookReplaceTiming?: Record<string, number> }
-      timingTarget.__bookReplaceTiming = { prepareMs: Math.round(t1 - t0), ipcMs: Math.round(t2 - t1), chapters: plan.items.length }
+      timingTarget.__bookReplaceTiming = { prepareMs: Math.round(t1 - t0), ipcMs: Math.round(t2 - t1), chapters: plan.items.length, ...result.timing }
       onLastBatch({ batchId: result.batchId, chapters: result.chapters, hits: result.hits })
       await onContentChanged(result.contents.map((item) => item.documentId)).catch((error: unknown) => setReplaceError(`已替换，但刷新当前章失败：${error instanceof Error ? error.message : String(error)}`))
     } catch (error) {
@@ -102,6 +102,8 @@ export function BookFindView({ projectId, chapters, onOpenHit, onBeforeReplace, 
   const restoreBatch = (batchId: string): Promise<void> => runBusy('restore', async () => {
     try {
       const result = await window.workspace.snapshots.restoreBatch(projectId, batchId)
+      const timingTarget = window as unknown as { __bookRestoreTiming?: Record<string, number> }
+      timingTarget.__bookRestoreTiming = { ...result.timing }
       setRestoreResult(result); onLastBatch(undefined)
       if (result.restored.length) await onContentChanged(result.restored.map((item) => item.documentId)).catch((error: unknown) => setReplaceError(`已恢复，但刷新当前章失败：${error instanceof Error ? error.message : String(error)}`))
     } catch (error) { setReplaceError(`恢复失败，本次没有恢复任何章节：${error instanceof Error ? error.message : String(error)}`) }

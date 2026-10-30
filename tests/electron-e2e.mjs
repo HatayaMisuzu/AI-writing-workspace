@@ -1925,6 +1925,7 @@ try {
     const restored = await timeAction('[data-testid="book-restore"]', '[data-testid="book-restore-summary"]')
     process.stdout.write(`P3 book-replace longtask control (restore): ${restored.controlMs}ms (need >=100ms)\n`)
     assert.ok(restored.controlMs >= 100, `longtask 对照：忙等 120ms 只记录到 ${restored.controlMs}ms，监听不可信`)
+    process.stdout.write(`P3 book-restore phases: ${JSON.stringify(await page.evaluate(() => window.__bookRestoreTiming))}\n`)
     process.stdout.write(`P3 book-replace 1000 chapters: restore-batch ${restored.doneMs}ms (limit 5000ms), max long task ${restored.maxLongTask}ms over ${restored.longTasks}; ${restored.text}\n`)
     assert.ok(restored.doneMs <= 5000, `整批恢复 ${restored.doneMs}ms 应 ≤5s`)
     assert.equal(restored.text, '已恢复 998 章。')
