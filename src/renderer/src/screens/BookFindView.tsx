@@ -44,7 +44,10 @@ export function BookFindView({ projectId, chapters, onOpenHit, onBeforeReplace, 
   const [refresh, setRefresh] = useState(0)
   const generation = useRef(0)
   const inputRef = useRef<HTMLInputElement>(null)
-  const refs = useMemo(() => chapters.map((node) => ({ id: node.id, title: node.title })), [chapters])
+  // 目录刷新会给出新的 chapters 数组；只有 id / 标题真的变了才重搜（否则保存后刷新目录会把已完成的结果冲掉）
+  const refsKey = chapters.map((node) => `${node.id}\u0000${node.title}`).join('\u0001')
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const refs = useMemo(() => chapters.map((node) => ({ id: node.id, title: node.title })), [refsKey])
   useEffect(() => { inputRef.current?.focus() }, [])
 
   useEffect(() => {

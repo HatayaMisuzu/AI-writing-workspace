@@ -237,7 +237,7 @@ export class DocumentService {
   private writeContentInTx(input: {
     projectId: string; documentId: string; editorJson: Record<string, unknown>; plainText: string
     styleSample?: { origin: TextOrigin; text: string }; writingStats?: 'human' | 'skip'
-  }, current: DocumentContent): number {
+  }, current: DocumentContent, ftsRowids?: Map<string, number[]>): number {
     const prevWords = countChineseWords(current.plainText)
     const now = Date.now()
     const revision = current.revision + 1
@@ -249,7 +249,11 @@ export class DocumentService {
     this.db.raw.prepare('UPDATE document_nodes SET updated_at = ? WHERE id = ? AND project_id = ?')
       .run(now, input.documentId, input.projectId)
     this.db.raw.prepare('UPDATE projects SET updated_at = ? WHERE id = ?').run(now, input.projectId)
-    this.db.raw.prepare('DELETE FROM document_fts WHERE document_id = ? AND project_id = ?').run(input.documentId, input.projectId)
+    if (ftsRowids) {
+      // 批量路径：按事先一次扫描得到的 rowid 删除（FTS5 按 document_id 删除会全表扫描，1000 章即 O(n²)）
+      const del = this.db.raw.prepare('DELETE FROM document_fts WHERE rowid = ?')
+      for (const rowid of ftsRowids.get(input.documentId) ?? []) del.run(rowid)
+    } else this.db.raw.prepare('DELETE FROM document_fts WHERE document_id = ? AND project_id = ?').run(input.documentId, input.projectId)
     const node = this.assertNode(input.projectId, input.documentId)
     this.db.raw.prepare('INSERT INTO document_fts(project_id, document_id, title, plain_text) VALUES (?, ?, ?, ?)')
       .run(input.projectId, input.documentId, node.title, input.plainText)
@@ -267,6 +271,14 @@ export class DocumentService {
   }
 
   /** 测试钩子（失败注入）：批量替换 / 恢复每章各阶段之后调用；生产里为空操作。 */
+  /** 一次扫描本作品 FTS 行：document_id → rowid[]（只读 UNINDEXED 列，事务内调用）。 */
+  private ftsRowidMap(projectId: string): Map<string, number[]> {
+    const map = new Map<string, number[]>()
+    const rows = this.db.raw.prepare('SELECT rowid AS rowid, document_id FROM document_fts WHERE project_id = ?').all(projectId) as Array<{ rowid: number; document_id: string }>
+    for (const row of rows) { const list = map.get(row.document_id); if (list) list.push(row.rowid); else map.set(row.document_id, [row.rowid]) }
+    return map
+  }
+
   protected onBatchStep(stage: 'snapshot' | 'write', index: number): void { void stage; void index }
 
   /**
@@ -283,7 +295,7 @@ export class DocumentService {
     if (new Set(input.items.map((item) => item.documentId)).size !== input.items.length) throw new Error('BOOK_REPLACE_DUPLICATE_DOCUMENT')
     const batchId = randomUUID()
     const hits = input.items.reduce((sum, item) => sum + item.hits, 0)
-    const contents = this.db.transaction(() => input.items.map((item, index) => {
+    const contents = this.db.transaction(() => { const fts = this.ftsRowidMap(input.projectId); return input.items.map((item, index) => {
       const node = this.assertNode(input.projectId, item.documentId)
       if (node.type !== 'chapter' && node.type !== 'scene') throw new Error('BOOK_REPLACE_NOT_CHAPTER')
       const current = this.getContent(input.projectId, item.documentId)
@@ -293,10 +305,10 @@ export class DocumentService {
         regex: input.regex, caseSensitive: input.caseSensitive, hits: item.hits, batchHits: hits
       })
       this.onBatchStep('snapshot', index)
-      const revision = this.writeContentInTx({ projectId: input.projectId, documentId: item.documentId, editorJson: item.editorJson, plainText: item.plainText, writingStats: 'skip' }, current)
+      const revision = this.writeContentInTx({ projectId: input.projectId, documentId: item.documentId, editorJson: item.editorJson, plainText: item.plainText, writingStats: 'skip' }, current, fts)
       this.onBatchStep('write', index)
       return { documentId: item.documentId, revision }
-    }))
+    }) })
     return { batchId, chapters: contents.length, hits, contents }
   }
 
@@ -311,6 +323,7 @@ export class DocumentService {
       ORDER BY s.created_at, s.rowid`).all(projectId, batchId) as Array<{ id: string; document_id: string; revision: number; content: string; plain_text: string }>
     if (!rows.length) throw new Error('BOOK_REPLACE_BATCH_NOT_FOUND')
     return this.db.transaction(() => {
+      const fts = this.ftsRowidMap(projectId)
       const restored: Array<{ documentId: string; revision: number }> = []
       const skipped: Array<{ documentId: string; title: string; reason: 'changed' | 'deleted' }> = []
       rows.forEach((row, index) => {
@@ -321,7 +334,7 @@ export class DocumentService {
         this.createSnapshot(projectId, row.document_id, 'pre_restore', { restoredFrom: row.id, batchId })
         this.onBatchStep('snapshot', index)
         const revision = this.writeContentInTx({ projectId, documentId: row.document_id,
-          editorJson: JSON.parse(row.content) as Record<string, unknown>, plainText: row.plain_text, writingStats: 'skip' }, current)
+          editorJson: JSON.parse(row.content) as Record<string, unknown>, plainText: row.plain_text, writingStats: 'skip' }, current, fts)
         this.onBatchStep('write', index)
         restored.push({ documentId: row.document_id, revision })
       })
