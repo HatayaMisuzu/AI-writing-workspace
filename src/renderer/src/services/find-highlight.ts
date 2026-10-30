@@ -47,9 +47,15 @@ const frame = (): Promise<void> => new Promise((resolve) => requestAnimationFram
 /** pos 所在的超长段分块（long-paragraph-chunks.ts）元素；不在分块里返回 undefined。 */
 const chunkAt = (view: EditorView, pos: number): Element | undefined => {
   try {
-    const { node } = view.domAtPos(pos)
-    const element = node.nodeType === Node.ELEMENT_NODE ? node as Element : node.parentElement
-    return element?.closest('.long-paragraph-chunk') ?? undefined
+    // 段末位置的 DOM 落点常是「段落元素, 子节点数」（在最后一块之后），所以两侧都看：先左侧（前一个子节点）再右侧
+    for (const side of [-1, 1] as const) {
+      const { node, offset } = view.domAtPos(pos, side)
+      const target = node.nodeType === Node.ELEMENT_NODE ? (side < 0 ? node.childNodes[offset - 1] : node.childNodes[offset]) ?? node : node
+      const element = target.nodeType === Node.ELEMENT_NODE ? target as Element : target.parentElement
+      const chunk = element?.closest('.long-paragraph-chunk')
+      if (chunk) return chunk
+    }
+    return undefined
   } catch { return undefined }
 }
 
