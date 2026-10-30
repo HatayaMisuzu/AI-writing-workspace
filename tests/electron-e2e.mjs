@@ -1188,10 +1188,14 @@ try {
     await page.locator('.manuscript-editor', { hasText: '宾客在坐' }).waitFor()
     await openLint(page)
     await page.locator('.lint-group[data-group="wordlist_replace"] .proofread-issue').first().getByRole('button', { name: '定位' }).click()
-    assert.equal(await page.evaluate(() => window.getSelection()?.toString()), '在坐', '定位应选中原词')
+    // 读 ProseMirror 选区（tiptap 把 editor 挂在 .ProseMirror DOM 上）；DOM 选区在点按钮后不一定同步
+    const pmSel = () => page.evaluate(() => { const ed = document.querySelector('.manuscript-editor .ProseMirror')?.editor; const { from, to, empty } = ed.state.selection
+      return { empty, text: ed.state.doc.textBetween(from, to), before: ed.state.doc.textBetween(Math.max(0, from - 4), from) } })
+    await page.waitForFunction(() => { const ed = document.querySelector('.manuscript-editor .ProseMirror')?.editor; return ed && !ed.state.selection.empty })
+    assert.equal((await pmSel()).text, '在坐', '定位应选中原词')
     await page.getByRole('button', { name: '关闭校对' }).click()
-    const sel = await page.evaluate(() => { const s = window.getSelection(); return { collapsed: s?.isCollapsed, before: s?.anchorNode?.textContent?.slice(0, s.anchorOffset) } })
-    assert.equal(sel.collapsed, true, '关闭校对后选区应已折叠')
+    const sel = await pmSel()
+    assert.equal(sel.empty, true, '关闭校对后选区应已折叠')
     assert.ok(sel.before?.endsWith('宾客在坐'), `光标应在定位词末尾，实际前文 ${sel.before}`)
     await page.keyboard.type('X')
     await page.locator('.manuscript-editor', { hasText: '宾客在坐X' }).waitFor()
