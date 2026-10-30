@@ -563,3 +563,24 @@ button.link { border: 0; background: none; padding: 0; color: var(--accent, #2f6
 .screen-host.has-lock-notice { display: flex; flex-direction: column; }
 .screen-host.has-lock-notice > :not(.focus-lock-notice) { flex: 1 1 0; min-height: 0; height: auto; }
 .screen-host.has-lock-notice > .focus-lock-notice { flex: none; }
+
+/* P3 章内查找替换 / 本章大纲（高亮用 CSS Custom Highlight API，不改 DOM） */
+::highlight(find-hit) { background-color: rgba(255, 196, 0, 0.35); }
+::highlight(find-current) { background-color: rgba(255, 140, 0, 0.75); color: #111; }
+.find-panel { position: absolute; top: 50px; right: 18px; z-index: 46; width: 340px; display: grid; gap: 6px; padding: 10px; background: var(--panel, #fff); border: 1px solid var(--line, #ddd); border-radius: 8px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12); }
+.find-row { display: flex; align-items: center; gap: 6px; }
+.find-row input:not([type="checkbox"]) { flex: 1; min-width: 0; }
+.find-count { font-size: 12px; color: var(--muted, #666); white-space: nowrap; }
+.find-options { font-size: 12px; gap: 12px; }
+.find-options label { display: flex; align-items: center; gap: 4px; }
+.find-error { margin: 0; font-size: 12px; color: #b42318; }
+.find-notice { margin: 0; font-size: 12px; color: var(--muted, #666); }
+.chapter-headings { position: absolute; top: 43px; left: 0; bottom: 28px; z-index: 44; width: 240px; overflow: auto; padding: 10px; background: var(--panel, #fff); border-right: 1px solid var(--line, #ddd); box-shadow: 4px 0 16px rgba(0, 0, 0, 0.06); }
+.chapter-headings header { display: flex; justify-content: space-between; align-items: center; }
+.chapter-headings ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+.chapter-headings .heading-item button { width: 100%; text-align: left; display: grid; gap: 2px; padding: 6px 8px; border: 0; background: transparent; border-radius: 6px; cursor: pointer; }
+.chapter-headings .heading-item button:hover { background: rgba(0, 0, 0, 0.05); }
+.chapter-headings .heading-item small { color: var(--muted, #666); font-size: 12px; }
+.chapter-headings .level-2 button { padding-left: 18px; }
+.chapter-headings .level-3 button, .chapter-headings .level-4 button { padding-left: 28px; }
+.chapter-headings .scene strong { font-weight: 400; color: var(--muted, #666); }

@@ -1343,6 +1343,193 @@ try {
     if (viewport) await page.setViewportSize(viewport)
   })
 
+  const seg34 = '林舟在会上说，他狠狠地看，又狠狠地走了。夜色很深，风也很大，远处灯。'
+  // ───── P3 PR-1 章内查找替换 / 本章大纲（纯本地）。计时都在页面内 performance.now，含 150ms 输入去抖 ─────
+  const findCount = (page) => page.getByTestId('find-count').innerText()
+  // 在页面内执行一步操作，等条件成立再过两帧，返回毫秒（渲染进程 CSP 禁 eval，所以步骤写死在这里）
+  const timeFindStep = (page, step, arg) => page.evaluate(async ({ step, arg }) => {
+    const frame = () => new Promise((resolve) => requestAnimationFrame(() => resolve()))
+    const panel = () => document.querySelector('[data-testid="find-panel"]')
+    const count = () => document.querySelector('[data-testid="find-count"]')?.textContent ?? ''
+    const actions = {
+      open: () => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'h', ctrlKey: true, bubbles: true })),
+      input: () => { const input = panel().querySelector('input[aria-label="查找"]'); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, arg); input.dispatchEvent(new Event('input', { bubbles: true })) },
+      prev: () => panel().querySelector('button[aria-label="上一处"]').click(),
+      replaceAll: () => [...panel().querySelectorAll('button')].find((button) => button.textContent === '全部替换').click(),
+    }
+    const done = {
+      open: () => Boolean(panel()?.querySelector('input[aria-label="替换为"]')),
+      input: () => count().includes('共 1000 处'),
+      prev: () => count() === '第 1000 / 共 1000 处',
+      replaceAll: () => /已替换 1000 处/.test(document.querySelector('[data-testid="find-notice"]')?.textContent ?? ''),
+    }
+    const started = performance.now()
+    actions[step]()
+    while (!done[step]()) { if (performance.now() - started > 30_000) throw new Error(`timeout: ${step} (${count()})`); await frame() }
+    await frame(); await frame()
+    return performance.now() - started
+  }, { step, arg })
+  const createChapter = (page, title, blocks) => page.evaluate(async ({ projectId, title, blocks }) => {
+    const tree = await window.workspace.documents.tree(projectId)
+    const volume = tree.find((item) => item.type === 'volume')
+    const node = await window.workspace.documents.create({ projectId, parentId: volume.id, type: 'chapter', title })
+    const content = blocks.map((block) => block.heading ? { type: 'heading', attrs: { level: block.heading }, content: [{ type: 'text', text: block.text }] } : { type: 'paragraph', content: block.text ? [{ type: 'text', text: block.text }] : [] })
+    await window.workspace.documents.save({ projectId, documentId: node.id, editorJson: { type: 'doc', content }, plainText: blocks.map((block) => block.text).join('\n\n'), expectedRevision: 0 })
+    return node.id
+  }, { projectId: ids.projectId, title, blocks })
+  const openFresh = async (page, title, hasText) => {
+    await page.reload()
+    await page.locator('.manuscript-editor').waitFor()
+    await openChapter(page, title)
+    await page.locator('.manuscript-editor', { hasText }).waitFor({ timeout: 30_000 })
+  }
+
+  await record('P3 查找：Ctrl+F 计数「第 i / 共 n 处」、Enter / Shift+Enter 循环、正则错误提示不崩、Esc 关闭', async () => {
+    const page = running.page
+    await createChapter(page, '查找短章', [{ text: '林舟推门进来。Lin 说：林舟，你来了。' }, { text: '***' }, { text: '林舟没有回答。' }])
+    await openFresh(page, '查找短章', '林舟没有回答')
+    await page.locator('.manuscript-editor').click()
+    await page.keyboard.press('Control+Home')
+    await page.keyboard.press('Control+f')
+    const input = page.getByLabel('查找', { exact: true })
+    await input.waitFor()
+    await input.fill('林舟')
+    await page.getByTestId('find-count').filter({ hasText: '第 1 / 共 3 处' }).waitFor()
+    await input.press('Enter')
+    assert.equal(await findCount(page), '第 2 / 共 3 处')
+    await input.press('Shift+Enter'); await input.press('Shift+Enter')
+    assert.equal(await findCount(page), '第 3 / 共 3 处', 'Shift+Enter 从第 1 处回绕到最后')
+    assert.equal(await page.evaluate(() => CSS.highlights.get('find-hit')?.size), 2, '其余命中高亮')
+    await input.fill('lin')
+    await page.getByTestId('find-count').filter({ hasText: '共 1 处' }).waitFor()
+    await page.getByLabel('正则').check()
+    await input.fill('(林')
+    await page.getByRole('alert').filter({ hasText: '正则有误' }).waitFor()
+    await input.fill('林.')
+    await page.getByTestId('find-count').filter({ hasText: '共 3 处' }).waitFor()
+    await input.press('Escape')
+    await page.getByTestId('find-panel').waitFor({ state: 'detached' })
+    assert.equal(await page.evaluate(() => CSS.highlights.has('find-hit')), false, '关闭后清除高亮')
+  })
+
+  await record('P3 替换：替换当前一处、全部替换后一次 Ctrl+Z 恢复，并经现有保存路径落盘', async () => {
+    const page = running.page
+    const chapterId = await createChapter(page, '替换短章', [{ text: '林舟推门。林舟坐下。' }, { text: '林舟没有回答。' }])
+    await openFresh(page, '替换短章', '林舟没有回答')
+    const original = await editorText(page)
+    await page.locator('.manuscript-editor').click()
+    await page.keyboard.press('Control+Home')
+    await page.keyboard.press('Control+h')
+    await page.getByLabel('查找', { exact: true }).fill('林舟')
+    await page.getByTestId('find-count').filter({ hasText: '第 1 / 共 3 处' }).waitFor()
+    await page.getByLabel('替换为').fill('沈砚')
+    await page.getByRole('button', { name: '替换当前' }).click()
+    await page.getByTestId('find-count').filter({ hasText: '第 1 / 共 2 处' }).waitFor()
+    assert.equal(await editorText(page), '沈砚推门。林舟坐下。\n林舟没有回答。')
+    await page.getByRole('button', { name: '全部替换' }).click()
+    await page.getByTestId('find-notice').filter({ hasText: '已替换 2 处' }).waitFor()
+    await page.getByTestId('find-count').filter({ hasText: '无匹配' }).waitFor()
+    assert.equal(await editorText(page), '沈砚推门。沈砚坐下。\n沈砚没有回答。')
+    await waitSaved(page)
+    const saved = await page.evaluate(async ({ projectId, chapterId }) => (await window.workspace.documents.get(projectId, chapterId)).plainText, { projectId: ids.projectId, chapterId })
+    assert.ok(!saved.includes('林舟'), '全部替换经保存路径落盘')
+    await page.getByLabel('查找', { exact: true }).press('Escape')
+    await page.keyboard.press('Control+z')
+    assert.equal(await editorText(page), '沈砚推门。林舟坐下。\n林舟没有回答。', '一次撤销恢复全部替换')
+    await page.keyboard.press('Control+z')
+    assert.equal(await editorText(page), original, '再一次撤销恢复「替换当前」')
+    await waitSaved(page)
+  })
+
+  await record('P3 本章大纲：列出标题与场景分隔（带预览），点击跳转并放置光标', async () => {
+    const page = running.page
+    const filler = '风从山口吹下来，雨点打在窗上。'.repeat(40)
+    const blocks = [{ heading: 2, text: '一、夜行' }, ...Array.from({ length: 60 }, () => ({ text: filler })), { text: '◇' }, { text: '天亮时他回到旧宅。' }, ...Array.from({ length: 60 }, () => ({ text: filler })), { text: '* * *' }, { text: '尾声的第一句话。' }]
+    await createChapter(page, '大纲长章', blocks)
+    await openFresh(page, '大纲长章', '一、夜行')
+    await page.getByRole('button', { name: '大纲', exact: true }).click()
+    const panel = page.getByTestId('chapter-headings')
+    await panel.waitFor()
+    const entries = await panel.locator('li button').allInnerTexts()
+    assert.equal(entries.length, 3)
+    assert.match(entries[1], /场景 ◇[\s\S]*天亮时他回到旧宅/)
+    await panel.locator('li button', { hasText: '尾声的第一句话' }).click()
+    const target = await page.evaluate(() => {
+      const selection = window.getSelection()
+      const block = selection.anchorNode?.parentElement?.closest('.manuscript-editor > *')
+      const scroller = document.querySelector('.writing-scroll').getBoundingClientRect()
+      const rect = block?.getBoundingClientRect()
+      return { text: block?.textContent, visible: Boolean(rect && rect.top >= scroller.top && rect.bottom <= scroller.bottom) }
+    })
+    assert.equal(target.text, '尾声的第一句话。', '光标放在分隔后的正文')
+    assert.ok(target.visible, '跳转后目标段在可视区')
+    await page.keyboard.type('Z')
+    await page.locator('.manuscript-editor p', { hasText: 'Z尾声的第一句话' }).waitFor()
+    await waitSaved(page)
+    await page.getByRole('button', { name: '关闭本章大纲' }).click()
+  })
+
+  await record('P3 小黑屋内查找 / 大纲可用，网络 0', async () => {
+    const page = running.page
+    await openFresh(page, '大纲长章', '一、夜行')
+    await enterBlackroom(page, async (d) => { await d.getByLabel('写满字数').check(); await d.getByLabel('目标字数').fill('1000') })
+    const before = await snapshotNetwork(page)
+    await page.locator('.manuscript-editor').click()
+    await page.keyboard.press('Control+f')
+    await page.getByLabel('查找', { exact: true }).fill('天亮时')
+    await page.getByTestId('find-count').filter({ hasText: '共 1 处' }).waitFor()
+    await page.getByLabel('查找', { exact: true }).press('Escape')
+    await page.getByRole('button', { name: '大纲', exact: true }).click()
+    await page.getByTestId('chapter-headings').locator('li button', { hasText: '一、夜行' }).click()
+    await page.getByRole('button', { name: '关闭本章大纲' }).click()
+    await page.waitForTimeout(500)
+    const after = await snapshotNetwork(page)
+    for (const key of Object.keys(before)) assert.equal(after[key] - before[key], 0, `小黑屋内查找/大纲 ${key} 网络应为 0`)
+    await page.getByRole('button', { name: '紧急出口' }).click()
+    await page.getByLabel('紧急出屋确认').fill('我要出屋')
+    await page.getByRole('button', { name: '确认出屋' }).click()
+    await page.getByTestId('blackroom-bar').waitFor({ state: 'detached' })
+  })
+
+  const findPerf = async (page, label) => {
+    await page.locator('.manuscript-editor').click()
+    await page.keyboard.press('Control+Home')
+    const openMs = await timeFindStep(page, 'open')
+    const inputMs = await timeFindStep(page, 'input', '远处星')
+    const jumpMs = await timeFindStep(page, 'prev')
+    await page.getByLabel('替换为').fill('远处月')
+    const replaceMs = await timeFindStep(page, 'replaceAll')
+    process.stdout.write(`P3 find ${label}: open ${openMs.toFixed(1)}ms, input ${inputMs.toFixed(1)}ms, jump ${jumpMs.toFixed(1)}ms, replace-all 1000 ${replaceMs.toFixed(1)}ms (limit 1000ms)\n`)
+    for (const [name, ms] of [['打开', openMs], ['输入后刷新', inputMs], ['跳转', jumpMs], ['全部替换 1000 处', replaceMs]]) assert.ok(ms <= 1000, `${label} ${name} ${ms.toFixed(1)}ms 应 ≤1000ms`)
+    await page.getByTestId('find-count').filter({ hasText: '无匹配' }).waitFor()
+    await page.getByLabel('查找', { exact: true }).press('Escape')
+    await page.keyboard.press('Control+z')
+    await page.waitForFunction(() => (document.querySelector('.manuscript-editor').textContent.match(/远处星/g) ?? []).length === 1000, undefined, { timeout: 30_000 })
+    await waitSaved(page)
+  }
+  // 5852 句里恰好 1000 句的「远处灯」换成「远处星」
+  const perfSentences = Array.from({ length: 5852 }, (_, i) => Math.floor((i + 1) * 1000 / 5852) > Math.floor(i * 1000 / 5852) ? seg34.replace('远处灯', '远处星') : seg34)
+
+  await record('P3 性能：19.9 万字单段（分块）查找打开 / 输入刷新 / 跳转 / 全部替换 1000 处各 ≤1s，撤销一步恢复', async () => {
+    const page = running.page
+    const viewport = page.viewportSize()
+    await page.setViewportSize({ width: 1600, height: 900 })
+    await createChapter(page, '查找单段长章', [{ text: perfSentences.join('') }])
+    await openFresh(page, '查找单段长章', '林舟在会上说')
+    await findPerf(page, 'single paragraph 198968 chars')
+    if (viewport) await page.setViewportSize(viewport)
+  })
+
+  await record('P3 性能：多段长章（5852 段）查找打开 / 输入刷新 / 跳转 / 全部替换 1000 处各 ≤1s，撤销一步恢复', async () => {
+    const page = running.page
+    const viewport = page.viewportSize()
+    await page.setViewportSize({ width: 1600, height: 900 })
+    await createChapter(page, '查找多段长章', perfSentences.map((text) => ({ text })))
+    await openFresh(page, '查找多段长章', '林舟在会上说')
+    await findPerf(page, 'multi paragraph 5852 blocks')
+    if (viewport) await page.setViewportSize(viewport)
+  })
+
   await record('F15 ⑫ 锁定可见性：作品库 / 其他作品显示被锁书名与回去入口；AI 报错带书名无前缀；Esc 只关紧急出口对话框', async () => {
     const page = running.page
     const other = await page.evaluate(() => window.workspace.projects.create({ title: '旁边的书', projectType: 'novel', description: '' }))

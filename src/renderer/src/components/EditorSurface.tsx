@@ -3,7 +3,7 @@ import { CharacterCount } from '@tiptap/extension-character-count'
 import { Placeholder } from '@tiptap/extension-placeholder'
 import { EditorContent, Extension, useEditor } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
-import { Check, Focus, UserRound, Lock, LocateFixed, Redo2, Save, ShieldCheck, Sparkles, Undo2, X } from 'lucide-react'
+import { Check, Focus, ListTree, Search, UserRound, Lock, LocateFixed, Redo2, Save, ShieldCheck, Sparkles, Undo2, X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { LINT_GROUPS, type Character, type CharacterHoverPrefs, type DocumentContent, type DocumentNode, type DocumentTaskTarget, type LocalLintIssue, type ProofreadIssue, type TextPatch } from '../../../shared/domain'
 import { textIdentity } from '../../../shared/text-identity'
@@ -18,6 +18,8 @@ import { isStaleContent } from '../services/content-adoption'
 import { NameMatcher, termsFromCharacters } from '../../../shared/name-matcher'
 import { CHARACTERS_CHANGED_EVENT, HOVER_DEGRADE_NOTICE, characterHoverPlugin, hitAt, ignoreHoverAt, isHoverDegraded, setHoverMatcher, type DecoratedHit } from '../services/character-hover'
 import { CharacterHoverCard } from './CharacterHoverCard'
+import { FindReplacePanel } from './FindReplacePanel'
+import { ChapterHeadingsPanel } from './ChapterHeadingsPanel'
 
 export interface EditorSelection { fromPm: number; toPm: number; text: string }
 export interface EditorController {
@@ -379,6 +381,28 @@ export function EditorSurface({ node, content, focusMode, onFocusMode, onSaved, 
     return () => window.removeEventListener('keydown', onKey, true)
   }, [hoverCard])
 
+  // 章内查找替换 / 本章大纲（小黑屋内同样可用：纯本地、无网络）
+  const [findMode, setFindMode] = useState<'find' | 'replace' | undefined>()
+  const [findFocusToken, setFindFocusToken] = useState(0)
+  const [headingsOpen, setHeadingsOpen] = useState(false)
+  const scrollerOf = useCallback((): HTMLElement | null => writingPageRef.current?.parentElement ?? null, [])
+  const openFind = useCallback((mode: 'find' | 'replace') => { setFindMode(mode); setFindFocusToken((value) => value + 1) }, [])
+  const closeFind = useCallback(() => { setFindMode(undefined); editor?.commands.focus(undefined, { scrollIntoView: false }) }, [editor])
+  useEffect(() => {
+    // Ctrl+Shift+F 留给全书搜索，这里只认不带 Shift 的 Ctrl+F / Ctrl+H
+    const onKey = (event: KeyboardEvent): void => {
+      if (!(event.ctrlKey || event.metaKey) || event.shiftKey || event.altKey) return
+      const key = event.key.toLowerCase()
+      if (key !== 'f' && key !== 'h') return
+      if ((event.target as HTMLElement | null)?.closest?.('[role="dialog"]')) return
+      event.preventDefault()
+      openFind(key === 'h' ? 'replace' : 'find')
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [openFind])
+  useEffect(() => { setFindMode(undefined) }, [node.id])
+
   // 出屋后重新检查（屋内不跑自动检查）
   const wasLocked = useRef(blackroomLocked)
   useEffect(() => {
@@ -492,12 +516,16 @@ export function EditorSurface({ node, content, focusMode, onFocusMode, onSaved, 
       {!blackroomLocked && <button className="toolbar-button" onClick={() => setProofreadOpen(true)}><ShieldCheck size={16} />校对{visibleLocalIssues.length > 0 ? ` ${visibleLocalIssues.length}` : ''}</button>}
       {!blackroomLocked && <button className="toolbar-button" onClick={() => onFocusMode(!focusMode)}><Focus size={16} />专注</button>}
       {!blackroomLocked && onBlackroom && <button className="toolbar-button" onClick={onBlackroom}><Lock size={16} />小黑屋</button>}
+      <button className="toolbar-button" title="章内查找（Ctrl+F）/ 替换（Ctrl+H）" onClick={() => openFind('find')}><Search size={16} />查找</button>
+      <button className={headingsOpen ? 'toolbar-button active' : 'toolbar-button'} aria-pressed={headingsOpen} title="本章标题与场景分隔" onClick={() => setHeadingsOpen((open) => !open)}><ListTree size={16} />大纲</button>
       <button className={hoverPrefs?.enabled ? 'toolbar-button active' : 'toolbar-button'} aria-pressed={Boolean(hoverPrefs?.enabled)} title="悬停人名显示只读人物卡" disabled={!hoverPrefs}
         onClick={() => { if (hoverPrefs) void saveHoverPrefs({ ...hoverPrefs, enabled: !hoverPrefs.enabled }) }}><UserRound size={16} />人物悬停</button>
       <span className="toolbar-spacer" /><span className={`save-indicator ${saveState}`} title={saveError}><Save size={14} />{saveState === 'saved' ? '已保存' : saveState === 'dirty' ? '等待保存' : saveState === 'saving' ? '保存中' : '保存失败，内容仍保留'}</span>
     </div>
     {saveError && <div className="save-error" role="alert">{saveError}</div>}
     <div className="writing-scroll"><article className="writing-page" ref={writingPageRef}><h1>{node.title}</h1><EditorContent editor={editor} /></article></div>
+    {editor && findMode && <FindReplacePanel key={node.id} editor={editor} mode={findMode} focusToken={findFocusToken} scroller={scrollerOf} onMode={openFind} onClose={closeFind} />}
+    {editor && headingsOpen && <ChapterHeadingsPanel key={node.id} editor={editor} scroller={scrollerOf} onClose={() => setHeadingsOpen(false)} />}
     <div className="editor-status"><span>{liveWordCount.toLocaleString()} 字</span>{visibleLocalIssues.length > 0 && <button className="proofread-count" onClick={() => setProofreadOpen(true)}>{visibleLocalIssues.length} 条校对提示</button>}{hoverDegraded && hoverPrefs?.enabled && <span className="hover-degraded" data-testid="hover-degraded">{HOVER_DEGRADE_NOTICE}</span>}</div>
     {hoverCard && <CharacterHoverCard term={hoverCard.hit.term} position={hoverCard.position} showOpenLink={!blackroomLocked && Boolean(onOpenCharacter)}
       characters={hoverCard.hit.characterIds.map((id) => characters.find((item) => item.id === id)).filter((item): item is Character => Boolean(item))}
