@@ -137,8 +137,13 @@ export class WalCheckpointer {
     if (this.closing) return this.closing
     const worker = this.worker
     this.closing = !worker ? Promise.resolve() : new Promise<void>((resolve) => {
-      const timer = setTimeout(() => { void worker.terminate() }, 2_000)
-      worker.once('exit', () => { clearTimeout(timer); resolve() })
+      const diag = process.env.INKSTONE_QUIT_DIAG === '1'
+      const t0 = performance.now()
+      const d = (ev: string, extra: Record<string, unknown> = {}): void => { if (diag) process.stderr.write(`QDIAG ${JSON.stringify({ ev, cpT: Math.round(performance.now() - t0), abs: Math.round(performance.now()), ...extra })}\n`) }
+      d('cpClosePosted')
+      let termAt = 0
+      const timer = setTimeout(() => { termAt = performance.now(); d('cp2sTerminateCall', { lateBy: Math.round(termAt - t0 - 2_000) }); void worker.terminate().then((code) => d('cpTerminatePromise', { code, sinceTerm: Math.round(performance.now() - termAt) })) }, 2_000)
+      worker.once('exit', (code) => { d('cpWorkerExit', { code, sinceTerm: termAt ? Math.round(performance.now() - termAt) : null }); clearTimeout(timer); resolve() })
       worker.postMessage({ type: 'close' })
     })
     return this.closing

@@ -72,8 +72,9 @@ describe('closeForQuit 上限（子进程，产品源码不打包）', () => {
   const nodeArgs = ['--experimental-transform-types', '--no-warnings', '--import', pathToFileURL(resolve('tests/fixtures/ts-resolve-hook.mjs')).href]
   type Ready = { status: Record<string, unknown>; projectId: string; hashes: ReturnType<typeof chapterHashes> }
   type Closed = { timedOut: boolean; ms: number; limitMs: number; mainClosed: boolean }
-  const run = (dbPath: string, mode: string) => new Promise<{ ready: Ready; closed: Closed; exitAfterReadyMs: number; code: number | null }>((done, fail) => {
+  const run = (dbPath: string, mode: string) => new Promise<{ ready: Ready; closed: Closed; exitAfterReadyMs: number; code: number | null; qdiag: string; spawnToReadyMs: number }>((done, fail) => {
     const proc = spawn(process.execPath, [...nodeArgs, child, dbPath, mode, '200'], { stdio: ['ignore', 'pipe', 'pipe'] })
+    const spawnedAt = performance.now()
     let out = ''; let err = ''; let readyAt = 0
     const timer = setTimeout(() => { proc.kill('SIGKILL'); fail(new Error(`child ${mode} timeout; stdout ${out.slice(-500)}; stderr ${err}`)) }, 100_000)
     proc.stderr.on('data', (c) => { err += c })
@@ -85,12 +86,13 @@ describe('closeForQuit 上限（子进程，产品源码不打包）', () => {
       const readyLine = lines.find((l) => l.startsWith('READY '))
       const closedLine = lines.find((l) => l.startsWith('CLOSED '))
       if (!readyLine || !closedLine) { fail(new Error(`child ${mode} exited ${code} without READY/CLOSED; stderr ${err}`)); return }
-      done({ ready: JSON.parse(readyLine.slice(6)), closed: JSON.parse(closedLine.slice(7)), exitAfterReadyMs: Math.round(exitedAt - readyAt), code })
+      done({ ready: JSON.parse(readyLine.slice(6)), closed: JSON.parse(closedLine.slice(7)), exitAfterReadyMs: Math.round(exitedAt - readyAt), code, qdiag: err.split('\n').filter((l) => l.startsWith('QDIAG')).join('\n'), spawnToReadyMs: Math.round(readyAt - spawnedAt) })
     })
   })
   for (const mode of ['quit-stuck', 'quit-dead']) it(`退出时 ${mode === 'quit-stuck' ? 'worker 卡在检查点里不回消息' : 'worker 线程已死'}：上限内退出，重开 integrity_check ok、逐章数据完整`, async () => {
     const dbPath = join(tempDir(), 'quit.sqlite')
     const r = await run(dbPath, mode)
+    if (process.env.INKSTONE_QUIT_DIAG === '1') log(`${mode} DIAG spawnToReady=${r.spawnToReadyMs} stderrQDIAG:\n${r.qdiag}`)
     log(`${mode}: ${JSON.stringify({ closed: r.closed, exitAfterReadyMs: r.exitAfterReadyMs, code: r.code, status: { ...r.ready.status, attempts: undefined } })}`)
     expect(r.code).toBe(0)
     expect(r.closed.limitMs).toBe(5_000)

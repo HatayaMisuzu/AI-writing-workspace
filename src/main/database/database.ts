@@ -1,5 +1,5 @@
 import { DatabaseSync } from 'node:sqlite'
-import { mkdirSync } from 'node:fs'
+import { mkdirSync, statSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { schema } from './schema'
 import { WalCheckpointer, type WalCheckpointerOptions } from './wal-checkpointer'
@@ -89,14 +89,23 @@ export class AppDatabase {
   async closeForQuit(limitMs = QUIT_CLOSE_LIMIT_MS): Promise<{ timedOut: boolean; ms: number }> {
     const started = performance.now()
     if (this.isClosed) return { timedOut: false, ms: 0 }
+    // DIAG(diag-quit-timeout)：仅日志，INKSTONE_QUIT_DIAG=1 时输出，不改行为
+    const diag = process.env.INKSTONE_QUIT_DIAG === '1'
+    const t = (ev: string, extra: Record<string, unknown> = {}): void => { if (diag) process.stderr.write(`QDIAG ${JSON.stringify({ ev, t: Math.round(performance.now() - started), abs: Math.round(performance.now()), ...extra })}\n`) }
+    const walSize = (): number => { try { return statSync(`${this.path}-wal`).size } catch { return -1 } }
+    t('enter', { limitMs, wal: walSize() })
     let timer: ReturnType<typeof setTimeout> | undefined
     const timedOut = await Promise.race([
-      (this.checkpointer?.close() ?? Promise.resolve()).then(() => false, () => false),
-      new Promise<boolean>((resolve) => { timer = setTimeout(() => resolve(true), limitMs) })
+      (this.checkpointer?.close() ?? Promise.resolve()).then(() => { t('cpCloseResolved'); return false }, () => false),
+      new Promise<boolean>((resolve) => { timer = setTimeout(() => { t('limitTimerFired', { lateBy: Math.round(performance.now() - started - limitMs) }); resolve(true) }, limitMs) })
     ])
+    t('raceSettled', { timedOut })
     if (timer) clearTimeout(timer)
     if (timedOut) this.checkpointer?.terminate()
+    const c0 = performance.now()
+    t('mainCloseStart', { wal: walSize() })
     this.close()
+    t('mainCloseEnd', { closeMs: Math.round(performance.now() - c0), walAfter: walSize() })
     return { timedOut, ms: Math.round(performance.now() - started) }
   }
 
