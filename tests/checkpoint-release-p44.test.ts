@@ -6,6 +6,7 @@ import { AppDatabase, type AppDatabaseOptions } from '../src/main/database/datab
 import { ProjectService } from '../src/main/services/project-service'
 import { DocumentService } from '../src/main/services/document-service'
 import { WritingDailyService } from '../src/main/services/writing-daily-service'
+import { fmtWalState, readWalState } from './helpers/wal-index'
 
 // P3 PR-44（组长 2026-10-30 20:52）：暂停释放条件 = 某轮 checkpointed == log 且该轮期间主连接无新写入（写入代数）；
 // 暂停期间写入合并补做；上限 maxRounds / maxMs 降级并告警。诊断 run 41055697997：检查点期间的保存让 WAL 无法复用，
@@ -73,6 +74,42 @@ const save = (s: S, id: string, suffix: string): void => {
   s.docs.saveContent({ projectId: s.project.id, documentId: id, editorJson: doc(current.plainText + suffix), plainText: current.plainText + suffix, expectedRevision: current.revision })
 }
 
+/**
+ * H-W1（diag-hw1 run 41099060825）：释放后首存 COMMIT 偶发 97–109ms，过程是 WAL 从头复用（ckptSeq+1、salt 变、
+ * nBackfill=0），并非同步检查点（同步检查点 900–5000ms、nBackfill==mxFrame、ckptSeq 不变）；慢在 runner I/O 抖动。
+ * 判定（B，只改测试，守 A 级行为「释放后无同步检查点」）：
+ *   首存 < 50ms → 通过；首存 ≥ 50ms → 必须同时满足：
+ *   ① -wal 头 ckptSeq 恰好 +1（WAL 从头复用）且首存后 shm nBackfill ≠ mxFrame（非同步检查点）
+ *   ② 首存 < 500ms（安全线）  ③ 紧接着再存一次 COMMIT < 50ms
+ *   头读不到 / 格式不对 → 红。
+ */
+const FIRST_COMMIT_MS = 50
+const SAFETY_MS = 500
+function expectFirstCommitAfterRelease(s: S, label: string): void {
+  const before = readWalState(s.path)
+  save(s, s.ids[1], '释放后')
+  const first = lastCommit(s)
+  const after = readWalState(s.path)
+  expect(first.autoCheckpoint).toBe(true)
+  if (first.commitMs < FIRST_COMMIT_MS) {
+    log(`G-FIRST ${label}: firstMs=${first.commitMs} branch=fast recheckMs=- before=${fmtWalState(before)} after=${fmtWalState(after)}`)
+    return
+  }
+  save(s, s.ids[1], '复核')
+  const recheck = lastCommit(s)
+  const reused = before.wal.ok && after.wal.ok && after.wal.value.ckptSeq === before.wal.value.ckptSeq + 1
+  const notSync = after.shm.ok && after.shm.value.nBackfill !== after.shm.value.mxFrame
+  const ok = reused && notSync && first.commitMs < SAFETY_MS && recheck.commitMs < FIRST_COMMIT_MS
+  log(`G-FIRST ${label}: firstMs=${first.commitMs} branch=${ok ? 'slow-pass' : 'slow-fail'} recheckMs=${recheck.commitMs} reused=${reused} notSync=${notSync} before=${fmtWalState(before)} after=${fmtWalState(after)}`)
+  expect(before.wal.ok ? undefined : before.wal.error, 'wal header before first save').toBeUndefined()
+  expect(after.wal.ok ? undefined : after.wal.error, 'wal header after first save').toBeUndefined()
+  expect(after.shm.ok ? undefined : after.shm.error, 'shm header after first save').toBeUndefined()
+  expect(reused, '① WAL 从头复用 ckptSeq+1').toBe(true)
+  expect(notSync, '① 首存后 nBackfill ≠ mxFrame').toBe(true)
+  expect(first.commitMs, '② 首存 < 500ms').toBeLessThan(SAFETY_MS)
+  expect(recheck.commitMs, '③ 复核 COMMIT < 50ms').toBeLessThan(FIRST_COMMIT_MS)
+}
+
 describe('G：检查点期间持续写入（每 700ms 一次保存）', () => {
   it('首轮被写入打断（quiet=false）→ 补做轮收敛释放；释放后第一次保存 COMMIT < 50ms', async () => {
     const s = setup(300, { checkpointer: { inject: { delaySchedule: [1500] } } })
@@ -88,11 +125,7 @@ describe('G：检查点期间持续写入（每 700ms 一次保存）', () => {
     expect(s.db.checkpointer!.last).toMatchObject({ ok: true, quiet: true })
     expect(s.db.checkpointer!.last!.checkpointed).toBe(s.db.checkpointer!.last!.log)
     expect(s.db.autoCheckpoint).toBe(ORIGINAL)
-    save(s, s.ids[1], '释放后')
-    const first = lastCommit(s)
-    log(`first save after release: commitMs=${first.commitMs} autoCheckpoint=${first.autoCheckpoint}`)
-    expect(first.autoCheckpoint).toBe(true)
-    expect(first.commitMs).toBeLessThan(50)
+    expectFirstCommitAfterRelease(s, 'G1')
   })
   it('无注入延迟：每 700ms 保存，自然收敛所需轮数与时间（记日志）', async () => {
     const s = setup(1000)
@@ -100,10 +133,9 @@ describe('G：检查点期间持续写入（每 700ms 一次保存）', () => {
     const saves = await saveEvery(s, 700, 30_000)
     await s.db.checkpointIdle()
     const rel = s.db.releases[s.db.releases.length - 1]
-    save(s, s.ids[1], '释放后')
-    log(`natural 1000ch: saves=${saves} rounds=${rel.rounds} ms=${rel.ms} reason=${rel.reason} firstCommitMs=${lastCommit(s).commitMs}`)
+    log(`natural 1000ch: saves=${saves} rounds=${rel.rounds} ms=${rel.ms} reason=${rel.reason}`)
     expect(rel.reason).toBe('quiet')
-    expect(lastCommit(s).commitMs).toBeLessThan(50)
+    expectFirstCommitAfterRelease(s, 'G2')
   })
 })
 
