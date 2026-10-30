@@ -152,3 +152,33 @@ describe('H：持续写入达上限 → 降级恢复 autocheckpoint 并告警', 
     expect(s.db.autoCheckpoint).toBe(ORIGINAL)
   }, 400_000)
 })
+
+describe('I：quiet===true 才释放（未提供 generation 不得误释放）', () => {
+  it('currentRound 回报 quiet===undefined（模拟未提供 generation）→ 不按 quiet 释放，达轮数上限才降级', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    const s = setup(30, { checkpointer: { inject: { delayMs: 80 }, retries: 0 }, release: { maxRounds: 2 } })
+    const cp = s.db.checkpointer!
+    const orig = cp.currentRound.bind(cp)
+    vi.spyOn(cp, 'currentRound').mockImplementation(async () => {
+      const outcome = await orig()
+      if (!outcome) return outcome
+      // 抹掉 quiet：等同于 WalCheckpointer 未提供 generation 时 quiet===undefined
+      return { ...outcome, quiet: undefined }
+    })
+    s.docs.replaceBatch({ projectId: s.project.id, items: items(s), ...meta })
+    await s.db.checkpointIdle()
+    const rel = s.db.releases[s.db.releases.length - 1]
+    log(`no-generation: reason=${rel.reason} rounds=${rel.rounds} ms=${rel.ms}`)
+    expect(rel.reason).toBe('limit-rounds')
+    expect(rel.rounds).toBeGreaterThanOrEqual(2)
+    expect(s.db.autoCheckpoint).toBe(ORIGINAL)
+    expect(s.db.checkpointer!.warnings.some((w) => w.includes('release degraded (limit-rounds)'))).toBe(true)
+    warn.mockRestore()
+  })
+
+  it('源码守卫：释放条件必须是 outcome.quiet === true（不得用 !== false，避免 undefined 误释放）', () => {
+    const src = readFileSync(resolve('src/main/database/database.ts'), 'utf8')
+    expect(src).toMatch(/if \(outcome\.quiet === true\)/)
+    expect(src).not.toMatch(/outcome\.quiet !== false/)
+  })
+})
