@@ -44,24 +44,43 @@ export function clearFindHighlights(): void {
 
 const frame = (): Promise<void> => new Promise((resolve) => requestAnimationFrame(() => resolve()))
 
+/** pos 所在的超长段分块（long-paragraph-chunks.ts）元素；不在分块里返回 undefined。 */
+const chunkAt = (view: EditorView, pos: number): Element | undefined => {
+  try {
+    const { node } = view.domAtPos(pos)
+    const element = node.nodeType === Node.ELEMENT_NODE ? node as Element : node.parentElement
+    return element?.closest('.long-paragraph-chunk') ?? undefined
+  } catch { return undefined }
+}
+
 /**
  * 把 pos 滚到滚动容器上部 1/3 处：每帧量一次（单次 coordsAtPos），不在可视区就瞬时滚动；
  * 连续两帧都在可视区且位置不变才结束，最多 REVEAL_MAX_PASSES 帧。
- * 为什么要等「稳定」：分块超长段（long-paragraph-chunks.ts）的屏外块是 content-visibility:auto，
- * 按 contain-intrinsic-size 占位估高；滚过去以后这些块才真正布局、高度变化，目标会被挤出可视区。
- * 只量一次 / 校正一次时（PR45 前），首次跳到未渲染过的段末会落在错误位置。
+ * 分块超长段（long-paragraph-chunks.ts）的屏外块是 content-visibility:auto、内容被跳过渲染：
+ * 块内位置的几何（coordsAtPos / Range rect）不可信，会给出「已在可视区」的假象（PR45 CI 实测光标停在可视区下方 ~1000px）。
+ * 所以目标在分块里且该块不在可视区时，先按块自身的盒子（占位尺寸，可信）把块滚进可视区，等它真正渲染后再按 coordsAtPos 精调。
  * 普通段落、含格式长段第一次滚动就准，只多一次（布局已干净的）coordsAtPos 用于确认。
  * .writing-scroll 设了 scroll-behavior:smooth，所以用 behavior:'instant'。
  */
-export const REVEAL_MAX_PASSES = 8
+export const REVEAL_MAX_PASSES = 10
 export async function revealPos(view: EditorView, scroller: HTMLElement | null | undefined, pos: number): Promise<void> {
   if (!scroller) return
   let lastTop: number | undefined
   for (let pass = 0; pass < REVEAL_MAX_PASSES; pass += 1) {
     await frame()
     if (view.isDestroyed || pos > view.state.doc.content.size) return
-    const coords = view.coordsAtPos(pos)
     const box = scroller.getBoundingClientRect()
+    const chunk = chunkAt(view, pos)
+    if (chunk) {
+      const rect = chunk.getBoundingClientRect()
+      if (rect.bottom <= box.top || rect.top >= box.bottom) {
+        // 块不在可视区：按块盒子滚过去（块顶对齐可视区顶），下一帧它会被渲染
+        scroller.scrollTo({ top: scroller.scrollTop + rect.top - box.top, behavior: 'instant' })
+        lastTop = undefined
+        continue
+      }
+    }
+    const coords = view.coordsAtPos(pos)
     if (coords.top >= box.top && coords.bottom <= box.bottom) {
       if (lastTop !== undefined && Math.abs(coords.top - lastTop) < 1) return
       lastTop = coords.top
