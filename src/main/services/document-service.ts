@@ -239,15 +239,16 @@ export class DocumentService {
     styleSample?: { origin: TextOrigin; text: string }; writingStats?: 'human' | 'skip'
     /** 全书替换 / 整批恢复：机械改写不是人的文风样本，跳过（style_samples 按 document_id 查无索引，1000 章会 O(n²)） */
     styleSamples?: 'skip'
-  }, current: DocumentContent, ftsRowids?: Map<string, number[]>): number {
-    const prevWords = countChineseWords(current.plainText)
+    /** 已序列化的正文 JSON（整批恢复直接用快照里的字符串，免一次 parse + stringify） */
+    editorJsonText?: string
+  }, current: Pick<DocumentContent, 'revision' | 'plainText'>, ftsRowids?: Map<string, number[]>): number {
     const now = Date.now()
     const revision = current.revision + 1
     const wordCount = countChineseWords(input.plainText)
     const skipHuman = input.writingStats === 'skip' || input.styleSample?.origin === 'ai'
     this.db.raw.prepare(`UPDATE document_contents SET editor_json = ?, plain_text = ?, word_count = ?, revision = ?, updated_at = ?
       WHERE document_id = ? AND project_id = ?`)
-      .run(JSON.stringify(input.editorJson), input.plainText, wordCount, revision, now, input.documentId, input.projectId)
+      .run(input.editorJsonText ?? JSON.stringify(input.editorJson), input.plainText, wordCount, revision, now, input.documentId, input.projectId)
     this.db.raw.prepare('UPDATE document_nodes SET updated_at = ? WHERE id = ? AND project_id = ?')
       .run(now, input.documentId, input.projectId)
     this.db.raw.prepare('UPDATE projects SET updated_at = ? WHERE id = ?').run(now, input.projectId)
@@ -265,7 +266,7 @@ export class DocumentService {
       origin: input.styleSample.origin, text: input.styleSample.text, sourceRevision: revision })
     else if (input.styleSamples !== 'skip') this.styleSamples.recordHumanIfSafe(input.projectId, input.documentId, input.plainText, revision)
     if (!skipHuman) {
-      const delta = wordCount - prevWords
+      const delta = wordCount - countChineseWords(current.plainText)
       if (delta > 0) this.writingDaily.addHumanWords(input.projectId, { added: delta })
       else if (delta < 0) this.writingDaily.addHumanWords(input.projectId, { deleted: -delta })
     }
@@ -273,6 +274,22 @@ export class DocumentService {
   }
 
   /** 测试钩子（失败注入）：批量替换 / 恢复每章各阶段之后调用；生产里为空操作。 */
+  /** 批量路径读当前正文：不解析 JSON（快照直接存原字符串）。 */
+  private rawContent(projectId: string, documentId: string): { editorJsonText: string; plainText: string; revision: number } {
+    const row = this.db.raw.prepare('SELECT editor_json, plain_text, revision FROM document_contents WHERE document_id = ? AND project_id = ?')
+      .get(documentId, projectId) as { editor_json: string; plain_text: string; revision: number } | undefined
+    if (!row) throw new Error('DOCUMENT_HAS_NO_CONTENT')
+    return { editorJsonText: row.editor_json, plainText: row.plain_text, revision: row.revision }
+  }
+
+  /** 批量路径拍快照：与 createSnapshot 写同样的行，但用已读出的原字符串。 */
+  private insertSnapshotRaw(projectId: string, documentId: string, reason: Snapshot['reason'], current: { editorJsonText: string; plainText: string; revision: number }, metadata: Record<string, unknown>): void {
+    this.db.raw.prepare(`INSERT INTO snapshots
+      (id, project_id, document_id, reason, revision, content, plain_text, metadata_json, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(randomUUID(), projectId, documentId, reason, current.revision, current.editorJsonText, current.plainText, JSON.stringify(metadata), Date.now())
+  }
+
   /** 一次扫描本作品 FTS 行：document_id → rowid[]（只读 UNINDEXED 列，事务内调用）。 */
   private ftsRowidMap(projectId: string): Map<string, number[]> {
     const map = new Map<string, number[]>()
@@ -300,9 +317,9 @@ export class DocumentService {
     const contents = this.db.transaction(() => { const fts = this.ftsRowidMap(input.projectId); return input.items.map((item, index) => {
       const node = this.assertNode(input.projectId, item.documentId)
       if (node.type !== 'chapter' && node.type !== 'scene') throw new Error('BOOK_REPLACE_NOT_CHAPTER')
-      const current = this.getContent(input.projectId, item.documentId)
+      const current = this.rawContent(input.projectId, item.documentId)
       if (current.revision !== item.expectedRevision) throw new Error(`REVISION_CONFLICT:${item.documentId}`)
-      this.createSnapshot(input.projectId, item.documentId, 'manual', {
+      this.insertSnapshotRaw(input.projectId, item.documentId, 'manual', current, {
         kind: 'book_replace', batchId, query: input.query, replacement: input.replacement,
         regex: input.regex, caseSensitive: input.caseSensitive, hits: item.hits, batchHits: hits
       })
@@ -331,12 +348,12 @@ export class DocumentService {
       rows.forEach((row, index) => {
         const node = this.db.raw.prepare('SELECT title FROM document_nodes WHERE id = ? AND project_id = ?').get(row.document_id, projectId) as { title: string } | undefined
         if (!node) { skipped.push({ documentId: row.document_id, title: '', reason: 'deleted' }); return }
-        const current = this.getContent(projectId, row.document_id)
+        const current = this.rawContent(projectId, row.document_id)
         if (current.revision !== row.revision + 1) { skipped.push({ documentId: row.document_id, title: node.title, reason: 'changed' }); return }
-        this.createSnapshot(projectId, row.document_id, 'pre_restore', { restoredFrom: row.id, batchId })
+        this.insertSnapshotRaw(projectId, row.document_id, 'pre_restore', current, { restoredFrom: row.id, batchId })
         this.onBatchStep('snapshot', index)
         const revision = this.writeContentInTx({ projectId, documentId: row.document_id,
-          editorJson: JSON.parse(row.content) as Record<string, unknown>, plainText: row.plain_text, writingStats: 'skip', styleSamples: 'skip' }, current, fts)
+          editorJson: {}, editorJsonText: row.content, plainText: row.plain_text, writingStats: 'skip', styleSamples: 'skip' }, current, fts)
         this.onBatchStep('write', index)
         restored.push({ documentId: row.document_id, revision })
       })
