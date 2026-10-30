@@ -1491,7 +1491,7 @@ try {
     await page.getByTestId('blackroom-bar').waitFor({ state: 'detached' })
   })
 
-  const findPerf = async (page, label) => {
+  const findPerf = async (page, label, { enforceLimit = true } = {}) => {
     await page.locator('.manuscript-editor').click()
     await page.keyboard.press('Control+Home')
     const openMs = await timeFindStep(page, 'open')
@@ -1500,12 +1500,17 @@ try {
     await page.getByLabel('替换为').fill('远处月')
     const replaceMs = await timeFindStep(page, 'replaceAll')
     process.stdout.write(`P3 find ${label}: open ${openMs.toFixed(1)}ms, input ${inputMs.toFixed(1)}ms, jump ${jumpMs.toFixed(1)}ms, replace-all 1000 ${replaceMs.toFixed(1)}ms (limit 1000ms)\n`)
-    for (const [name, ms] of [['打开', openMs], ['输入后刷新', inputMs], ['跳转', jumpMs], ['全部替换 1000 处', replaceMs]]) assert.ok(ms <= 1000, `${label} ${name} ${ms.toFixed(1)}ms 应 ≤1000ms`)
+    if (enforceLimit) for (const [name, ms] of [['打开', openMs], ['输入后刷新', inputMs], ['跳转', jumpMs], ['全部替换 1000 处', replaceMs]]) assert.ok(ms <= 1000, `${label} ${name} ${ms.toFixed(1)}ms 应 ≤1000ms`)
     await page.getByTestId('find-count').filter({ hasText: '无匹配' }).waitFor()
+    const replaced = await page.evaluate(() => document.querySelector('.manuscript-editor').textContent)
+    assert.equal((replaced.match(/远处月/g) ?? []).length, 1000, '1000 处全部替换')
+    assert.equal((replaced.match(/远处星/g) ?? []).length, 0)
     await page.getByLabel('查找', { exact: true }).press('Escape')
     await page.keyboard.press('Control+z')
     await page.waitForFunction(() => (document.querySelector('.manuscript-editor').textContent.match(/远处星/g) ?? []).length === 1000, undefined, { timeout: 30_000 })
+    assert.equal(await page.evaluate(() => (document.querySelector('.manuscript-editor').textContent.match(/远处月/g) ?? []).length), 0, '一次撤销完全恢复')
     await waitSaved(page)
+    return { openMs, inputMs, jumpMs, replaceMs }
   }
   // 5852 句里恰好 1000 句的「远处灯」换成「远处星」
   const perfSentences = Array.from({ length: 5852 }, (_, i) => Math.floor((i + 1) * 1000 / 5852) > Math.floor(i * 1000 / 5852) ? seg34.replace('远处灯', '远处星') : seg34)
@@ -1527,6 +1532,26 @@ try {
     await createChapter(page, '查找多段长章', perfSentences.map((text) => ({ text })))
     await openFresh(page, '查找多段长章', '林舟在会上说')
     await findPerf(page, 'multi paragraph 5852 blocks')
+    if (viewport) await page.setViewportSize(viewport)
+  })
+
+  await record('P3 性能（只记录）：含粗体的 19.9 万字长段落全部替换 1000 处（逐处慢路径），断言正确与一次撤销恢复，耗时只打印不设上限', async () => {
+    const page = running.page
+    const viewport = page.viewportSize()
+    await page.setViewportSize({ width: 1600, height: 900 })
+    // 每 100 句插一处粗体：段落含多个带格式文本节点，不走单文本节点批量路径，也不分块
+    const content = perfSentences.map((text, i) => i % 100 === 0 ? { type: 'text', text, marks: [{ type: 'bold' }] } : { type: 'text', text })
+    const merged = []
+    for (const item of content) { const last = merged.at(-1); if (last && !last.marks && !item.marks) last.text += item.text; else merged.push({ ...item }) }
+    await page.evaluate(async ({ projectId, merged }) => {
+      const tree = await window.workspace.documents.tree(projectId)
+      const volume = tree.find((item) => item.type === 'volume')
+      const node = await window.workspace.documents.create({ projectId, parentId: volume.id, type: 'chapter', title: '查找粗体长段' })
+      await window.workspace.documents.save({ projectId, documentId: node.id, editorJson: { type: 'doc', content: [{ type: 'paragraph', content: merged }] }, plainText: merged.map((item) => item.text).join(''), expectedRevision: 0 })
+    }, { projectId: ids.projectId, merged })
+    await openFresh(page, '查找粗体长段', '林舟在会上说')
+    assert.ok(await page.locator('.manuscript-editor strong').count() > 0, '段内确有粗体')
+    await findPerf(page, 'bold long paragraph (record only)', { enforceLimit: false })
     if (viewport) await page.setViewportSize(viewport)
   })
 
