@@ -369,12 +369,20 @@ try {
     await reset(); await cpuProfile(page, 'C-1000ch-keystrokes', () => typeKeys(30, 60), join(artifacts, `C-1000ch-keystrokes-${process.platform}.cpuprofile`)); results1.push(summarize('C-1000ch-cpuprofile', await collect(), 30))
     // D：连打（无间隔，keyboard.type 逐字），100 字
     await reset(); await page.keyboard.type('b'.repeat(100)); await page.waitForTimeout(3000); results1.push(summarize('D-1000ch-burst', await collect(), 100))
-    // E：对照——注入 CSS 隐藏侧栏章树（React 仍渲染，浏览器不做样式/布局）
-    await page.addStyleTag({ content: '.manuscript-tree .volume { display: none !important }' }); await page.waitForTimeout(500)
-    await reset(); await typeKeys(120, 60); results1.push(summarize('E-1000ch-tree-display-none', await collect(), 120))
-    // F：对照——章树行 content-visibility:auto（CSS 估算收益）
-    await page.addStyleTag({ content: '.manuscript-tree .volume { display: block !important } .chapter-row { content-visibility: auto; contain-intrinsic-size: auto 36px }' }); await page.waitForTimeout(500)
-    await reset(); await typeKeys(120, 60); results1.push(summarize('F-1000ch-row-content-visibility', await collect(), 120))
+    // E–I：对照——只在测试里注入 CSS（产品代码不变），每组测完移除
+    const cssVariant = async (label, css) => {
+      const tag = await page.addStyleTag({ content: css }); await page.waitForTimeout(500)
+      await reset(); await traceRun(`${label}-trace`, () => typeKeys(30, 60)); await collect()
+      await reset(); await typeKeys(120, 60); results1.push(summarize(label, await collect(), 120))
+      await tag.evaluate((el) => el.remove()); await page.waitForTimeout(500)
+    }
+    await cssVariant('E-1000ch-tree-display-none', '.manuscript-tree .volume { display: none !important }')
+    await cssVariant('F-1000ch-row-content-visibility', '.chapter-row { content-visibility: auto; contain-intrinsic-size: auto 36px }')
+    await cssVariant('H-1000ch-sidebar-contain-strict', '.project-sidebar { contain: strict }')
+    await cssVariant('I-1000ch-tree-contain-strict', '.manuscript-tree { contain: strict }')
+    await cssVariant('J-1000ch-rows-flex-not-grid', '.chapter-row, .chapter-open { display: flex !important } .chapter-open { flex: 1 }')
+    // A2：移除所有注入后复测基线，确认状态未漂移
+    await reset(); await typeKeys(120, 60); results1.push(summarize('A2-1000ch-paced-again', await collect(), 120))
     // G：对照——同样的章内容，只有 3 章的小书
     const small = await seedBook('三章对照', 3)
     log('seed small', small)
