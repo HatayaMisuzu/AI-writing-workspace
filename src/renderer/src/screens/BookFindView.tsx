@@ -27,7 +27,9 @@ export function BookFindView({ projectId, chapters, onOpenHit }: { projectId: st
 
   useEffect(() => {
     const mine = ++generation.current
-    if (!query) { setProgress(undefined); return }
+    // 条件一变就清掉旧结果，避免去抖期间显示/点击旧查询的命中
+    setProgress(undefined)
+    if (!query) return
     const timer = setTimeout(() => {
       void searchBook({ chapters: refs, schema, query, options: { caseSensitive, regex },
         load: async (ids) => (await Promise.all(ids.map((id) => window.workspace.documents.get(projectId, id)))).map((content) => content.editorJson),
