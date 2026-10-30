@@ -159,7 +159,7 @@ export class AppDatabase {
       // 只等当前这一轮（不用 idle()：持续写入时队列一直有补做轮，idle 不返回，上限也就判不到）
       const outcome = (await cp.currentRound()) ?? cp.last
       const rounds = cp.runs - runsAtStart
-      cpDiag('release-loop-round', { rounds, ok: outcome?.ok, quiet: outcome?.quiet, checkpointed: outcome?.checkpointed, log: outcome?.log, busy: outcome?.busy, error: outcome?.error, fromLast: outcome === cp.last, cpBusy: cp.busy, writesDuringHold: this.writesDuringHold, gen: this.writeGeneration(), elapsedMs: Date.now() - started })
+      cpDiag('release-loop-round', { rounds, ok: outcome?.ok, quiet: outcome?.quiet, checkpointed: outcome?.checkpointed, log: outcome?.log, busy: outcome?.busy, error: outcome?.error, fromLast: outcome === cp.last, cpBusy: cp.busy, writesDuringHold: this.writesDuringHold, gen: this.isClosed ? 'closed' : (() => { try { return this.writeGeneration() } catch (e) { return String(e) } })(), elapsedMs: Date.now() - started })
       if (cp.closed || this.isClosed) { reason = 'closed'; break }
       if (!outcome || !outcome.ok) { reason = 'failed'; break }
       if (outcome.quiet !== false) { reason = 'quiet'; break }
