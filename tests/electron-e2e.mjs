@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict'
 import { once } from 'node:events'
 import { createServer } from 'node:http'
-import { existsSync } from 'node:fs'
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { spawn, spawnSync } from 'node:child_process'
 import { _electron as electron, chromium } from 'playwright'
 
@@ -172,11 +172,13 @@ const timeApplyFirst = (page, expectCount) => page.evaluate(async (expectCount) 
   return performance.now() - started
 }, expectCount)
 // 诊断：围绕一段操作抓渲染进程 CPU profile，把自身耗时 top 函数和调用栈打印到 CI 日志
-const cpuProfile = async (page, label, run) => {
+const cpuProfile = async (page, label, run, file) => {
   let session
   try { session = await page.context().newCDPSession(page); await session.send('Profiler.enable'); await session.send('Profiler.setSamplingInterval', { interval: 500 }); await session.send('Profiler.start') } catch (error) { process.stdout.write(`P3 cpu-profile ${label}: unavailable (${error.message})\n`); return run() }
   try { return await run() } finally {
     const { profile } = await session.send('Profiler.stop')
+    // P3 PR-44 commit 2：可选保存原始 .cpuprofile（CI 作为 artifact 上传，可用 DevTools 打开）
+    if (file) { try { mkdirSync(dirname(file), { recursive: true }); writeFileSync(file, JSON.stringify(profile)); process.stdout.write(`P3 cpu-profile ${label}: saved ${file}\n`) } catch (error) { process.stdout.write(`P3 cpu-profile ${label}: save failed (${error.message})\n`) } }
     const byId = new Map(profile.nodes.map((node) => [node.id, node]))
     const parent = new Map(); for (const node of profile.nodes) for (const child of node.children ?? []) parent.set(child, node.id)
     const self = new Map(); profile.samples.forEach((id, i) => self.set(id, (self.get(id) ?? 0) + (profile.timeDeltas[i] ?? 0) / 1000))
@@ -186,6 +188,15 @@ const cpuProfile = async (page, label, run) => {
     const top = [...byFn].sort((a, b) => b[1] - a[1]).slice(0, 15).map(([fn, ms]) => `${ms.toFixed(0)}ms ${fn}`)
     const stacks = [...self].sort((a, b) => b[1] - a[1]).slice(0, 5).map(([id, ms]) => { const chain = []; let cur = id; while (cur !== undefined && chain.length < 14) { chain.push(name(byId.get(cur))); cur = parent.get(cur) } return `${ms.toFixed(0)}ms ${chain.join(' < ')}` })
     process.stdout.write(`P3 cpu-profile ${label}: total ${total.toFixed(0)}ms\n  top self: ${top.join(' | ')}\n  stacks:\n    ${stacks.join('\n    ')}\n`)
+    // 最长的连续非空闲段（≈ 长任务）：起止相对 profile 开始的毫秒、段内 top self 和最重的调用栈
+    const idle = new Set(profile.nodes.filter((node) => node.callFrame.functionName === '(idle)').map((node) => node.id))
+    let best = { ms: 0, from: 0, to: -1, at: 0 }; let cur = { ms: 0, from: 0 }; let clock = 0
+    profile.samples.forEach((id, i) => { const dt = (profile.timeDeltas[i] ?? 0) / 1000; clock += dt; if (idle.has(id)) { cur = { ms: 0, from: i + 1 }; return } cur.ms += dt; if (cur.ms > best.ms) best = { ms: cur.ms, from: cur.from, to: i, at: clock - cur.ms } })
+    const span = new Map(); const spanStacks = new Map()
+    for (let i = best.from; i <= best.to; i += 1) { const id = profile.samples[i]; const ms = (profile.timeDeltas[i] ?? 0) / 1000; const key = name(byId.get(id)); span.set(key, (span.get(key) ?? 0) + ms); spanStacks.set(id, (spanStacks.get(id) ?? 0) + ms) }
+    const spanTop = [...span].sort((a, b) => b[1] - a[1]).slice(0, 15).map(([fn, ms]) => `${ms.toFixed(0)}ms(${(100 * ms / Math.max(best.ms, 1)).toFixed(0)}%) ${fn}`)
+    const spanStack = [...spanStacks].sort((a, b) => b[1] - a[1]).slice(0, 5).map(([id, ms]) => { const chain = []; let c = id; while (c !== undefined && chain.length < 24) { chain.push(name(byId.get(c))); c = parent.get(c) } return `${ms.toFixed(0)}ms ${chain.join(' < ')}` })
+    process.stdout.write(`P3 cpu-profile ${label}: longest busy span ${best.ms.toFixed(0)}ms at +${(best.at ?? 0).toFixed(0)}ms\n  span top self: ${spanTop.join(' | ')}\n  span stacks:\n    ${spanStack.join('\n    ')}\n`)
     await session.detach().catch(() => undefined)
   }
 }
@@ -1953,15 +1964,18 @@ try {
     // 替换后在打开章继续写：保存 ≤2s 发出并落库（revision 已跟上，不会 REVISION_CONFLICT）
     await page.keyboard.press('Control+End')
     const saveStarted = Date.now()
-    await page.keyboard.type('后来加的')
-    const saveMs = await page.evaluate(async ({ projectId, started }) => {
-      const node = (await window.workspace.documents.tree(projectId)).find((item) => item.title === '第997章')
-      while (!(await window.workspace.documents.get(projectId, node.id)).plainText.includes('后来加的')) {
-        if (Date.now() - started > 10_000) throw new Error('save after replace not persisted')
-        await new Promise((resolve) => setTimeout(resolve, 25))
-      }
-      return Date.now() - started
-    }, { projectId: book.id, started: saveStarted })
+    // P3 PR-44 commit 2：抓「替换后第一次按键 → 保存落库」的渲染进程 CPU profile，定位 ~1.3s 长任务（只诊断，不改产品代码）
+    const saveMs = await cpuProfile(page, 'first-keystroke-after-replace', async () => {
+      await page.keyboard.type('后来加的')
+      return page.evaluate(async ({ projectId, started }) => {
+        const node = (await window.workspace.documents.tree(projectId)).find((item) => item.title === '第997章')
+        while (!(await window.workspace.documents.get(projectId, node.id)).plainText.includes('后来加的')) {
+          if (Date.now() - started > 10_000) throw new Error('save after replace not persisted')
+          await new Promise((resolve) => setTimeout(resolve, 25))
+        }
+        return Date.now() - started
+      }, { projectId: book.id, started: saveStarted })
+    }, join(process.cwd(), 'e2e-artifacts', `first-keystroke-after-replace-${process.platform}.cpuprofile`))
     // P3 PR-44 commit 1：主进程侧计时（diagnostics 通道，非打包）——替换后第一次普通保存的 COMMIT 不应再同步做大检查点
     const walAfterSave = await page.evaluate(() => window.workspace.diagnostics.walCheckpoint())
     const firstCommit = walAfterSave.commits.find((c) => c.at >= saveStarted)

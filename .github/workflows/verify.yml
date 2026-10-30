@@ -19,6 +19,13 @@ jobs:
       - run: npm run release:preflight
       - run: npm run verify
       - run: npm run test:e2e
+      - name: Upload e2e CPU profiles (P3 PR-44 diag)
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-cpuprofile-windows
+          path: e2e-artifacts/
+          if-no-files-found: warn
       - run: npm audit --omit=dev
       # S0b：electron 等运行时在 devDependencies，--omit=dev 看不到；含 dev 依赖的高危门禁
       - run: npm audit --audit-level=high
@@ -63,6 +70,13 @@ jobs:
       # Ubuntu 24.04 默认限制非特权 user namespace，Chromium 沙箱需要放开；应用本身保持 sandbox 开启
       - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - run: xvfb-run -a dbus-run-session -- bash scripts/ci/linux-e2e.sh
+      - name: Upload e2e CPU profiles (P3 PR-44 diag)
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-cpuprofile-linux
+          path: e2e-artifacts/
+          if-no-files-found: warn
       - run: npm audit --omit=dev
       # S0b：electron 等运行时在 devDependencies，--omit=dev 看不到；含 dev 依赖的高危门禁
       - run: npm audit --audit-level=high
