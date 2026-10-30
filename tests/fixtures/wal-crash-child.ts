@@ -9,6 +9,7 @@ import { ProjectService } from '../../src/main/services/project-service'
 import { DocumentService } from '../../src/main/services/document-service'
 import { WritingDailyService } from '../../src/main/services/writing-daily-service'
 import { chapterHashes } from './wal-hash'
+import { pendingBackfillBytes } from '../helpers/wal-index'
 
 const [dbPath, mode, countArg] = process.argv.slice(2)
 const count = Number(countArg)
@@ -66,9 +67,11 @@ const main = async (): Promise<void> => {
   if (mode === 'quit-stuck' || mode === 'quit-dead') {
     // 分段计时由 closeForQuit 自己返回（P3 PR-53：worker 段 / 退出前检查点 / 主连接 close）
     const walBefore = db.checkpointer?.walBytes() ?? 0
+    // 待回写量（新口径 N）：(mxFrame − nBackfill) × 帧大小
+    const pendingBytesAtQuit = pendingBackfillBytes(dbPath)
     const quitStarted = performance.now()
     const result = await db.closeForQuit(QUIT_CLOSE_LIMIT_MS)
-    const segments = { ...result.segments, walBytesAtQuit: walBefore }
+    const segments = { ...result.segments, walBytesAtQuit: walBefore, pendingBytesAtQuit }
     if (process.env.INKSTONE_QUIT_TEST_DIAG === '1') process.stderr.write(`QDIAG ${JSON.stringify({ quitStarted: Math.round(quitStarted), resolved: Math.round(performance.now()), segments })}\n`)
     process.stdout.write(`CLOSED ${JSON.stringify({ timedOut: result.timedOut, ms: result.ms, limitMs: QUIT_CLOSE_LIMIT_MS, mainClosed: db.closed, segments })}\n`)
     process.exit(0)

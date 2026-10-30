@@ -11,14 +11,15 @@ export const QUIT_CLOSE_LIMIT_MS = 5_000
  * P3 PR-53（A）：退出预算按「限制退出时的工作量」做。
  * - worker 段硬上限 = QUIT_CLOSE_LIMIT_MS − QUIT_FINAL_RESERVE_MS（到点 terminate worker）。
  * - 预留段：主连接在预算内主动做一次 wal_checkpoint(TRUNCATE)，再 close（照常回写，此时 WAL 已空，close 很快）。
- * - 预留段耗时与 WAL 大小成正比，db.close() / 检查点是同步调用、无法中途超时：只有 WAL ≤ WAL_QUIT_BOUND_BYTES（CI 两平台实测取慢者再留余量）
- *   时保证总时长 < QUIT_CLOSE_LIMIT_MS；超过则不保证 5s，但照常回写、已提交数据安全。
- * - 平时把 WAL 控制得很小：定期后台写回（WAL_MAINTENANCE_*）+ PRAGMA journal_size_limit。
+ * - 预留段耗时与「待回写量」成正比（(mxFrame − nBackfill) × 帧大小，即 WAL 里还没回写进主库的帧；已回写完的大 -wal 文件
+ *   退出时只截断、不回写）。db.close() / 检查点是同步调用、无法中途超时：只有待回写量 ≤ WAL_QUIT_BOUND_BYTES（CI 两平台实测取慢者
+ *   再留余量）时保证总时长 < QUIT_CLOSE_LIMIT_MS；超过则不保证 5s，但照常回写、已提交数据安全。
+ * - 平时把待回写量控制得很小：定期后台 PASSIVE 写回（WAL_MAINTENANCE_*，只在空闲时）。不设 journal_size_limit（PR-53 实测：
+ *   它让 WAL 复用后第一次 COMMIT 内截断 -wal，拖慢释放后首存）；-wal 文件靠复用不再增长，退出时 TRUNCATE 截断到 0。
  */
 export const QUIT_FINAL_RESERVE_MS = 1_500
 export const QUIT_WORKER_LIMIT_MS = QUIT_CLOSE_LIMIT_MS - QUIT_FINAL_RESERVE_MS
 export const WAL_QUIT_BOUND_BYTES = 8 * 1024 * 1024
-export const JOURNAL_SIZE_LIMIT_BYTES = 4 * 1024 * 1024
 export const WAL_MAINTENANCE_INTERVAL_MS = 10_000
 export const WAL_MAINTENANCE_THRESHOLD_BYTES = 1024 * 1024
 
@@ -41,10 +42,8 @@ export interface AppDatabaseOptions {
   checkpointer?: WalCheckpointerOptions | false
   /** P3 PR-44：批量提交后等「安静的完整检查点」释放暂停的上限；超过则降级（恢复 autocheckpoint）并告警 */
   release?: { maxRounds?: number; maxMs?: number }
-  /** P3 PR-53：定期后台写回（WAL 超过 thresholdBytes 且无批量暂停时请求一轮 PASSIVE）；false = 关闭（基准对照用） */
+  /** P3 PR-53：定期后台写回（-wal 文件超过 thresholdBytes 且无批量暂停时请求一轮 PASSIVE）；false = 关闭（基准对照用） */
   walMaintenance?: { intervalMs?: number; thresholdBytes?: number } | false
-  /** P3 PR-53：PRAGMA journal_size_limit（字节）；false = 不设（SQLite 默认 -1，基准对照用） */
-  journalSizeLimitBytes?: number | false
 }
 
 /** P3 PR-44：一次暂停释放过程的结果（诊断与测试用） */
@@ -80,6 +79,10 @@ export class AppDatabase {
   private maintenanceTimer?: ReturnType<typeof setInterval>
   /** P3 PR-53：定期写回请求次数（诊断用） */
   maintenanceRequests = 0
+  /** 因上一间隔内有写入而跳过的次数（诊断 / 测试：证明只在空闲时跑） */
+  maintenanceSkippedActive = 0
+  private maintenanceSeenGeneration = -1
+  private maintenanceDoneGeneration = -1
 
   constructor(path: string, options: AppDatabaseOptions = {}) {
     this.path = path
@@ -98,9 +101,6 @@ export class AppDatabase {
     if (path !== ':memory:' && options.checkpointer !== false) {
       this.checkpointer = new WalCheckpointer(path, { ...(options.checkpointer ?? {}), generation: () => this.writeGeneration() })
     }
-    if (path !== ':memory:' && options.journalSizeLimitBytes !== false) {
-      this.raw.exec(`PRAGMA journal_size_limit = ${Math.trunc(options.journalSizeLimitBytes ?? JOURNAL_SIZE_LIMIT_BYTES)}`)
-    }
     if (this.checkpointer && options.walMaintenance !== false) {
       const intervalMs = options.walMaintenance?.intervalMs ?? WAL_MAINTENANCE_INTERVAL_MS
       const thresholdBytes = options.walMaintenance?.thresholdBytes ?? WAL_MAINTENANCE_THRESHOLD_BYTES
@@ -109,13 +109,24 @@ export class AppDatabase {
     }
   }
 
-  /** 定期写回：后台 worker PASSIVE，不挡主连接；批量暂停期间交给释放循环，不重复请求。 */
+  /**
+   * 定期写回：后台 worker PASSIVE，不挡主连接。只在空闲时跑：
+   * - 上一个间隔到这一个间隔之间主连接有写入（写入代数变了）→ 本轮不跑，等下一轮（不与连续保存抢 I/O）；
+   * - checkpointer 忙 / 批量暂停期间（交给释放循环）→ 不跑；
+   * - 上次完整回写后没有新写入 → 不跑（-wal 文件大但已回写完时不空转）。
+   */
   private maintainWal(thresholdBytes: number): void {
     const cp = this.checkpointer
-    if (this.isClosed || !cp || cp.closed || cp.busy || this.autoCheckpointHolds > 0) return
+    if (this.isClosed || !cp || cp.closed) return
+    const generation = this.writeGeneration()
+    const active = generation !== this.maintenanceSeenGeneration
+    this.maintenanceSeenGeneration = generation
+    if (active) { this.maintenanceSkippedActive += 1; return }
+    if (cp.busy || this.autoCheckpointHolds > 0) return
+    if (generation === this.maintenanceDoneGeneration) return
     if (cp.walBytes() <= thresholdBytes) return
     this.maintenanceRequests += 1
-    void cp.request()
+    void cp.request().then((outcome) => { if (outcome.ok) this.maintenanceDoneGeneration = generation })
   }
 
   private stopMaintenance(): void {
