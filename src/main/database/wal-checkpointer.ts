@@ -26,6 +26,11 @@ export interface CheckpointOutcome {
   checkpointed?: number
   walBytes?: number
   error?: string
+  /** P3 PR-44：本轮开始到结束期间主连接没有新写入（写入代数未变）；未提供 generation 时为 undefined */
+  quiet?: boolean
+  /** 本轮起止（墙钟 ms，Date.now()），诊断用 */
+  startedAt?: number
+  endedAt?: number
 }
 
 export interface WalCheckpointerOptions {
@@ -36,14 +41,17 @@ export interface WalCheckpointerOptions {
   log?: (message: string) => void
   /** 每次尝试（含重试）结束时回调；测试与诊断用 */
   onAttempt?: (attempt: { ok: boolean; ms: number; busy?: number; log?: number; checkpointed?: number; error?: string }) => void
-  /** 仅测试：注入 worker 内失败 / 延迟 */
-  inject?: { failWith?: string; delayMs?: number }
+  /** P3 PR-44：主连接写入代数（每次写入递增）；每轮开始与结束各读一次，判定本轮期间是否有新写入 */
+  generation?: () => number
+  /** 仅测试：注入 worker 内失败 / 延迟；delaySchedule[i] = 该 worker 第 i 次尝试的延迟（超出部分为 0） */
+  inject?: { failWith?: string; delayMs?: number; delaySchedule?: number[] }
 }
 
 const WORKER_SOURCE = `
 const { parentPort, workerData } = require('node:worker_threads')
 const { DatabaseSync } = require('node:sqlite')
 let db
+let attemptIndex = 0
 parentPort.on('message', (message) => {
   if (message.type === 'close') {
     try { if (db) db.close() } catch {}
@@ -53,7 +61,9 @@ parentPort.on('message', (message) => {
     return
   }
   const inject = workerData.inject || {}
-  if (inject.delayMs) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, inject.delayMs)
+  const delay = Array.isArray(inject.delaySchedule) ? (inject.delaySchedule[attemptIndex] || 0) : inject.delayMs
+  attemptIndex += 1
+  if (delay) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delay)
   const started = performance.now()
   try {
     if (inject.failWith) throw new Error(inject.failWith)
@@ -109,6 +119,11 @@ export class WalCheckpointer {
   }
 
   /** 等到没有运行中/排队的检查点。 */
+  /** P3 PR-44：等当前正在跑（无则排队中）的那一轮结束并返回其结果；都没有则 undefined。不等后续排队轮，持续写入时也能逐轮返回。 */
+  currentRound(): Promise<CheckpointOutcome | undefined> {
+    return this.running ?? this.queued ?? Promise.resolve(undefined)
+  }
+
   async idle(): Promise<void> {
     while (this.queued || this.running) await (this.queued ?? this.running)
   }
@@ -136,6 +151,8 @@ export class WalCheckpointer {
   }
 
   private async runRound(): Promise<CheckpointOutcome> {
+    const startedAt = Date.now()
+    const generationAtStart = this.readGeneration()
     let ms = 0
     let attempt: Attempt = { ok: false, ms: 0, error: 'CHECKPOINT_NOT_RUN' }
     let attempts = 0
@@ -152,7 +169,9 @@ export class WalCheckpointer {
     const complete = attempt.ok && attempt.busy === 0 && (attempt.checkpointed ?? 0) >= (attempt.log ?? 0)
     const outcome: CheckpointOutcome = {
       ok: complete, ms: Math.round(ms), attempts, busy: attempt.busy, log: attempt.log, checkpointed: attempt.checkpointed,
-      walBytes: this.walBytes(), error: complete ? undefined : (attempt.error ?? `CHECKPOINT_INCOMPLETE:busy=${attempt.busy}:log=${attempt.log}:checkpointed=${attempt.checkpointed}`)
+      walBytes: this.walBytes(), startedAt, endedAt: Date.now(),
+      quiet: generationAtStart === undefined ? undefined : this.readGeneration() === generationAtStart,
+      error: complete ? undefined : (attempt.error ?? `CHECKPOINT_INCOMPLETE:busy=${attempt.busy}:log=${attempt.log}:checkpointed=${attempt.checkpointed}`)
     }
     this.runs += 1
     this.last = outcome
@@ -161,6 +180,10 @@ export class WalCheckpointer {
     if (this.consecutiveFailures >= this.failWarnCount) this.warn(`[wal-checkpoint] ${this.consecutiveFailures} consecutive failures`)
     if ((outcome.walBytes ?? 0) > this.walWarnBytes) this.warn(`[wal-checkpoint] WAL file ${outcome.walBytes} bytes exceeds ${this.walWarnBytes}`)
     return outcome
+  }
+
+  private readGeneration(): number | undefined {
+    try { return this.options.generation?.() } catch { return undefined }
   }
 
   private warn(message: string): void {

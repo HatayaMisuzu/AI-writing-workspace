@@ -333,7 +333,7 @@ export function registerIpc(db: AppDatabase, codec: SecretCodec, network?: Netwo
   // P3 PR-2b：后台 WAL 检查点状态（e2e 计时用；界面不展示）
   handle('diagnostics:wal-checkpoint', () => {
     const cp = db.checkpointer
-    return { busy: cp?.busy ?? false, runs: cp?.runs ?? 0, last: cp?.last ?? null, walBytes: cp?.walBytes() ?? 0, autoCheckpoint: db.autoCheckpoint, dbPath: db.path }
+    return { busy: cp?.busy ?? false, runs: cp?.runs ?? 0, last: cp?.last ?? null, walBytes: cp?.walBytes() ?? 0, autoCheckpoint: db.autoCheckpoint, dbPath: db.path, commits: db.commits.slice(-20), releases: db.releases.slice(-10) }
   })
 
   handle('backup:export-project', async (projectId: string) => {
