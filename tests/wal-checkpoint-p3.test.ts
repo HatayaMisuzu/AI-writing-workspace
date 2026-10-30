@@ -1,9 +1,9 @@
-import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { spawn, spawnSync } from 'node:child_process'
 import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { buildSync } from 'esbuild'
+import { pathToFileURL } from 'node:url'
 import { AppDatabase, type AppDatabaseOptions } from '../src/main/database/database'
 import { ProjectService } from '../src/main/services/project-service'
 import { DocumentService } from '../src/main/services/document-service'
@@ -293,16 +293,16 @@ describe('2：worker 关闭与应用退出', () => {
 })
 
 describe('F / 4：强杀子进程（kill -9 / taskkill /F）三个时机，重开后正文与快照逐章完整', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'inkstone-wal-child-'))
-  const child = join(dir, 'wal-crash-child.mjs')
-  buildSync({ entryPoints: [resolve('tests/fixtures/wal-crash-child.ts')], bundle: true, platform: 'node', format: 'esm', target: 'node22', outfile: child, logLevel: 'error' })
-  afterAll(() => rmSync(dir, { recursive: true, force: true }))
+  // 子进程直接用 node 运行产品 TS 源码（src/main 下的 AppDatabase / WalCheckpointer / DocumentService，未打包、未复制）：
+  // Node 22 自带类型擦除 + tests/fixtures/ts-resolve-hook.mjs 解析无扩展名相对导入。不经过任何打包器。
+  const child = resolve('tests/fixtures/wal-crash-child.ts')
+  const nodeArgs = ['--experimental-transform-types', '--no-warnings', '--import', pathToFileURL(resolve('tests/fixtures/ts-resolve-hook.mjs')).href]
   const kill = (pid: number): void => {
     if (process.platform === 'win32') spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' })
     else process.kill(pid, 'SIGKILL')
   }
   const runAndKill = (dbPath: string, mode: string) => new Promise<{ status: Record<string, unknown>; projectId: string; hashes: ReturnType<typeof chapterHashes> }>((done, fail) => {
-    const proc = spawn(process.execPath, [child, dbPath, mode, '300'], { stdio: ['ignore', 'pipe', 'pipe'] })
+    const proc = spawn(process.execPath, [...nodeArgs, child, dbPath, mode, '300'], { stdio: ['ignore', 'pipe', 'pipe'] })
     let out = ''; let err = ''
     const timer = setTimeout(() => { kill(proc.pid!); fail(new Error(`child ${mode} timeout; stderr ${err}`)) }, 150_000)
     proc.stderr.on('data', (c) => { err += c })

@@ -1,5 +1,5 @@
-// P3 PR-2b 崩溃测试子进程（tests/wal-checkpoint-p3.test.ts 用 esbuild 打包后以 node 运行，然后被强杀）。
-// 用法：node child.mjs <dbPath> <before|during|after> <chapters>
+// P3 PR-2b 崩溃测试子进程（tests/wal-checkpoint-p3.test.ts 直接以 node 运行本 TS 文件及其导入的产品源码，然后强杀）。
+// 用法：node --experimental-transform-types --import ./tests/fixtures/ts-resolve-hook.mjs tests/fixtures/wal-crash-child.ts <dbPath> <before|during|after> <chapters>
 // 输出一行 `READY {json}` 后保持存活等待被杀。
 import { DatabaseSync } from 'node:sqlite'
 import { AppDatabase } from '../../src/main/database/database'
