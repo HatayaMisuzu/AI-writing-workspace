@@ -1530,7 +1530,10 @@ try {
       let last = stateOf(); trace.push({ t: 0, event: `state ${last}` })
       const observer = new MutationObserver(() => { const now = stateOf(); if (now !== last) { last = now; trace.push({ t: Math.round(performance.now() - t0), event: `state ${now}` }) } })
       observer.observe(document.querySelector('.editor-toolbar'), { subtree: true, attributes: true, childList: true, characterData: true })
-      window.__p3SaveTrace = { t0, trace, observer }
+      // 主线程长任务（>50ms）：区分「保存计时器被阻塞」与保存本身慢
+      const longTasks = new PerformanceObserver((list) => { for (const e of list.getEntries()) trace.push({ t: Math.round(e.startTime - t0), event: `longtask ${Math.round(e.duration)}ms` }) })
+      try { longTasks.observe({ type: 'longtask' }) } catch { trace.push({ t: 0, event: 'longtask-unsupported' }) }
+      window.__p3SaveTrace = { t0, trace, observer, longTasks }
     })
     const savedBeforeUndo = await readSaved()
     await page.keyboard.press('Control+z')
@@ -1539,7 +1542,7 @@ try {
     assert.equal(await page.evaluate(() => (document.querySelector('.manuscript-editor').textContent.match(/远处月/g) ?? []).length), 0, '一次撤销完全恢复')
     let saveError
     await waitSaved(page).catch((error) => { saveError = error })
-    const trace = await page.evaluate(() => { const d = window.__p3SaveTrace; d.observer.disconnect(); d.trace.push({ t: Math.round(performance.now() - d.t0), event: 'diag-end' }); return d.trace })
+    const trace = await page.evaluate(() => { const d = window.__p3SaveTrace; d.observer.disconnect(); d.longTasks.disconnect(); d.trace.sort((x, y) => x.t - y.t); d.trace.push({ t: Math.round(performance.now() - d.t0), event: 'diag-end' }); return d.trace })
     const savedAfter = await readSaved()
     const events = trace.map((item) => item.event)
     const undoAt = trace.findIndex((item) => item.event === 'undo-done')
