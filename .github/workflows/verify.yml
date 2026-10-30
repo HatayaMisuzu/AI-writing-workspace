@@ -24,7 +24,7 @@ jobs:
           for i in $(seq 1 10); do
             echo "=== G run $i ===" | tee -a g-loop.log
             if npx vitest run tests/checkpoint-release-p44.test.ts -t "G：" 2>&1 | tee g-run.log; then r=PASS; else r=FAIL; fail=1; fi
-            grep -E "G-FIRST|natural 1000ch|converge" g-run.log | sed "s/^/run$i /" | tee -a g-loop.log
+            grep -E "G-FIRST|natural 1000ch|converge" g-run.log | sed "s/^/run$i /" | tee -a g-loop.log || echo "run$i (no G log lines)" | tee -a g-loop.log
             echo "run$i RESULT=$r" | tee -a g-loop.log
           done
           {
@@ -88,7 +88,7 @@ jobs:
           for i in $(seq 1 10); do
             echo "=== G run $i ===" | tee -a g-loop.log
             if npx vitest run tests/checkpoint-release-p44.test.ts -t "G：" 2>&1 | tee g-run.log; then r=PASS; else r=FAIL; fail=1; fi
-            grep -E "G-FIRST|natural 1000ch|converge" g-run.log | sed "s/^/run$i /" | tee -a g-loop.log
+            grep -E "G-FIRST|natural 1000ch|converge" g-run.log | sed "s/^/run$i /" | tee -a g-loop.log || echo "run$i (no G log lines)" | tee -a g-loop.log
             echo "run$i RESULT=$r" | tee -a g-loop.log
           done
           {
