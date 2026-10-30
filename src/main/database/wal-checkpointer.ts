@@ -119,6 +119,11 @@ export class WalCheckpointer {
   }
 
   /** 等到没有运行中/排队的检查点。 */
+  /** P3 PR-44：等当前正在跑（无则排队中）的那一轮结束并返回其结果；都没有则 undefined。不等后续排队轮，持续写入时也能逐轮返回。 */
+  currentRound(): Promise<CheckpointOutcome | undefined> {
+    return this.running ?? this.queued ?? Promise.resolve(undefined)
+  }
+
   async idle(): Promise<void> {
     while (this.queued || this.running) await (this.queued ?? this.running)
   }
