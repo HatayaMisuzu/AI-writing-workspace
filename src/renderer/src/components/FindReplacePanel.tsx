@@ -11,19 +11,24 @@ const EMPTY: FindResult = { matches: [], truncated: false }
  * 章内查找/替换（Ctrl+F / Ctrl+H）。纯本地，无网络、无 AI；小黑屋里同样可用。
  * 所有修改都走编辑器事务（closeHistory 让每次替换自成一步撤销），保存沿用 onUpdate → SaveCoordinator。
  */
-export function FindReplacePanel({ editor, mode, focusToken, scroller, onMode, onClose }: {
+export interface FindInitial { query: string; caseSensitive: boolean; regex: boolean; anchor: number }
+
+export function FindReplacePanel({ editor, mode, focusToken, scroller, onMode, onClose, initial }: {
   editor: Editor; mode: 'find' | 'replace'; focusToken: number; scroller(): HTMLElement | null
+  /** 全书查找跳转：预填查询并定位到 anchor 处的命中。 */
+  initial?: FindInitial
   onMode(mode: 'find' | 'replace'): void; onClose(): void
 }) {
-  const [query, setQuery] = useState('')
+  const [query, setQuery] = useState(initial?.query ?? '')
   const [replacement, setReplacement] = useState('')
-  const [caseSensitive, setCaseSensitive] = useState(false)
-  const [regex, setRegex] = useState(false)
+  const [caseSensitive, setCaseSensitive] = useState(initial?.caseSensitive ?? false)
+  const [regex, setRegex] = useState(initial?.regex ?? false)
   const [result, setResult] = useState<FindResult>(EMPTY)
   const [current, setCurrent] = useState(-1)
   const [docVersion, setDocVersion] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
-  const anchorRef = useRef<number>(editor.state.selection.from)
+  const anchorRef = useRef<number>(initial?.anchor ?? editor.state.selection.from)
+  const revealPending = useRef(Boolean(initial))
 
   useEffect(() => { inputRef.current?.focus(); inputRef.current?.select() }, [focusToken])
 
@@ -40,10 +45,16 @@ export function FindReplacePanel({ editor, mode, focusToken, scroller, onMode, o
       if (editor.isDestroyed) return
       const next = findMatches(editor.state.doc, query, { caseSensitive, regex })
       setResult(next)
-      setCurrent(next.matches.length ? matchIndexAtOrAfter(next.matches, anchorRef.current) : -1)
+      const index = next.matches.length ? matchIndexAtOrAfter(next.matches, anchorRef.current) : -1
+      setCurrent(index)
+      if (revealPending.current && index >= 0) {
+        revealPending.current = false
+        editor.commands.setTextSelection({ from: next.matches[index].from, to: next.matches[index].to })
+        void revealPos(editor.view, scroller(), next.matches[index].from)
+      }
     }, FIND_DEBOUNCE_MS)
     return () => clearTimeout(timer)
-  }, [editor, query, caseSensitive, regex, docVersion])
+  }, [editor, query, caseSensitive, regex, docVersion, scroller])
 
   // 高亮：命中或当前项变了就重建；悬停/分块等装饰重绘 DOM 后也重建（rAF 合并）
   useEffect(() => {
