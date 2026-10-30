@@ -3,7 +3,7 @@
  * 只在文档含超长段时接管（普通文档仍走原生，行为不变）。
  * 原因：分块超长段（long-paragraph-chunks.ts：段内 display:block + content-visibility:auto 的块）里，
  * 屏外块按占位估高，滚动目标会随块真正布局而移动；这里统一成一次 ProseMirror 事务设选区 +
- * revealPos（逐帧量一次、瞬时滚动、稳定即停，有帧数上限），与查找跳转同一条路径。
+ * revealDocEdge（直接贴顶/贴底，逐帧等分块布局稳定，有帧数上限）。
  */
 import type { Node as ProseMirrorNode } from '@tiptap/pm/model'
 import { Plugin, PluginKey, Selection, TextSelection } from '@tiptap/pm/state'
@@ -45,7 +45,26 @@ export const revealTarget = (selection: Selection): number => {
 
 export const docEdgeNavigationKey = new PluginKey('docEdgeNavigation')
 
-export function docEdgeNavigationPlugin(options: { reveal(view: EditorView, pos: number): void; enabled?(): boolean }): Plugin {
+const frame = (): Promise<void> => new Promise((resolve) => requestAnimationFrame(() => resolve()))
+
+/**
+ * 文首/文末的滚动不量光标几何：文末就是滚动容器底部。屏外分块按占位估高，滚到底后块真正布局、scrollHeight 会变，
+ * 所以逐帧再贴底，直到 scrollHeight 连续 3 帧不变（最多 maxPasses 帧）。不调用 coordsAtPos，不触发整段布局。
+ */
+export async function revealDocEdge(scroller: HTMLElement | null | undefined, edge: DocEdge, maxPasses = 30): Promise<void> {
+  if (!scroller) return
+  if (edge === 'start') { scroller.scrollTo({ top: 0, behavior: 'instant' }); return }
+  let lastHeight = -1; let stable = 0
+  for (let pass = 0; pass < maxPasses && stable < 3; pass += 1) {
+    scroller.scrollTo({ top: scroller.scrollHeight, behavior: 'instant' })
+    await frame()
+    stable = scroller.scrollHeight === lastHeight ? stable + 1 : 0
+    lastHeight = scroller.scrollHeight
+  }
+  scroller.scrollTo({ top: scroller.scrollHeight, behavior: 'instant' })
+}
+
+export function docEdgeNavigationPlugin(options: { reveal(view: EditorView, pos: number, edge: DocEdge): void; enabled?(): boolean }): Plugin {
   return new Plugin({
     key: docEdgeNavigationKey,
     props: {
@@ -54,7 +73,7 @@ export function docEdgeNavigationPlugin(options: { reveal(view: EditorView, pos:
         if (!edge || (options.enabled && !options.enabled()) || !hasLongParagraph(view.state.doc)) return false
         const selection = docEdgeSelection(view.state.doc, view.state.selection, edge, event.shiftKey)
         view.dispatch(view.state.tr.setSelection(selection))
-        options.reveal(view, revealTarget(selection))
+        options.reveal(view, revealTarget(selection), edge)
         return true
       }
     }

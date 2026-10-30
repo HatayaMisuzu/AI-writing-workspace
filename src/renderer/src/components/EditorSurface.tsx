@@ -14,7 +14,7 @@ import { SaveCoordinator, type SaveState } from '../services/save-coordinator'
 import { BATCH_PROPOSE_LIMIT, LINT_PAGE_SIZE, batchSlice, pageLintGroups } from '../services/lint-drawer-paging'
 import { shiftIssuesAfterEdit, type AppliedLocalEdit } from '../services/lint-incremental'
 import { longParagraphChunksPlugin } from '../services/long-paragraph-chunks'
-import { docEdgeNavigationPlugin } from '../services/doc-edge-navigation'
+import { docEdgeNavigationPlugin, revealDocEdge } from '../services/doc-edge-navigation'
 import { revealPos } from '../services/find-highlight'
 import { isStaleContent } from '../services/content-adoption'
 import { NameMatcher, termsFromCharacters } from '../../../shared/name-matcher'
@@ -126,7 +126,7 @@ export function EditorSurface({ node, content, focusMode, onFocusMode, onSaved, 
   const shortcutRef = useRef<(() => void) | undefined>(undefined)
   const chunkExtension = useMemo(() => Extension.create({ name: 'longParagraphChunks', addProseMirrorPlugins: () => [longParagraphChunksPlugin()] }), [])
   const docEdgeExtension = useMemo(() => Extension.create({ name: 'docEdgeNavigation',
-    addProseMirrorPlugins: () => [docEdgeNavigationPlugin({ reveal: (view, pos) => { void revealPos(view, writingPageRef.current?.parentElement, pos) } })] }), [])
+    addProseMirrorPlugins: () => [docEdgeNavigationPlugin({ reveal: (_view, _pos, edge) => { void revealDocEdge(writingPageRef.current?.parentElement, edge) } })] }), [])
   const hoverExtension = useMemo(() => Extension.create({ name: 'characterHover',
     addProseMirrorPlugins: () => [characterHoverPlugin({ onShortcut: () => shortcutRef.current?.() })] }), [])
   useEffect(() => {
