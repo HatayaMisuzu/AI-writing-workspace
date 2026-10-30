@@ -71,10 +71,14 @@ export function BookFindView({ projectId, chapters, onOpenHit, onBeforeReplace, 
   const canReplace = !!progress?.done && !progress.error && !progress.truncated && selectedGroups.length > 0 && !busy
   const titleOf = (id: string): string => chapters.find((node) => node.id === id)?.title ?? id
 
+  // 防重入：busy 是 state，同一事件循环里连点两次时还没重渲染，按钮仍可点；用 ref 同步拦住第二次（不发第二次 IPC）
+  const busyRef = useRef(false)
   const runBusy = async (kind: 'replace' | 'restore', task: () => Promise<void>): Promise<void> => {
+    if (busyRef.current) return
+    busyRef.current = true
     setBusy(kind); onBusy(true); setReplaceError(undefined)
     try { await onBeforeReplace(); await task() }
-    finally { setBusy(undefined); onBusy(false) }
+    finally { busyRef.current = false; setBusy(undefined); onBusy(false) }
   }
   const replaceAll = (): Promise<void> => runBusy('replace', async () => {
     const ids = selectedGroups.map((group) => group.documentId)

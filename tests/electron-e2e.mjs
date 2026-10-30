@@ -1846,7 +1846,8 @@ try {
       const observer = new PerformanceObserver((list) => { for (const entry of list.getEntries()) longTasks.push(Math.round(entry.duration)) })
       observer.observe({ type: 'longtask' })
       const started = performance.now()
-      document.querySelector(clickSelector).click()
+      // 防重入探针：同一任务内连点两次（React 尚未重渲染、按钮仍可点），第二次不得再发 IPC
+      const target = document.querySelector(clickSelector); target.click(); target.click()
       while (!document.querySelector(doneSelector)) {
         if (performance.now() - started > 60_000) throw new Error(`timeout waiting for ${doneSelector}`)
         await frame()
@@ -1861,6 +1862,14 @@ try {
       return (await window.workspace.documents.get(projectId, node.id)).plainText
     }, { projectId: book.id, title })
     const editorText = () => page.locator('.manuscript-editor').innerText()
+    const snapshotKinds = (title) => page.evaluate(async ({ projectId, title }) => {
+      const node = (await window.workspace.documents.tree(projectId)).find((item) => item.title === title)
+      const snaps = await window.workspace.snapshots.list(projectId, node.id)
+      return { bookReplace: snaps.filter((snap) => snap.metadata?.kind === 'book_replace').length, preRestore: snaps.filter((snap) => snap.reason === 'pre_restore').length }
+    }, { projectId: book.id, title })
+    // Windows 阈值 10s（组长决定 2026-10-30）：库用默认回滚日志（journal_mode=DELETE，synchronous=FULL），
+    // Windows runner 上约 30MB 单事务的 COMMIT fsync 实测 2.7–5.3s（事务体约 1.2s）；不改 WAL、不拆事务。Linux 仍 5s。
+    const batchLimitMs = process.platform === 'win32' ? 10_000 : 5_000
     const nav = page.getByRole('navigation', { name: '作品内容区' })
     // 打开章（第 997 章）有未保存输入时直接去全书查找：切区段先 flush，输入不丢
     await page.locator('.manuscript-editor').click()
@@ -1881,11 +1890,14 @@ try {
     }
     assert.ok((await page.getByRole('dialog').textContent()).includes('当前章的撤销记录会清空，可用快照整批恢复'), '确认框须提示撤销记录会清空')
     const replaced = await timeAction('[data-testid="book-replace-confirm"]', '[data-testid="book-replace-done"]')
-    process.stdout.write(`P3 book-replace phases: ${JSON.stringify(await page.evaluate(() => window.__bookReplaceTiming))}\n`)
+    const replacePhases = JSON.stringify(await page.evaluate(() => window.__bookReplaceTiming))
+    process.stdout.write(`P3 book-replace phases: ${replacePhases}\n`)
     process.stdout.write(`P3 book-replace longtask control (replace): ${replaced.controlMs}ms (need >=100ms)\n`)
     assert.ok(replaced.controlMs >= 100, `longtask 对照：忙等 120ms 只记录到 ${replaced.controlMs}ms，监听不可信`)
-    process.stdout.write(`P3 book-replace 1000 chapters: replace-all ${replaced.doneMs}ms (limit 5000ms), max long task ${replaced.maxLongTask}ms over ${replaced.longTasks}; ${replaced.text}\n`)
-    assert.ok(replaced.doneMs <= 5000, `全部替换 ${replaced.doneMs}ms 应 ≤5s`)
+    process.stdout.write(`P3 book-replace 1000 chapters: replace-all ${replaced.doneMs}ms (limit ${batchLimitMs}ms), max long task ${replaced.maxLongTask}ms over ${replaced.longTasks}; ${replaced.text}\n`)
+    assert.ok(replaced.doneMs <= batchLimitMs, `全部替换 ${replaced.doneMs}ms 应 ≤${batchLimitMs}ms；分阶段（读/事务体/提交）${replacePhases}`)
+    assert.equal(await page.getByTestId('book-replace-error').count(), 0, '连点两次不出现第二次替换的冲突错误')
+    assert.equal((await snapshotKinds('第1章')).bookReplace, 1, '连点两次只发一次 replaceBatch（每章只一份全书替换快照）')
     assert.match(replaced.text, /已替换 999 章 9,990 处/)
     assert.equal(await page.getByTestId('book-replace-error').count(), 0)
     const ch1 = await chapterText('第1章'); const ch2 = await chapterText('第2章'); const ch997 = await chapterText('第997章')
@@ -1925,9 +1937,12 @@ try {
     const restored = await timeAction('[data-testid="book-restore"]', '[data-testid="book-restore-summary"]')
     process.stdout.write(`P3 book-replace longtask control (restore): ${restored.controlMs}ms (need >=100ms)\n`)
     assert.ok(restored.controlMs >= 100, `longtask 对照：忙等 120ms 只记录到 ${restored.controlMs}ms，监听不可信`)
-    process.stdout.write(`P3 book-restore phases: ${JSON.stringify(await page.evaluate(() => window.__bookRestoreTiming))}\n`)
-    process.stdout.write(`P3 book-replace 1000 chapters: restore-batch ${restored.doneMs}ms (limit 5000ms), max long task ${restored.maxLongTask}ms over ${restored.longTasks}; ${restored.text}\n`)
-    assert.ok(restored.doneMs <= 5000, `整批恢复 ${restored.doneMs}ms 应 ≤5s`)
+    const restorePhases = JSON.stringify(await page.evaluate(() => window.__bookRestoreTiming))
+    process.stdout.write(`P3 book-restore phases: ${restorePhases}\n`)
+    process.stdout.write(`P3 book-replace 1000 chapters: restore-batch ${restored.doneMs}ms (limit ${batchLimitMs}ms), max long task ${restored.maxLongTask}ms over ${restored.longTasks}; ${restored.text}\n`)
+    assert.ok(restored.doneMs <= batchLimitMs, `整批恢复 ${restored.doneMs}ms 应 ≤${batchLimitMs}ms；分阶段（读/事务体/提交）${restorePhases}`)
+    assert.equal(await page.getByTestId('book-replace-error').count(), 0, '连点两次不出现恢复错误')
+    assert.equal((await snapshotKinds('第1章')).preRestore, 1, '连点两次只发一次 restoreBatch（每章只一份 pre_restore 快照）')
     assert.equal(restored.text, '已恢复 998 章。')
     const skippedText = await page.getByTestId('book-restore-skipped').textContent()
     assert.ok(skippedText.includes('以下 1 章没有恢复：替换后又改过') && skippedText.includes('第997章'), skippedText)
