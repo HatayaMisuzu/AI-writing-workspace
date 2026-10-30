@@ -1182,6 +1182,25 @@ try {
     await waitSaved(page)
   })
 
+  await record('P3 小修⑤ 定位 → 关闭校对 → 打字：选区折叠在定位词末尾，只插入不替换', async () => {
+    const page = running.page
+    await openChapter(page, '词表单条章')
+    await page.locator('.manuscript-editor', { hasText: '宾客在坐' }).waitFor()
+    await openLint(page)
+    await page.locator('.lint-group[data-group="wordlist_replace"] .proofread-issue').first().getByRole('button', { name: '定位' }).click()
+    assert.equal(await page.evaluate(() => window.getSelection()?.toString()), '在坐', '定位应选中原词')
+    await page.getByRole('button', { name: '关闭校对' }).click()
+    const sel = await page.evaluate(() => { const s = window.getSelection(); return { collapsed: s?.isCollapsed, before: s?.anchorNode?.textContent?.slice(0, s.anchorOffset) } })
+    assert.equal(sel.collapsed, true, '关闭校对后选区应已折叠')
+    assert.ok(sel.before?.endsWith('宾客在坐'), `光标应在定位词末尾，实际前文 ${sel.before}`)
+    await page.keyboard.type('X')
+    await page.locator('.manuscript-editor', { hasText: '宾客在坐X' }).waitFor()
+    await page.keyboard.press('Control+z')
+    await page.locator('.manuscript-editor', { hasText: '宾客在坐' }).waitFor()
+    assert.ok(!(await editorText(page)).includes('在坐X'), '撤销后回到原文')
+    await waitSaved(page)
+  })
+
   await record('F13 ⑬ 小黑屋内不自动校对、无校对入口与计数，网络 0；出屋后计数正确', async () => {
     const page = running.page
     await openChapter(page, '黑屋校对章')

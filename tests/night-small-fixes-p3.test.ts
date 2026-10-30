@@ -53,3 +53,11 @@ describe('AssistantPanel 记忆提案处理失败走 userErrorMessage', () => {
     expect(userErrorMessage(new Error("Error invoking remote method 'memories:confirm': Error: 提案已失效"))).toBe('提案已失效')
   })
 })
+
+describe('关闭校对折叠「定位」留下的选区', () => {
+  it('关闭按钮走 closeProofread，折叠到选区末尾', () => {
+    const source = read('src/renderer/src/components/EditorSurface.tsx')
+    expect(source).toContain('aria-label="关闭校对" onClick={closeProofread}')
+    expect(source).toContain('setTextSelection(editor.state.selection.to)')
+  })
+})

@@ -484,6 +484,11 @@ export function EditorSurface({ node, content, focusMode, onFocusMode, onSaved, 
     return [...map.values()].filter((items) => items.length > 1)
   }, [visibleLocalIssues])
   // 抽屉里「原文」整页只取一次正文，避免每条提示各自 getText（上万条时是 O(条数 × 字数)）
+  /** 关闭校对：「定位」留下的选区折叠到其末尾（光标落在定位词之后），避免接着打字把原词替换掉。 */
+  const closeProofread = (): void => {
+    setProofreadOpen(false)
+    if (editor && !editor.isDestroyed && !editor.state.selection.empty) editor.chain().focus().setTextSelection(editor.state.selection.to).run()
+  }
   const drawerText = proofreadOpen ? (editor?.getText({ blockSeparator: '\n\n' }) ?? '') : ''
 
   const ignoreHere = async (issue: LocalLintIssue): Promise<void> => {
@@ -544,7 +549,7 @@ export function EditorSurface({ node, content, focusMode, onFocusMode, onSaved, 
       onIgnoreHere={() => { const { hit } = hoverCard; setHoverCard(undefined); if (editor) ignoreHoverAt(editor.view, { from: hit.pmFrom, to: hit.pmTo }) }}
       onMouseEnter={() => undefined} onMouseLeave={() => setHoverCard(undefined)} />}
     {proofreadOpen && !blackroomLocked && <aside className="proofread-drawer" aria-label="校对结果">
-      <header><div><h2>校对</h2><p>本地规则可直接修正；AI 建议会先进入修改提案。</p></div><button className="icon-button" aria-label="关闭校对" onClick={() => setProofreadOpen(false)}><X size={18} /></button></header>
+      <header><div><h2>校对</h2><p>本地规则可直接修正；AI 建议会先进入修改提案。</p></div><button className="icon-button" aria-label="关闭校对" onClick={closeProofread}><X size={18} /></button></header>
       <div className="proofread-actions"><button onClick={() => void runLocalLint(editor?.getText({ blockSeparator: '\n\n' }) ?? '', { force: true })}>重新检查本地规则</button><button className="primary" disabled={proofreadBusy} onClick={() => void runAiProofread()}><Sparkles size={15} />{proofreadBusy ? 'AI 校对中…' : '运行 AI 校对'}</button></div>
       {proofreadError && <div className="inline-error" role="alert">{proofreadError}</div>}
       <section data-testid="local-lint"><h3>本地规则 <span>{visibleLocalIssues.length}</span></h3>
