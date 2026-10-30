@@ -1691,6 +1691,18 @@ try {
     // 页面内计时：从输入事件起（含 150ms 去抖），到首个分组出现 / 全部完成；同时记录主线程长任务
     const timeBookFind = (query) => page.evaluate(async (query) => {
       const frame = () => new Promise((resolve) => requestAnimationFrame(() => resolve()))
+      // 对照：同一套 longtask 监听下同步忙等约 120ms，必须能记录到 ≥100ms 的任务；记录完断开，真实测量用新的空记录
+      const controlTasks = []
+      const control = new PerformanceObserver((list) => { for (const entry of list.getEntries()) controlTasks.push(Math.round(entry.duration)) })
+      control.observe({ type: 'longtask' })
+      await frame()
+      const busyUntil = performance.now() + 120
+      while (performance.now() < busyUntil) { /* 故意占住主线程 */ }
+      await frame(); await frame(); await new Promise((resolve) => setTimeout(resolve, 50))
+      for (const entry of control.takeRecords()) controlTasks.push(Math.round(entry.duration))
+      control.disconnect()
+      const controlMs = controlTasks.length ? Math.max(...controlTasks) : 0
+      await frame()
       const longTasks = []
       const observer = new PerformanceObserver((list) => { for (const entry of list.getEntries()) longTasks.push(Math.round(entry.duration)) })
       observer.observe({ type: 'longtask' })
@@ -1713,10 +1725,12 @@ try {
       const doneMs = performance.now() - started
       await frame(); await frame()
       observer.disconnect()
-      return { firstMs: Math.round(firstMs), doneMs: Math.round(doneMs), maxLongTask: longTasks.length ? Math.max(...longTasks) : 0, longTasks: longTasks.length,
+      return { controlMs, firstMs: Math.round(firstMs), doneMs: Math.round(doneMs), maxLongTask: longTasks.length ? Math.max(...longTasks) : 0, longTasks: longTasks.length,
         summary: document.querySelector('[data-testid="book-find-summary"]').textContent, groups: document.querySelectorAll('[data-testid="book-find-group"]').length }
     }, query)
     const all = await timeBookFind('远处星')
+    process.stdout.write(`P3 book-find longtask control (all): ${all.controlMs}ms (need >=100ms)\n`)
+    assert.ok(all.controlMs >= 100, `longtask 对照：忙等 120ms 只记录到 ${all.controlMs}ms，监听不可信`)
     process.stdout.write(`P3 book-find 1000 chapters: seed ${book.seedMs}ms; first-group ${all.firstMs}ms (limit 1000ms), done ${all.doneMs}ms (limit 5000ms), max long task ${all.maxLongTask}ms over ${all.longTasks} (limit 200ms); ${all.summary}\n`)
     assert.equal(all.summary, '1000 章 · 共 10,000 处')
     assert.equal(all.groups, 200, '一次只渲染前 200 章')
@@ -1725,11 +1739,15 @@ try {
     assert.ok(all.maxLongTask <= 200, `搜索期间最长主线程任务 ${all.maxLongTask}ms 应 ≤200ms`)
     // 截断：「狠狠」每章 176 处 × 1000 = 17.6 万处 > 10 万
     const over = await timeBookFind('狠狠')
+    process.stdout.write(`P3 book-find longtask control (over): ${over.controlMs}ms (need >=100ms)\n`)
+    assert.ok(over.controlMs >= 100, `longtask 对照：忙等 120ms 只记录到 ${over.controlMs}ms，监听不可信`)
     process.stdout.write(`P3 book-find truncated: done ${over.doneMs}ms, max long task ${over.maxLongTask}ms; ${over.summary}\n`)
     assert.match(over.summary, /共 100,000 处.*请缩小查找范围/)
     assert.equal(await page.getByRole('button', { name: /替换/ }).count(), 0, '2a 没有替换入口')
     // 唯一命中：第 997 章，点击跳转并定位
     const one = await timeBookFind('砚台石')
+    process.stdout.write(`P3 book-find longtask control (one): ${one.controlMs}ms (need >=100ms)\n`)
+    assert.ok(one.controlMs >= 100, `longtask 对照：忙等 120ms 只记录到 ${one.controlMs}ms，监听不可信`)
     process.stdout.write(`P3 book-find single hit: done ${one.doneMs}ms, max long task ${one.maxLongTask}ms; ${one.summary}\n`)
     assert.equal(one.summary, '1 章 · 共 1 处')
     await page.getByTestId('book-find-group').filter({ hasText: '第997章' }).locator('.book-find-hit').click()
