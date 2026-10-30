@@ -1699,6 +1699,11 @@ try {
       const started = performance.now()
       setter.call(el, query); el.dispatchEvent(new Event('input', { bubbles: true }))
       let firstMs
+      // 先等旧结果被清掉（查询变化即清空），再开始认新结果，避免读到上一次的 done
+      while (document.querySelector('[data-testid="book-find-summary"]')) {
+        if (performance.now() - started > 5_000) throw new Error('book find stale results not cleared')
+        await frame()
+      }
       while (true) {
         if (firstMs === undefined && document.querySelector('[data-testid="book-find-group"]')) firstMs = performance.now() - started
         if (document.querySelector('[data-testid="book-find-summary"][data-done="true"]') && firstMs !== undefined) break
