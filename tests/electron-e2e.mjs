@@ -1924,8 +1924,8 @@ try {
       t = performance.now(); await window.workspace.documents.get(projectId, ch500.id); const switchMs = performance.now() - t
       const during = await d.walCheckpoint()
       const started = performance.now(); let after = during
-      while (after.busy && performance.now() - started < 60_000) { await new Promise((resolve) => setTimeout(resolve, 20)); after = await d.walCheckpoint() }
-      return { busyBefore: before.busy, busyAfterProbe: during.busy, walMB: +(before.walBytes / 1048576).toFixed(1), autoCheckpointDuring: before.autoCheckpoint, ipcMs: Math.round(ipcMs), saveMs: Math.round(saveMs), switchMs: Math.round(switchMs), checkpoint: after.last, autoCheckpointAfter: after.autoCheckpoint, waitedMs: Math.round(performance.now() - started), dbPath: before.dbPath }
+      while ((after.busy || after.autoCheckpoint === 0) && performance.now() - started < 60_000) { await new Promise((resolve) => setTimeout(resolve, 20)); after = await d.walCheckpoint() }
+      return { busyBefore: before.busy, busyAfterProbe: during.busy, walMB: +(before.walBytes / 1048576).toFixed(1), autoCheckpointDuring: before.autoCheckpoint, ipcMs: Math.round(ipcMs), saveMs: Math.round(saveMs), switchMs: Math.round(switchMs), checkpoint: after.last, autoCheckpointAfter: after.autoCheckpoint, waitedMs: Math.round(performance.now() - started), release: after.releases?.[after.releases.length - 1] ?? null }
     }, { projectId: book.id, label })
     const assertProbe = (label, probe) => {
       process.stdout.write(`P3 book-${label} background checkpoint: ${JSON.stringify(probe)}\n`)
@@ -1962,6 +1962,12 @@ try {
       }
       return Date.now() - started
     }, { projectId: book.id, started: saveStarted })
+    // P3 PR-44 commit 1：主进程侧计时（diagnostics 通道，非打包）——替换后第一次普通保存的 COMMIT 不应再同步做大检查点
+    const walAfterSave = await page.evaluate(() => window.workspace.diagnostics.walCheckpoint())
+    const firstCommit = walAfterSave.commits.find((c) => c.at >= saveStarted)
+    process.stdout.write(`P3 book-replace first save after replace: main COMMIT ${firstCommit?.commitMs}ms autoCheckpoint=${firstCommit?.autoCheckpoint} (limit 50ms); releases ${JSON.stringify(walAfterSave.releases)}; commits since keystroke ${JSON.stringify(walAfterSave.commits.filter((c) => c.at >= saveStarted))}\n`)
+    assert.ok(firstCommit, '替换后第一次保存应有主进程 COMMIT 记录')
+    assert.ok(firstCommit.commitMs < 50, `替换后第一次保存主进程 COMMIT ${firstCommit.commitMs}ms 应 <50ms（不同步做检查点）`)
     process.stdout.write(`P3 book-replace open chapter: refresh ${refreshMs}ms (limit 1000ms), save after undo/edit ${saveMs}ms (limit 2000ms)\n`)
     assert.ok(refreshMs <= 1000, `替换后打开章刷新 ${refreshMs}ms 应 ≤1s`)
     assert.ok(saveMs <= 2000, `替换后撤销/继续写的保存 ${saveMs}ms 应 ≤2s`)
