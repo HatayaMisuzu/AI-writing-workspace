@@ -1816,8 +1816,13 @@ try {
     const replaceButton = page.getByTestId('book-replace-all')
     assert.equal(await replaceButton.textContent(), '替换 9,990 处 / 999 章', '取消勾选的章不计入')
     await replaceButton.click()
-    await page.getByText('当前章的撤销记录会清空，可用快照整批恢复', { exact: false }).waitFor()
+    try { await page.getByTestId('book-replace-confirm').waitFor({ timeout: 10_000 }) } catch (error) {
+      const diag = await page.evaluate(() => ({ disabled: document.querySelector('[data-testid="book-replace-all"]')?.hasAttribute('disabled'), text: document.querySelector('[data-testid="book-replace-all"]')?.textContent, error: document.querySelector('[data-testid="book-replace-error"]')?.textContent, summary: document.querySelector('[data-testid="book-find-summary"]')?.textContent, modal: document.querySelector('[role="dialog"]')?.textContent }))
+      throw new Error(`确认框未出现：${JSON.stringify(diag)}；${error.message}`)
+    }
+    assert.ok((await page.getByRole('dialog').textContent()).includes('当前章的撤销记录会清空，可用快照整批恢复'), '确认框须提示撤销记录会清空')
     const replaced = await timeAction('[data-testid="book-replace-confirm"]', '[data-testid="book-replace-done"]')
+    process.stdout.write(`P3 book-replace phases: ${JSON.stringify(await page.evaluate(() => window.__bookReplaceTiming))}\n`)
     process.stdout.write(`P3 book-replace longtask control (replace): ${replaced.controlMs}ms (need >=100ms)\n`)
     assert.ok(replaced.controlMs >= 100, `longtask 对照：忙等 120ms 只记录到 ${replaced.controlMs}ms，监听不可信`)
     process.stdout.write(`P3 book-replace 1000 chapters: replace-all ${replaced.doneMs}ms (limit 5000ms), max long task ${replaced.maxLongTask}ms over ${replaced.longTasks}; ${replaced.text}\n`)

@@ -77,12 +77,18 @@ export function BookFindView({ projectId, chapters, onOpenHit, onBeforeReplace, 
     const ids = selectedGroups.map((group) => group.documentId)
     try {
       // 按库里最新内容重新计算（已 flush），不用搜索时的旧结果；提交时逐章带 expectedRevision
+      const t0 = performance.now()
       const plan = await prepareBookReplace({ chapterIds: ids, schema, query, replacement, options: { caseSensitive, regex },
         load: (batchIds) => Promise.all(batchIds.map((id) => window.workspace.documents.get(projectId, id))) })
       if (plan.error) { setReplaceError(plan.error); return }
       if (plan.truncated) { setReplaceError('命中超过 100,000 处，未替换任何章节：请缩小查找范围'); return }
       if (!plan.items.length) { setReplaceError('没有可替换的内容（章节可能已变化），请重新查找'); return }
+      const t1 = performance.now()
       const result = await window.workspace.documents.replaceBatch({ projectId, items: plan.items, query, replacement, regex, caseSensitive })
+      const t2 = performance.now()
+      // 分阶段耗时（e2e 读取；无网络、无副作用）
+      const timingTarget = window as unknown as { __bookReplaceTiming?: Record<string, number> }
+      timingTarget.__bookReplaceTiming = { prepareMs: Math.round(t1 - t0), ipcMs: Math.round(t2 - t1), chapters: plan.items.length }
       onLastBatch({ batchId: result.batchId, chapters: result.chapters, hits: result.hits })
       await onContentChanged(result.contents.map((item) => item.documentId)).catch((error: unknown) => setReplaceError(`已替换，但刷新当前章失败：${error instanceof Error ? error.message : String(error)}`))
     } catch (error) {
