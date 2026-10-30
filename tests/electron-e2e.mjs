@@ -1867,9 +1867,13 @@ try {
       const snaps = await window.workspace.snapshots.list(projectId, node.id)
       return { bookReplace: snaps.filter((snap) => snap.metadata?.kind === 'book_replace').length, preRestore: snaps.filter((snap) => snap.reason === 'pre_restore').length }
     }, { projectId: book.id, title })
-    // Windows 阈值 10s（组长决定 2026-10-30）：库用默认回滚日志（journal_mode=DELETE，synchronous=FULL），
-    // Windows runner 上约 30MB 单事务的 COMMIT fsync 实测 2.7–5.3s（事务体约 1.2s）；不改 WAL、不拆事务。Linux 仍 5s。
-    const batchLimitMs = process.platform === 'win32' ? 10_000 : 5_000
+    // 两层断言（组长决定 2026-10-30）：
+    // 1) 两平台「读取 + 事务体」≤5s（不含 COMMIT，取 main 侧返回的分阶段 timing）——代码可控部分，用来抓回归；
+    // 2) 总时长 Linux ≤5s、Windows ≤20s 只作兜底——COMMIT 耗时取决于 runner 磁盘 fsync（默认回滚日志 journal_mode=DELETE，
+    //    Windows runner 上约 30MB 单事务 COMMIT 实测 2.7–7.8s），不是代码可控的；不改 WAL、不拆事务。
+    const codeLimitMs = 5_000
+    const batchLimitMs = process.platform === 'win32' ? 20_000 : 5_000
+    const codeMs = (phases) => { const t = JSON.parse(phases ?? '{}'); return (t.readMs ?? NaN) + (t.bodyMs ?? NaN) }
     const nav = page.getByRole('navigation', { name: '作品内容区' })
     // 打开章（第 997 章）有未保存输入时直接去全书查找：切区段先 flush，输入不丢
     await page.locator('.manuscript-editor').click()
@@ -1895,6 +1899,9 @@ try {
     process.stdout.write(`P3 book-replace longtask control (replace): ${replaced.controlMs}ms (need >=100ms)\n`)
     assert.ok(replaced.controlMs >= 100, `longtask 对照：忙等 120ms 只记录到 ${replaced.controlMs}ms，监听不可信`)
     process.stdout.write(`P3 book-replace 1000 chapters: replace-all ${replaced.doneMs}ms (limit ${batchLimitMs}ms), max long task ${replaced.maxLongTask}ms over ${replaced.longTasks}; ${replaced.text}\n`)
+    const replaceCodeMs = codeMs(replacePhases)
+    process.stdout.write(`P3 book-replace read+body ${replaceCodeMs}ms (limit ${codeLimitMs}ms), total ${replaced.doneMs}ms (limit ${batchLimitMs}ms)\n`)
+    assert.ok(replaceCodeMs <= codeLimitMs, `全部替换 读取+事务体 ${replaceCodeMs}ms 应 ≤${codeLimitMs}ms；分阶段（读/事务体/提交）${replacePhases}`)
     assert.ok(replaced.doneMs <= batchLimitMs, `全部替换 ${replaced.doneMs}ms 应 ≤${batchLimitMs}ms；分阶段（读/事务体/提交）${replacePhases}`)
     assert.equal(await page.getByTestId('book-replace-error').count(), 0, '连点两次不出现第二次替换的冲突错误')
     assert.equal((await snapshotKinds('第1章')).bookReplace, 1, '连点两次只发一次 replaceBatch（每章只一份全书替换快照）')
@@ -1940,6 +1947,9 @@ try {
     const restorePhases = JSON.stringify(await page.evaluate(() => window.__bookRestoreTiming))
     process.stdout.write(`P3 book-restore phases: ${restorePhases}\n`)
     process.stdout.write(`P3 book-replace 1000 chapters: restore-batch ${restored.doneMs}ms (limit ${batchLimitMs}ms), max long task ${restored.maxLongTask}ms over ${restored.longTasks}; ${restored.text}\n`)
+    const restoreCodeMs = codeMs(restorePhases)
+    process.stdout.write(`P3 book-restore read+body ${restoreCodeMs}ms (limit ${codeLimitMs}ms), total ${restored.doneMs}ms (limit ${batchLimitMs}ms)\n`)
+    assert.ok(restoreCodeMs <= codeLimitMs, `整批恢复 读取+事务体 ${restoreCodeMs}ms 应 ≤${codeLimitMs}ms；分阶段（读/事务体/提交）${restorePhases}`)
     assert.ok(restored.doneMs <= batchLimitMs, `整批恢复 ${restored.doneMs}ms 应 ≤${batchLimitMs}ms；分阶段（读/事务体/提交）${restorePhases}`)
     assert.equal(await page.getByTestId('book-replace-error').count(), 0, '连点两次不出现恢复错误')
     assert.equal((await snapshotKinds('第1章')).preRestore, 1, '连点两次只发一次 restoreBatch（每章只一份 pre_restore 快照）')
