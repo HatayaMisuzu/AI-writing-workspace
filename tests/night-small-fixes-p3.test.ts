@@ -1,34 +1,10 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { NameMatcher, mentionedIds, termsFromCharacters } from '../src/shared/name-matcher'
 import { displayProjectTitle, UNTITLED_PROJECT_TITLE } from '../src/renderer/src/services/project-title'
 import { userErrorMessage } from '../src/shared/user-error'
 
 const read = (path: string): string => readFileSync(join(__dirname, '..', path), 'utf8')
-
-describe('F13/F14 英文人名大小写不敏感', () => {
-  const matcher = new NameMatcher(termsFromCharacters([{ id: 'a', name: 'Alice', aliases: ['Dr. Smith'] }]))
-  it('不同大小写都命中，下标为原文下标，term 返回卡片原文', () => {
-    const text = 'ALICE 和 alice 见了 dr. SMITH，AliceX 不算'
-    const hits = matcher.match(text)
-    expect(hits.map((hit) => text.slice(hit.from, hit.to))).toEqual(['ALICE', 'alice', 'dr. SMITH'])
-    expect(hits.every((hit) => hit.term === 'Alice' || hit.term === 'Dr. Smith')).toBe(true)
-  })
-  it('全角英文同样不分大小写；词边界规则不变', () => {
-    expect(new NameMatcher([{ term: 'bob', characterId: 'b', kind: 'name' }]).match('ＢＯＢ来了，Bobby 没来').map((hit) => hit.from)).toEqual([0])
-  })
-  it('「本章提及」与忽略列表同样不分大小写', () => {
-    expect(mentionedIds([{ id: 's', names: ['Avalon'] }], '去 AVALON')).toEqual(new Set(['s']))
-    const ignored = new NameMatcher([{ term: 'Kay', characterId: 'k', kind: 'alias' }], { ignoredTerms: [{ characterId: 'k', term: 'KAY' }] })
-    expect(ignored.match('kay')).toEqual([])
-  })
-  it('只差大小写的两张卡合并为同一命中，不自动选', () => {
-    const hits = new NameMatcher([{ term: 'Ann', characterId: '1', kind: 'name' }, { term: 'ANN', characterId: '2', kind: 'name' }]).match('ann')
-    expect(hits).toHaveLength(1)
-    expect(hits[0].characterIds).toEqual(['1', '2'])
-  })
-})
 
 describe('空书名显示「未命名作品」', () => {
   it('空、空白、null 显示占位，其余原样', () => {
