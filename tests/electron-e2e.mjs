@@ -171,6 +171,52 @@ const timeApplyFirst = (page, expectCount) => page.evaluate(async (expectCount) 
   await frame(); await frame()
   return performance.now() - started
 }, expectCount)
+// 诊断：围绕一段操作抓渲染进程 CPU profile，把自身耗时 top 函数和调用栈打印到 CI 日志
+const cpuProfile = async (page, label, run) => {
+  let session
+  try { session = await page.context().newCDPSession(page); await session.send('Profiler.enable'); await session.send('Profiler.setSamplingInterval', { interval: 500 }); await session.send('Profiler.start') } catch (error) { process.stdout.write(`P3 cpu-profile ${label}: unavailable (${error.message})\n`); return run() }
+  try { return await run() } finally {
+    const { profile } = await session.send('Profiler.stop')
+    const byId = new Map(profile.nodes.map((node) => [node.id, node]))
+    const parent = new Map(); for (const node of profile.nodes) for (const child of node.children ?? []) parent.set(child, node.id)
+    const self = new Map(); profile.samples.forEach((id, i) => self.set(id, (self.get(id) ?? 0) + (profile.timeDeltas[i] ?? 0) / 1000))
+    const name = (node) => { const f = node.callFrame; return `${f.functionName || '(anon)'} ${(f.url || '').split('/').pop()}:${f.lineNumber + 1}` }
+    const total = [...self.values()].reduce((a, b) => a + b, 0)
+    const byFn = new Map(); for (const [id, ms] of self) { const key = name(byId.get(id)); byFn.set(key, (byFn.get(key) ?? 0) + ms) }
+    const top = [...byFn].sort((a, b) => b[1] - a[1]).slice(0, 15).map(([fn, ms]) => `${ms.toFixed(0)}ms ${fn}`)
+    const stacks = [...self].sort((a, b) => b[1] - a[1]).slice(0, 5).map(([id, ms]) => { const chain = []; let cur = id; while (cur !== undefined && chain.length < 14) { chain.push(name(byId.get(cur))); cur = parent.get(cur) } return `${ms.toFixed(0)}ms ${chain.join(' < ')}` })
+    process.stdout.write(`P3 cpu-profile ${label}: total ${total.toFixed(0)}ms\n  top self: ${top.join(' | ')}\n  stacks:\n    ${stacks.join('\n    ')}\n`)
+    await session.detach().catch(() => undefined)
+  }
+}
+// 对照：不开查找面板，普通编辑（全选输入一个字替换整段）后 Ctrl+Z，测「撤销键 → 保存请求发出」
+const undoSaveControl = async (page, label, restoredText) => {
+  await page.locator('.manuscript-editor').click()
+  await page.keyboard.press('Control+a')
+  await page.keyboard.type('换')
+  await waitSaved(page)
+  await page.evaluate(() => {
+    const t0 = performance.now(); const trace = [{ t: 0, event: 'undo-key' }]
+    const stateOf = () => { const el = document.querySelector('.save-indicator'); return el ? `${[...el.classList].filter((c) => c !== 'save-indicator').join('.')}:${el.textContent}` : 'missing' }
+    let last = stateOf(); trace.push({ t: 0, event: `state ${last}` })
+    const observer = new MutationObserver(() => { const now = stateOf(); if (now !== last) { last = now; trace.push({ t: Math.round(performance.now() - t0), event: `state ${now}` }) } })
+    observer.observe(document.querySelector('.editor-toolbar'), { subtree: true, attributes: true, childList: true, characterData: true })
+    const longTasks = new PerformanceObserver((list) => { for (const e of list.getEntries()) trace.push({ t: Math.round(e.startTime - t0), event: `longtask ${Math.round(e.duration)}ms` }) })
+    try { longTasks.observe({ type: 'longtask' }) } catch { trace.push({ t: 0, event: 'longtask-unsupported' }) }
+    window.__p3SaveTrace = { t0, trace, observer, longTasks }
+  })
+  await cpuProfile(page, `undo-control ${label}`, async () => {
+    await page.keyboard.press('Control+z')
+    await page.waitForFunction((text) => document.querySelector('.manuscript-editor').textContent.includes(text), restoredText, { timeout: 30_000 })
+    await page.evaluate(() => { const d = window.__p3SaveTrace; d.trace.push({ t: Math.round(performance.now() - d.t0), event: 'undo-done' }) })
+    await page.waitForFunction(() => window.__p3SaveTrace.trace.some((item) => item.event.startsWith('state saving')), undefined, { timeout: 30_000 })
+    await waitSaved(page)
+  })
+  const trace = await page.evaluate(() => { const d = window.__p3SaveTrace; d.observer.disconnect(); d.longTasks.disconnect(); d.trace.sort((x, y) => x.t - y.t); return d.trace })
+  const sentMs = trace.find((item) => item.event.startsWith('state saving'))?.t
+  process.stdout.write(`P3 undo-save-control ${label}: undo-key→save-sent ${sentMs}ms; trace ${JSON.stringify(trace)}\n`)
+  return sentMs
+}
 const openChapter = (page, title) => page.locator('.chapter-row', { hasText: title }).locator('.chapter-open').click()
 
 let running
@@ -1499,7 +1545,7 @@ try {
     await page.getByTestId('blackroom-bar').waitFor({ state: 'detached' })
   })
 
-  const findPerf = async (page, label, { enforceLimit = true, title } = {}) => {
+  const findPerf = async (page, label, { enforceLimit = true, title, profile = false } = {}) => {
     const chapterId = await page.evaluate(async ({ projectId, title }) => (await window.workspace.documents.tree(projectId)).find((item) => item.title === title).id, { projectId: ids.projectId, title })
     const readSaved = () => page.evaluate(async ({ projectId, chapterId }) => { const doc = await window.workspace.documents.get(projectId, chapterId); return { revision: doc.revision, plainText: doc.plainText } }, { projectId: ids.projectId, chapterId })
     const original = await readSaved()
@@ -1536,12 +1582,15 @@ try {
       window.__p3SaveTrace = { t0, trace, observer, longTasks }
     })
     const savedBeforeUndo = await readSaved()
-    await page.keyboard.press('Control+z')
-    await page.waitForFunction(() => (document.querySelector('.manuscript-editor').textContent.match(/远处星/g) ?? []).length === 1000, undefined, { timeout: 30_000 })
-    await page.evaluate(() => { const d = window.__p3SaveTrace; d.trace.push({ t: Math.round(performance.now() - d.t0), event: 'undo-done' }) })
-    assert.equal(await page.evaluate(() => (document.querySelector('.manuscript-editor').textContent.match(/远处月/g) ?? []).length), 0, '一次撤销完全恢复')
     let saveError
-    await waitSaved(page).catch((error) => { saveError = error })
+    const undoAndSave = async () => {
+      await page.keyboard.press('Control+z')
+      await page.waitForFunction(() => (document.querySelector('.manuscript-editor').textContent.match(/远处星/g) ?? []).length === 1000, undefined, { timeout: 30_000 })
+      await page.evaluate(() => { const d = window.__p3SaveTrace; d.trace.push({ t: Math.round(performance.now() - d.t0), event: 'undo-done' }) })
+      await waitSaved(page).catch((error) => { saveError = error })
+    }
+    if (profile) await cpuProfile(page, `find-undo ${label}`, undoAndSave); else await undoAndSave()
+    assert.equal(await page.evaluate(() => (document.querySelector('.manuscript-editor').textContent.match(/远处月/g) ?? []).length), 0, '一次撤销完全恢复')
     const trace = await page.evaluate(() => { const d = window.__p3SaveTrace; d.observer.disconnect(); d.longTasks.disconnect(); d.trace.sort((x, y) => x.t - y.t); d.trace.push({ t: Math.round(performance.now() - d.t0), event: 'diag-end' }); return d.trace })
     const savedAfter = await readSaved()
     const events = trace.map((item) => item.event)
@@ -1596,7 +1645,10 @@ try {
     }, { projectId: ids.projectId, merged })
     await openFresh(page, '查找粗体长段', '林舟在会上说')
     assert.ok(await page.locator('.manuscript-editor strong').count() > 0, '段内确有粗体')
-    await findPerf(page, 'bold long paragraph (record only)', { enforceLimit: false, title: '查找粗体长段' })
+    await findPerf(page, 'bold long paragraph (record only)', { enforceLimit: false, title: '查找粗体长段', profile: true })
+    // 对照：同一粗体长段，不开查找面板，普通编辑后撤销
+    await openFresh(page, '查找粗体长段', '林舟在会上说')
+    await undoSaveControl(page, 'bold long paragraph pr39', '末尾砚台石。')
     if (viewport) await page.setViewportSize(viewport)
   })
 
