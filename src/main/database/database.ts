@@ -5,6 +5,8 @@ import { schema } from './schema'
 import { WalCheckpointer, type CheckpointOutcome, type WalCheckpointerOptions } from './wal-checkpointer'
 
 export const CURRENT_SCHEMA_VERSION = 10
+/** 退出时等后台检查点 worker 关闭的上限（ms）；超时则 terminate worker、直接关主连接后退出（P3 PR-42）。 */
+export const QUIT_CLOSE_LIMIT_MS = 5_000
 
 export interface AppDatabaseOptions {
   /** 后台 WAL 检查点参数；false = 不用后台检查点（批量提交后立即恢复自动检查点）。:memory: 库总是不用。 */
@@ -49,6 +51,24 @@ export class AppDatabase {
     if (this.isClosed) return
     await this.checkpointer?.close()
     this.close()
+  }
+
+  /**
+   * 应用退出用（will-quit）：closeAsync 加上限。limitMs 内 worker 没关完（卡住不回消息）就 terminate worker，
+   * 直接关主连接后返回；worker 已死时 closeAsync 立即完成。已提交的数据都在主库或 WAL 里，下次打开由 SQLite 恢复。
+   */
+  async closeForQuit(limitMs = QUIT_CLOSE_LIMIT_MS): Promise<{ timedOut: boolean; ms: number }> {
+    const started = performance.now()
+    if (this.isClosed) return { timedOut: false, ms: 0 }
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const timedOut = await Promise.race([
+      (this.checkpointer?.close() ?? Promise.resolve()).then(() => false, () => false),
+      new Promise<boolean>((resolve) => { timer = setTimeout(() => resolve(true), limitMs) })
+    ])
+    if (timer) clearTimeout(timer)
+    if (timedOut) this.checkpointer?.terminate()
+    this.close()
+    return { timedOut, ms: Math.round(performance.now() - started) }
   }
 
   /** 主连接当前的 wal_autocheckpoint（页数；0 = 关闭）。 */

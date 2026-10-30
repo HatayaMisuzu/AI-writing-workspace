@@ -26,6 +26,10 @@ try {
   page.setDefaultTimeout(15_000)
   await page.getByRole('button', { name: '新建作品' }).first().waitFor()
   assert.equal(await page.title(), '墨记')
+  // P3 PR-42：生产（打包）构建不注册诊断通道，renderer 调用被拒绝
+  const diagnostics = await page.evaluate(() => window.workspace.diagnostics.walCheckpoint().then(() => 'REGISTERED', (error) => String(error?.message ?? error)))
+  assert.match(diagnostics, /No handler registered for 'diagnostics:wal-checkpoint'/, `packaged build must not register diagnostics:wal-checkpoint, got: ${diagnostics}`)
+  process.stdout.write(`✓ packaged build: diagnostics:wal-checkpoint not registered (${diagnostics})\n`)
   process.stdout.write(
     `✓ packaged app launched with Electron ${runtimeElectronVersion} and isolated userData: ${executablePath}\n`
   )

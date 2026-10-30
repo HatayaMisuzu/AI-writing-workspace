@@ -129,6 +129,15 @@ export class WalCheckpointer {
     return this.closing
   }
 
+  /** 强制结束 worker（退出超时用）：不等当前检查点，未完成的回写留在 WAL，下次打开由 SQLite 恢复。 */
+  terminate(): void {
+    if (!this.closing) this.closing = Promise.resolve()
+    const worker = this.worker
+    this.worker = undefined
+    this.settleAttempt({ ok: false, ms: 0, error: 'CHECKPOINT_WORKER_TERMINATED' })
+    if (worker) void worker.terminate().catch(() => { /* 已退出 */ })
+  }
+
   private start(): Promise<CheckpointOutcome> {
     const tracked: Promise<CheckpointOutcome> = this.runRound().finally(() => { if (this.running === tracked) this.running = undefined })
     this.running = tracked

@@ -1925,10 +1925,10 @@ try {
       const during = await d.walCheckpoint()
       const started = performance.now(); let after = during
       while (after.busy && performance.now() - started < 60_000) { await new Promise((resolve) => setTimeout(resolve, 20)); after = await d.walCheckpoint() }
-      return { busyBefore: before.busy, busyAfterProbe: during.busy, walMB: +(before.walBytes / 1048576).toFixed(1), autoCheckpointDuring: before.autoCheckpoint, ipcMs: Math.round(ipcMs), saveMs: Math.round(saveMs), switchMs: Math.round(switchMs), checkpoint: after.last, autoCheckpointAfter: after.autoCheckpoint, waitedMs: Math.round(performance.now() - started), dbPath: before.dbPath }
+      return { busyBefore: before.busy, busyAfterProbe: during.busy, walMB: +(before.walBytes / 1048576).toFixed(1), autoCheckpointDuring: before.autoCheckpoint, ipcMs: Math.round(ipcMs), saveMs: Math.round(saveMs), switchMs: Math.round(switchMs), checkpoint: after.last, autoCheckpointAfter: after.autoCheckpoint, waitedMs: Math.round(performance.now() - started) }
     }, { projectId: book.id, label })
     const assertProbe = (label, probe) => {
-      process.stdout.write(`P3 book-${label} background checkpoint: ${JSON.stringify(probe)}\n`)
+      process.stdout.write(`P3 book-${label} background checkpoint: ${JSON.stringify({ ...probe, userData })}\n`)
       for (const [name, ms] of [['IPC 往返', probe.ipcMs], ['普通保存', probe.saveMs], ['切章读取', probe.switchMs]]) assert.ok(ms <= 300, `${label} 后台检查点期间 ${name} ${ms}ms 应 ≤300ms；${JSON.stringify(probe)}`)
       assert.equal(probe.checkpoint?.ok, true, `${label} 后台检查点应成功：${JSON.stringify(probe)}`)
       assert.ok(probe.autoCheckpointAfter > 0, '检查点结束后自动检查点恢复原值')
