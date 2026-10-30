@@ -1601,6 +1601,9 @@ try {
     const verdict = !saveError ? 'ok' : !sentAfterUndo ? '没触发保存' : lastState.startsWith('state saving') ? '保存慢（请求未返回）' : dbMatches ? '已保存但状态字没更新' : `保存返回但库内容不符（${lastState}）`
     process.stdout.write(`P3 save-diag ${label}: verdict=${verdict}; revision before-undo=${savedBeforeUndo.revision} after=${savedAfter.revision}; db==original ${dbMatches}; undo-done index ${undoAt}; trace ${JSON.stringify(trace)}\n`)
     if (saveError) throw saveError
+    const saveSentMs = trace.find((item) => item.event.startsWith('state saving'))?.t ?? Infinity
+    process.stdout.write(`P3 undo→save-sent ${label}: ${saveSentMs}ms (limit 2000ms)\n`)
+    assert.ok(saveSentMs <= 2000, `${label} 撤销到保存请求发出 ${saveSentMs}ms，应 ≤2s（不被渲染长任务推迟）`)
     assert.equal(savedAfter.plainText, original.plainText, `${label} 撤销后落盘内容与替换前一致`)
     assert.ok(savedAfter.revision > savedBeforeUndo.revision, '撤销经保存路径落盘（revision 前进）')
     return { openMs, inputMs, jumpMs, replaceMs }
