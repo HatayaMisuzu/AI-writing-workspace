@@ -20,7 +20,8 @@ export function ChapterHeadingsPanel({ editor, scroller, onClose }: { editor: Ed
   const jump = (item: ChapterHeading): void => {
     if (editor.isDestroyed) return
     const pos = Math.min(item.pos, editor.state.doc.content.size)
-    editor.chain().setTextSelection(pos).focus(undefined, { scrollIntoView: false }).run()
+    editor.commands.setTextSelection(pos)
+    editor.view.focus() // 同步聚焦，点完立刻输入不丢字
     void revealPos(editor.view, scroller(), pos)
   }
   return <aside className="chapter-headings" aria-label="本章大纲" data-testid="chapter-headings" onKeyDown={(event) => { if (event.key === 'Escape') { event.stopPropagation(); onClose() } }}>

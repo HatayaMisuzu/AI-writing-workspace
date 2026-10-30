@@ -387,7 +387,8 @@ export function EditorSurface({ node, content, focusMode, onFocusMode, onSaved, 
   const [headingsOpen, setHeadingsOpen] = useState(false)
   const scrollerOf = useCallback((): HTMLElement | null => writingPageRef.current?.parentElement ?? null, [])
   const openFind = useCallback((mode: 'find' | 'replace') => { setFindMode(mode); setFindFocusToken((value) => value + 1) }, [])
-  const closeFind = useCallback(() => { setFindMode(undefined); editor?.commands.focus(undefined, { scrollIntoView: false }) }, [editor])
+  // 同步聚焦（tiptap 的 focus 命令延迟一帧，紧接着的 Ctrl+Z 会落到 body 上）
+  const closeFind = useCallback(() => { setFindMode(undefined); if (editor && !editor.isDestroyed) editor.view.focus() }, [editor])
   useEffect(() => {
     // Ctrl+Shift+F 留给全书搜索，这里只认不带 Shift 的 Ctrl+F / Ctrl+H
     const onKey = (event: KeyboardEvent): void => {
@@ -517,7 +518,7 @@ export function EditorSurface({ node, content, focusMode, onFocusMode, onSaved, 
       {!blackroomLocked && <button className="toolbar-button" onClick={() => onFocusMode(!focusMode)}><Focus size={16} />专注</button>}
       {!blackroomLocked && onBlackroom && <button className="toolbar-button" onClick={onBlackroom}><Lock size={16} />小黑屋</button>}
       <button className="toolbar-button" title="章内查找（Ctrl+F）/ 替换（Ctrl+H）" onClick={() => openFind('find')}><Search size={16} />查找</button>
-      <button className={headingsOpen ? 'toolbar-button active' : 'toolbar-button'} aria-pressed={headingsOpen} title="本章标题与场景分隔" onClick={() => setHeadingsOpen((open) => !open)}><ListTree size={16} />大纲</button>
+      <button className={headingsOpen ? 'toolbar-button active' : 'toolbar-button'} aria-pressed={headingsOpen} title="本章标题与场景分隔" onClick={() => setHeadingsOpen((open) => !open)}><ListTree size={16} />章内大纲</button>
       <button className={hoverPrefs?.enabled ? 'toolbar-button active' : 'toolbar-button'} aria-pressed={Boolean(hoverPrefs?.enabled)} title="悬停人名显示只读人物卡" disabled={!hoverPrefs}
         onClick={() => { if (hoverPrefs) void saveHoverPrefs({ ...hoverPrefs, enabled: !hoverPrefs.enabled }) }}><UserRound size={16} />人物悬停</button>
       <span className="toolbar-spacer" /><span className={`save-indicator ${saveState}`} title={saveError}><Save size={14} />{saveState === 'saved' ? '已保存' : saveState === 'dirty' ? '等待保存' : saveState === 'saving' ? '保存中' : '保存失败，内容仍保留'}</span>
