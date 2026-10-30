@@ -2100,7 +2100,7 @@ try {
   })
 
   // ───── PR45：>6000 字长段（无格式分块 / 粗体不分块）Ctrl+End 与校对「定位」到段末 <1s（Linux / Windows 都断言）─────
-  // 放在最后：旧路径对照（TEMP DIAG）可能把渲染进程卡死数十秒，不影响前面的用例
+  // 放在最后：若回归导致渲染进程卡住，不影响前面的用例
   const edgeCases = (() => {
     const seg = '林舟在会上说，他慢慢地看，又慢慢地走了。夜色很深，风也很大，远处灯。'
     const body = seg.repeat(210) // 7140 字
@@ -2118,7 +2118,7 @@ try {
     const started = Date.now()
     await withCap(page.keyboard.press('Control+End'), 120_000, `${label} Ctrl+End`)
     const pressMs = Date.now() - started
-    // TEMP DIAG：逐次探测光标/滚动状态（每次 evaluate 限 5s，超时即判渲染进程卡住）
+    // 可控诊断（只打日志）：逐次探测光标/滚动状态，连续两次「光标在段末且在可视区」才算到位；每次 evaluate 限 5s，超时即判渲染进程卡住
     const deadline = Date.now() + 20_000
     let last; let seen = 0
     while (Date.now() < deadline) {
@@ -2138,7 +2138,7 @@ try {
       await new Promise((done) => setTimeout(done, 50))
     }
     const totalMs = Date.now() - started
-    process.stdout.write(`PR45 DIAG ${process.platform} ${label}: press ${pressMs}ms, total ${totalMs}ms, state ${JSON.stringify(last)}\n`)
+    process.stdout.write(`PR45 probe ${process.platform} ${label}: press ${pressMs}ms, total ${totalMs}ms, state ${JSON.stringify(last)}\n`)
     if (last.hung) throw new Error(`${label}: renderer unresponsive after Ctrl+End`)
     return totalMs
   }
@@ -2193,23 +2193,9 @@ try {
         await openLocateDrawer(page)
         locateMs = await withCap(timeLocate(page), 30_000, `${item.title} locate`)
         await page.getByRole('button', { name: '关闭校对' }).click()
-      } catch (error) { process.stdout.write(`PR45 DIAG ${process.platform} ${item.title} failed: ${error.message}\n`) }
+      } catch (error) { process.stdout.write(`PR45 ${process.platform} ${item.title} failed: ${error.message}\n`) }
       timings.push({ title: item.title, ctrlEndMs, locateMs })
       process.stdout.write(`PR45 doc-end ${process.platform} ${item.title}: Ctrl+End ${ctrlEndMs}ms, locate ${locateMs.toFixed(1)}ms (limit 1000ms)\n`)
-    }
-    // TEMP DIAG（合并前删除）：旧路径（原生 Ctrl+End / scrollIntoView 定位）对照计时 + CPU profile，只记录不断言
-    await page.evaluate(() => window.localStorage.setItem('inkstone.diag.nativeDocEdge', '1'))
-    for (const item of [...edgeCases].reverse()) {
-      try {
-        await openEdgeCase(page, item)
-        const ctrlEndMs = await timeCtrlEnd(page, `old ${item.title}`)
-        process.stdout.write(`PR45 DIAG old-path ${process.platform} ${item.title}: Ctrl+End ${ctrlEndMs}ms\n`)
-        await openEdgeCase(page, item)
-        await openLocateDrawer(page)
-        const locateMs = await withCap(timeLocate(page), 60_000, 'old locate')
-        process.stdout.write(`PR45 DIAG old-path ${process.platform} ${item.title}: locate ${locateMs.toFixed(1)}ms\n`)
-        await page.getByRole('button', { name: '关闭校对' }).click()
-      } catch (error) { process.stdout.write(`PR45 DIAG old-path ${process.platform} ${item.title}: ${error.message}\n`); break }
     }
     if (viewport) await page.setViewportSize(viewport).catch(() => undefined)
     for (const t of timings) {

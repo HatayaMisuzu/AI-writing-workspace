@@ -23,9 +23,6 @@ import { CharacterHoverCard } from './CharacterHoverCard'
 import { FindReplacePanel, type FindInitial } from './FindReplacePanel'
 import { ChapterHeadingsPanel } from './ChapterHeadingsPanel'
 
-// TEMP DIAG（合并前删除）：localStorage 'inkstone.diag.nativeDocEdge'='1' 时走旧路径（原生 Ctrl+End、定位用 scrollIntoView），e2e 对照用
-const nativeDocEdge = (): boolean => { try { return window.localStorage.getItem('inkstone.diag.nativeDocEdge') === '1' } catch { return false } }
-
 export interface EditorSelection { fromPm: number; toPm: number; text: string }
 export interface EditorController {
   readonly projectId: string
@@ -129,7 +126,7 @@ export function EditorSurface({ node, content, focusMode, onFocusMode, onSaved, 
   const shortcutRef = useRef<(() => void) | undefined>(undefined)
   const chunkExtension = useMemo(() => Extension.create({ name: 'longParagraphChunks', addProseMirrorPlugins: () => [longParagraphChunksPlugin()] }), [])
   const docEdgeExtension = useMemo(() => Extension.create({ name: 'docEdgeNavigation',
-    addProseMirrorPlugins: () => [docEdgeNavigationPlugin({ enabled: () => !nativeDocEdge(), reveal: (view, pos) => { void revealPos(view, writingPageRef.current?.parentElement, pos) } })] }), [])
+    addProseMirrorPlugins: () => [docEdgeNavigationPlugin({ reveal: (view, pos) => { void revealPos(view, writingPageRef.current?.parentElement, pos) } })] }), [])
   const hoverExtension = useMemo(() => Extension.create({ name: 'characterHover',
     addProseMirrorPlugins: () => [characterHoverPlugin({ onShortcut: () => shortcutRef.current?.() })] }), [])
   useEffect(() => {
@@ -450,7 +447,6 @@ export function EditorSurface({ node, content, focusMode, onFocusMode, onSaved, 
     if (!editor) return
     const range = plainTextRangeToPm(editor.state.doc, issue.from, issue.to)
     if (!range) return
-    if (nativeDocEdge()) { editor.chain().focus().setTextSelection(range).scrollIntoView().run(); return }
     // 不用 ProseMirror 的 scrollIntoView（tiptap focus 默认也会下一帧 scrollIntoView）：分块超长段上会卡死，改用 revealPos 瞬时滚动
     editor.chain().focus(null, { scrollIntoView: false }).setTextSelection(range).run()
     void revealPos(editor.view, scrollerOf(), range.from)
