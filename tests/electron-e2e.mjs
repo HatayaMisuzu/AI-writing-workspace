@@ -1499,7 +1499,10 @@ try {
     await page.getByTestId('blackroom-bar').waitFor({ state: 'detached' })
   })
 
-  const findPerf = async (page, label, { enforceLimit = true } = {}) => {
+  const findPerf = async (page, label, { enforceLimit = true, title } = {}) => {
+    const chapterId = await page.evaluate(async ({ projectId, title }) => (await window.workspace.documents.tree(projectId)).find((item) => item.title === title).id, { projectId: ids.projectId, title })
+    const readSaved = () => page.evaluate(async ({ projectId, chapterId }) => { const doc = await window.workspace.documents.get(projectId, chapterId); return { revision: doc.revision, plainText: doc.plainText } }, { projectId: ids.projectId, chapterId })
+    const original = await readSaved()
     await page.locator('.manuscript-editor').click()
     await page.keyboard.press('Control+Home')
     const openMs = await timeFindStep(page, 'open')
@@ -1519,10 +1522,35 @@ try {
     assert.equal((replaced.match(/远处月/g) ?? []).length, 1000, '1000 处全部替换')
     assert.equal((replaced.match(/远处星/g) ?? []).length, 0)
     await page.getByLabel('查找', { exact: true }).press('Escape')
+    // 撤销后保存诊断：记录保存状态字每次变化（dirty → saving = 保存请求发出；saving → 其他 = 请求返回）、撤销完成时间、库里 revision
+    await page.evaluate(() => {
+      const t0 = performance.now(); const trace = [{ t: 0, event: 'undo-key' }]
+      const indicator = () => document.querySelector('.save-indicator')
+      const stateOf = () => { const el = indicator(); return el ? `${[...el.classList].filter((c) => c !== 'save-indicator').join('.')}:${el.textContent}` : 'missing' }
+      let last = stateOf(); trace.push({ t: 0, event: `state ${last}` })
+      const observer = new MutationObserver(() => { const now = stateOf(); if (now !== last) { last = now; trace.push({ t: Math.round(performance.now() - t0), event: `state ${now}` }) } })
+      observer.observe(document.querySelector('.editor-toolbar'), { subtree: true, attributes: true, childList: true, characterData: true })
+      window.__p3SaveTrace = { t0, trace, observer }
+    })
+    const savedBeforeUndo = await readSaved()
     await page.keyboard.press('Control+z')
     await page.waitForFunction(() => (document.querySelector('.manuscript-editor').textContent.match(/远处星/g) ?? []).length === 1000, undefined, { timeout: 30_000 })
+    await page.evaluate(() => { const d = window.__p3SaveTrace; d.trace.push({ t: Math.round(performance.now() - d.t0), event: 'undo-done' }) })
     assert.equal(await page.evaluate(() => (document.querySelector('.manuscript-editor').textContent.match(/远处月/g) ?? []).length), 0, '一次撤销完全恢复')
-    await waitSaved(page)
+    let saveError
+    await waitSaved(page).catch((error) => { saveError = error })
+    const trace = await page.evaluate(() => { const d = window.__p3SaveTrace; d.observer.disconnect(); d.trace.push({ t: Math.round(performance.now() - d.t0), event: 'diag-end' }); return d.trace })
+    const savedAfter = await readSaved()
+    const events = trace.map((item) => item.event)
+    const undoAt = trace.findIndex((item) => item.event === 'undo-done')
+    const sentAfterUndo = trace.slice(1).some((item) => item.event.startsWith('state saving'))
+    const lastState = [...events].reverse().find((event) => event.startsWith('state ')) ?? ''
+    const dbMatches = savedAfter.plainText === original.plainText
+    const verdict = !saveError ? 'ok' : !sentAfterUndo ? '没触发保存' : lastState.startsWith('state saving') ? '保存慢（请求未返回）' : dbMatches ? '已保存但状态字没更新' : `保存返回但库内容不符（${lastState}）`
+    process.stdout.write(`P3 save-diag ${label}: verdict=${verdict}; revision before-undo=${savedBeforeUndo.revision} after=${savedAfter.revision}; db==original ${dbMatches}; undo-done index ${undoAt}; trace ${JSON.stringify(trace)}\n`)
+    if (saveError) throw saveError
+    assert.equal(savedAfter.plainText, original.plainText, `${label} 撤销后落盘内容与替换前一致`)
+    assert.ok(savedAfter.revision > savedBeforeUndo.revision, '撤销经保存路径落盘（revision 前进）')
     return { openMs, inputMs, jumpMs, replaceMs }
   }
   // 5852 句里恰好 1000 句的「远处灯」换成「远处星」
@@ -1534,7 +1562,7 @@ try {
     await page.setViewportSize({ width: 1600, height: 900 })
     await createChapter(page, '查找单段长章', [{ text: perfSentences.join('') + '末尾砚台石。' }])
     await openFresh(page, '查找单段长章', '林舟在会上说')
-    await findPerf(page, 'single paragraph 198968 chars')
+    await findPerf(page, 'single paragraph 198968 chars', { title: '查找单段长章' })
     if (viewport) await page.setViewportSize(viewport)
   })
 
@@ -1544,7 +1572,7 @@ try {
     await page.setViewportSize({ width: 1600, height: 900 })
     await createChapter(page, '查找多段长章', [...perfSentences.map((text) => ({ text })), { text: '末尾砚台石。' }])
     await openFresh(page, '查找多段长章', '林舟在会上说')
-    await findPerf(page, 'multi paragraph 5852 blocks')
+    await findPerf(page, 'multi paragraph 5852 blocks', { title: '查找多段长章' })
     if (viewport) await page.setViewportSize(viewport)
   })
 
@@ -1565,7 +1593,7 @@ try {
     }, { projectId: ids.projectId, merged })
     await openFresh(page, '查找粗体长段', '林舟在会上说')
     assert.ok(await page.locator('.manuscript-editor strong').count() > 0, '段内确有粗体')
-    await findPerf(page, 'bold long paragraph (record only)', { enforceLimit: false })
+    await findPerf(page, 'bold long paragraph (record only)', { enforceLimit: false, title: '查找粗体长段' })
     if (viewport) await page.setViewportSize(viewport)
   })
 
