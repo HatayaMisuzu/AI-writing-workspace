@@ -17,6 +17,24 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run release:preflight
+      - name: TEMP G x10 (P3 H-W1 distribution, remove before merge)
+        shell: bash
+        run: |
+          fail=0; : > g-loop.log
+          for i in $(seq 1 10); do
+            echo "=== G run $i ===" | tee -a g-loop.log
+            if npx vitest run tests/checkpoint-release-p44.test.ts -t "G：" 2>&1 | tee g-run.log; then r=PASS; else r=FAIL; fail=1; fi
+            grep -E "G-FIRST|natural 1000ch|converge" g-run.log | sed "s/^/run$i /" | tee -a g-loop.log
+            echo "run$i RESULT=$r" | tee -a g-loop.log
+          done
+          {
+            echo "## G x10 on $RUNNER_OS"
+            echo '```'
+            grep -E "RESULT=|G-FIRST" g-loop.log
+            echo "slow-pass: $(grep -c 'branch=slow-pass' g-loop.log || true)  slow-fail: $(grep -c 'branch=slow-fail' g-loop.log || true)  fail runs: $(grep -c 'RESULT=FAIL' g-loop.log || true)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit $fail
       - run: npm run verify
       - run: npm run test:e2e
       - name: Upload e2e CPU profiles (P3 PR-44 diag)
@@ -63,6 +81,24 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run release:preflight
+      - name: TEMP G x10 (P3 H-W1 distribution, remove before merge)
+        shell: bash
+        run: |
+          fail=0; : > g-loop.log
+          for i in $(seq 1 10); do
+            echo "=== G run $i ===" | tee -a g-loop.log
+            if npx vitest run tests/checkpoint-release-p44.test.ts -t "G：" 2>&1 | tee g-run.log; then r=PASS; else r=FAIL; fail=1; fi
+            grep -E "G-FIRST|natural 1000ch|converge" g-run.log | sed "s/^/run$i /" | tee -a g-loop.log
+            echo "run$i RESULT=$r" | tee -a g-loop.log
+          done
+          {
+            echo "## G x10 on $RUNNER_OS"
+            echo '```'
+            grep -E "RESULT=|G-FIRST" g-loop.log
+            echo "slow-pass: $(grep -c 'branch=slow-pass' g-loop.log || true)  slow-fail: $(grep -c 'branch=slow-fail' g-loop.log || true)  fail runs: $(grep -c 'RESULT=FAIL' g-loop.log || true)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit $fail
       - run: npm run verify
       # Linux e2e：Playwright 的 Electron loader 会强制 --password-store=basic（应用按设计拒绝明文回退），
       # 因此 e2e 在 Linux 上绕开 loader，直接启动 Electron 并经 CDP 连接，配合真实解锁的 gnome-keyring。
