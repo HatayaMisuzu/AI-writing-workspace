@@ -1,7 +1,7 @@
 import { installEgressGate, isFocusEgressLocked } from './net/egress-guard'
 import { app, BrowserWindow, safeStorage, session, shell } from 'electron'
 import { join } from 'node:path'
-import { AppDatabase } from './database/database'
+import { AppDatabase, QUIT_CLOSE_LIMIT_MS } from './database/database'
 import { registerIpc } from './ipc/register'
 import type { SecretCodec } from './ai/provider'
 import { attachCloseHandshake } from './window-close'
@@ -78,6 +78,9 @@ if (!app.requestSingleInstanceLock()) {
       refreshNetworkAllowlist,
       allowOriginTemporarily: (origin) => networkGate!.allowTemporarily(origin),
       getBlockedLog: () => networkGate!.getBlockedLog()
+    }, {
+      // 诊断通道只在未打包（开发 / 测试 / e2e：直接跑 out/main/index.js）时注册；打包安装的生产构建 app.isPackaged=true，不注册。
+      diagnostics: !app.isPackaged
     })
     createWindow()
     app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow() })
@@ -85,11 +88,15 @@ if (!app.requestSingleInstanceLock()) {
 }
 
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit() })
-// P3 PR-2b：退出时先让后台 WAL 检查点 worker 跑完当前检查点并关闭自己的连接，再关主连接，然后真正退出
+// P3 PR-2b：退出时先让后台 WAL 检查点 worker 跑完当前检查点并关闭自己的连接，再关主连接，然后真正退出。
+// 上限 QUIT_CLOSE_LIMIT_MS（5s）：worker 卡住不回消息就 terminate，直接关主连接退出；worker 已死则立即完成。
 app.on('will-quit', (event) => {
   const db = database
   if (!db || db.closed) return
   event.preventDefault()
   database = undefined
-  void db.closeAsync().catch((error: unknown) => console.warn(`[wal-checkpoint] close failed: ${(error as Error).message}`)).finally(() => app.quit())
+  void db.closeForQuit(QUIT_CLOSE_LIMIT_MS)
+    .then((result) => { if (result.timedOut) console.warn(`[wal-checkpoint] worker did not close within ${QUIT_CLOSE_LIMIT_MS}ms; terminated`) })
+    .catch((error: unknown) => console.warn(`[wal-checkpoint] close failed: ${(error as Error).message}`))
+    .finally(() => app.quit())
 })

@@ -281,14 +281,14 @@ describe('2：worker 关闭与应用退出', () => {
     const reopened = new AppDatabase(s.path); dbs.push(reopened)
     expect(chapterHashes(reopened.raw, s.project.id)).toEqual(expected)
   })
-  it('同步 close() 也会关闭 worker；退出钩子 will-quit 走 closeAsync', async () => {
+  it('同步 close() 也会关闭 worker；退出钩子 will-quit 走 closeForQuit（5s 上限）', async () => {
     const s = setup(5)
     s.docs.replaceBatch({ projectId: s.project.id, items: items(s), ...meta })
     s.db.close()
     await s.db.checkpointer!.close()
     expect((s.db.checkpointer as unknown as { worker?: unknown }).worker).toBeUndefined()
     const index = readFileSync(resolve('src/main/index.ts'), 'utf8')
-    expect(index).toMatch(/app\.on\('will-quit'[\s\S]*event\.preventDefault\(\)[\s\S]*closeAsync\(\)[\s\S]*app\.quit\(\)/)
+    expect(index).toMatch(/app\.on\('will-quit'[\s\S]*event\.preventDefault\(\)[\s\S]*closeForQuit\(QUIT_CLOSE_LIMIT_MS\)[\s\S]*app\.quit\(\)/)
   })
 })
 
