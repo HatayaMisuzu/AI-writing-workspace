@@ -29,6 +29,7 @@ import { TimelineService } from '../services/timeline-service'
 import { FocusLockService, assertNoFocusLockAnywhere, assertNotFocusLocked, focusEgressCheck } from '../services/focus-lock-service'
 import { readHoverPrefs, writeHoverPrefs } from '../services/hover-prefs-service'
 import { installFocusEgressLock } from '../net/egress-guard'
+import { DIAG_SAVE, diagDrain, diagMark, diagNow } from '../diag/save-trace'
 
 const trustedSender = (event: IpcMainInvokeEvent | IpcMainEvent): void => {
   if (event.senderFrame !== event.sender.mainFrame) throw new Error('IPC_UNTRUSTED_FRAME')
@@ -113,7 +114,15 @@ export function registerIpc(db: AppDatabase, codec: SecretCodec, network?: Netwo
   handle('documents:rename', (projectId: string, documentId: string, title: string) => documents.rename(parse(idSchema, projectId), parse(idSchema, documentId), parse(shortTextSchema, title)))
   handle('documents:reorder', (projectId: string, documentId: string, parentId: string | null, orderIndex: number) => documents.reorder(parse(idSchema, projectId), parse(idSchema, documentId), parse(idSchema.nullable(), parentId), parse(nonNegativeIntSchema, orderIndex)))
   handle('documents:delete', (projectId: string, documentId: string) => documents.delete(parse(idSchema, projectId), parse(idSchema, documentId)))
-  handle('documents:save', (input: unknown) => documents.saveContent(parse(documentSaveSchema, input)))
+  handle('documents:save', (input: unknown) => {
+    // DIAG：main 收到 → saveContent 返回（其中事务分段见 main:tx）
+    const received = diagNow()
+    const result = documents.saveContent(parse(documentSaveSchema, input))
+    diagMark('main:save', { received: Math.round(received * 10) / 10, handlerMs: +(diagNow() - received).toFixed(2), revision: result.revision })
+    return result
+  })
+  // DIAG：仅 INKSTONE_DIAG_SAVE=1 时注册；返回并清空主进程打点
+  if (DIAG_SAVE) handle('diagnostics:save-trace', () => diagDrain())
   handle('documents:search', (projectId: string, query: string) => documents.search(projectId, query))
 
   handle('snapshots:create', (projectId: string, documentId: string, reason: Parameters<DocumentService['createSnapshot']>[2]) => documents.createSnapshot(parse(idSchema, projectId), parse(idSchema, documentId), parse(snapshotReasonSchema, reason)))

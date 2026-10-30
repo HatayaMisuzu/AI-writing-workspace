@@ -1,5 +1,6 @@
 import { Worker } from 'node:worker_threads'
 import { statSync } from 'node:fs'
+import { diagMark } from '../diag/save-trace'
 
 /**
  * P3 PR-2b（组长 2026-10-30 批准方案 1）：大批量事务提交后，把 WAL 检查点移出主线程。
@@ -172,7 +173,8 @@ export class WalCheckpointer {
     return new Promise<Attempt>((resolve) => {
       try {
         const worker = this.ensureWorker()
-        this.pendingAttempt = resolve
+        this.pendingAttempt = (attempt) => { diagMark('cp:attempt-end', { ok: attempt.ok, workerMs: attempt.ms, busy: attempt.busy, log: attempt.log, checkpointed: attempt.checkpointed, error: attempt.error }); resolve(attempt) }
+        diagMark('cp:attempt-start', { walBytes: this.walBytes() })
         worker.postMessage({ type: 'checkpoint' })
       } catch (error) {
         resolve({ ok: false, ms: 0, error: `CHECKPOINT_WORKER_START_FAILED:${(error as Error).message}` })

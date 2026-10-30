@@ -88,7 +88,7 @@ const api: WorkspaceApi = {
     testUrl: (input) => invoke('providers:test-url', input)
   },
   network: { blockedLog: () => invoke('network:blocked-log') },
-  diagnostics: { walCheckpoint: () => invoke('diagnostics:wal-checkpoint') },
+  diagnostics: { walCheckpoint: () => invoke('diagnostics:wal-checkpoint'), saveTrace: () => invoke('diagnostics:save-trace') },
   writing: {
     getDay: (projectId, date) => invoke('writing:get-day', projectId, date),
     listRange: (projectId, fromDate, toDate) => invoke('writing:list-range', projectId, fromDate, toDate),

@@ -1,8 +1,12 @@
 import { DatabaseSync } from 'node:sqlite'
-import { mkdirSync } from 'node:fs'
+import { mkdirSync, statSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { schema } from './schema'
+import { DIAG_SAVE, diagMark, diagNow } from '../diag/save-trace'
 import { WalCheckpointer, type CheckpointOutcome, type WalCheckpointerOptions } from './wal-checkpointer'
+
+// DIAG：WAL 文件大小
+const diagWal = (path: string): number => { try { return statSync(`${path}-wal`).size } catch { return 0 } }
 
 export const CURRENT_SCHEMA_VERSION = 10
 
@@ -110,10 +114,19 @@ export class AppDatabase {
   }
 
   transaction<T>(fn: () => T): T {
+    // DIAG：BEGIN IMMEDIATE（取写锁；本库未设 busy_timeout，拿不到锁会直接 SQLITE_BUSY，不会等待）/ 事务体 / COMMIT（含自动检查点）分段
+    const t0 = DIAG_SAVE ? diagNow() : 0
+    const wal0 = DIAG_SAVE ? diagWal(this.path) : 0
     this.raw.exec('BEGIN IMMEDIATE')
+    const t1 = DIAG_SAVE ? diagNow() : 0
     try {
       const result = fn()
+      const t2 = DIAG_SAVE ? diagNow() : 0
       this.raw.exec('COMMIT')
+      if (DIAG_SAVE) {
+        const t3 = diagNow()
+        diagMark('main:tx', { begin: Math.round(t0 * 10) / 10, lockMs: +(t1 - t0).toFixed(2), bodyMs: +(t2 - t1).toFixed(2), commitMs: +(t3 - t2).toFixed(2), end: Math.round(t3 * 10) / 10, walBefore: wal0, walAfter: diagWal(this.path), autoCheckpoint: this.autoCheckpoint })
+      }
       return result
     } catch (error) {
       this.raw.exec('ROLLBACK')

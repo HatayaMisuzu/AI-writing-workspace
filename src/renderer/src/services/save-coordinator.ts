@@ -15,6 +15,15 @@ export interface EditorSnapshot {
 export const SAVE_IDLE_DELAY_MS = 700
 export const SAVE_MAX_WAIT_MS = 2000
 
+// DIAG（诊断分支）：保存节奏打点，墙钟 ms（performance.timeOrigin + now），最多 500 条；只记录，不影响行为
+const diagNow = (): number => Math.round((performance.timeOrigin + performance.now()) * 10) / 10
+const diagMark = (event: string, data: Record<string, unknown> = {}): void => {
+  const g = globalThis as unknown as { __inkstoneSaveDiag?: Array<Record<string, unknown>> }
+  const list = (g.__inkstoneSaveDiag ??= [])
+  list.push({ t: diagNow(), event, ...data })
+  if (list.length > 500) list.splice(0, list.length - 500)
+}
+
 export type SaveState = 'saved' | 'dirty' | 'saving' | 'error'
 
 export class SaveCoordinator {
@@ -45,7 +54,8 @@ export class SaveCoordinator {
     const now = Date.now()
     this.dirtySince ??= now
     const wait = Math.max(0, Math.min(this.delayMs, this.dirtySince + this.maxWaitMs - now))
-    this.timer = setTimeout(() => { void this.flush().catch(() => undefined) }, wait)
+    diagMark('r:schedule', { wait })
+    this.timer = setTimeout(() => { diagMark('r:timer-fire'); void this.flush().catch(() => undefined) }, wait)
   }
 
   async flush(): Promise<void> {
@@ -60,7 +70,9 @@ export class SaveCoordinator {
       const snapshot = { ...this.pending, baseRevision: this.revision }
       this.pending = undefined
       this.onState('saving')
+      diagMark('r:ipc-send', { baseRevision: snapshot.baseRevision })
       await this.save(snapshot).then((saved) => {
+        diagMark('r:ipc-recv', { revision: saved.revision })
         this.revision = saved.revision
         onPendingRevision(this.pending, saved.revision)
         this.onSaved(saved)

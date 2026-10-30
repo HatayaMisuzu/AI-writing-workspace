@@ -92,7 +92,7 @@ const launchViaCdp = async () => {
     '--remote-debugging-port=0', '--password-store=gnome-libsecret',
     ...(process.env.INKSTONE_E2E_NO_SANDBOX === '1' ? ['--no-sandbox'] : [])
   ]
-  const child = spawn(exe, args, { cwd: root, env: { ...process.env, NODE_ENV: 'production', ELECTRON_DISABLE_SECURITY_WARNINGS: 'true' }, stdio: ['ignore', 'inherit', 'pipe'] })
+  const child = spawn(exe, args, { cwd: root, env: { ...process.env, NODE_ENV: 'production', ELECTRON_DISABLE_SECURITY_WARNINGS: 'true', INKSTONE_DIAG_SAVE: '1' }, stdio: ['ignore', 'inherit', 'pipe'] })
   const exited = new Promise((done) => child.once('exit', done))
   const wsEndpoint = await new Promise((done, fail) => {
     let buffer = ''
@@ -125,7 +125,7 @@ const launch = async () => {
     ...(executablePath ? { executablePath } : {}),
     args: [join(root, 'out/main/index.js'), `--user-data-dir=${userData}`],
     cwd: root,
-    env: { ...process.env, NODE_ENV: 'production', ELECTRON_DISABLE_SECURITY_WARNINGS: 'true' }
+    env: { ...process.env, NODE_ENV: 'production', ELECTRON_DISABLE_SECURITY_WARNINGS: 'true', INKSTONE_DIAG_SAVE: '1' }
   })
   return finishLaunch(app, await app.firstWindow())
 }
@@ -1952,16 +1952,42 @@ try {
     assert.ok(!(await chapterText('第997章')).includes('远处星'), '撤销键不会把替换前文本写回库')
     // 替换后在打开章继续写：保存 ≤2s 发出并落库（revision 已跟上，不会 REVISION_CONFLICT）
     await page.keyboard.press('Control+End')
-    const saveStarted = Date.now()
-    await page.keyboard.type('后来加的')
-    const saveMs = await page.evaluate(async ({ projectId, started }) => {
-      const node = (await window.workspace.documents.tree(projectId)).find((item) => item.title === '第997章')
-      while (!(await window.workspace.documents.get(projectId, node.id)).plainText.includes('后来加的')) {
-        if (Date.now() - started > 10_000) throw new Error('save after replace not persisted')
-        await new Promise((resolve) => setTimeout(resolve, 25))
+    // DIAG（diag-save-after-replace）：同一墙钟（performance.timeOrigin + now）下记录按键、renderer 保存节奏、长任务、主进程事务与检查点
+    const diagInstall = () => page.evaluate(() => {
+      const now = () => Math.round((performance.timeOrigin + performance.now()) * 10) / 10
+      const d = (window.__diagSaveE2E ??= { keys: [], longTasks: [], polls: 0 })
+      d.keys = []; d.longTasks = []; d.polls = 0; window.__inkstoneSaveDiag = []
+      if (!d.installed) {
+        d.installed = true
+        document.addEventListener('keydown', (e) => { d.keys.push({ t: now(), key: e.key }) }, true)
+        new PerformanceObserver((list) => { for (const e of list.getEntries()) d.longTasks.push({ start: Math.round((performance.timeOrigin + e.startTime) * 10) / 10, ms: Math.round(e.duration) }) }).observe({ type: 'longtask', buffered: false })
       }
-      return Date.now() - started
-    }, { projectId: book.id, started: saveStarted })
+      return now()
+    })
+    const diagSample = async (label, text) => {
+      const t0 = await diagInstall()
+      const started = Date.now()
+      await page.keyboard.type(text)
+      const result = await page.evaluate(async ({ projectId, started, text }) => {
+        const now = () => Math.round((performance.timeOrigin + performance.now()) * 10) / 10
+        const node = (await window.workspace.documents.tree(projectId)).find((item) => item.title === '第997章')
+        while (!(await window.workspace.documents.get(projectId, node.id)).plainText.includes(text)) {
+          if (Date.now() - started > 10_000) throw new Error('save after replace not persisted')
+          window.__diagSaveE2E.polls += 1
+          await new Promise((resolve) => setTimeout(resolve, 25))
+        }
+        const persistedAt = now()
+        await new Promise((resolve) => setTimeout(resolve, 50))
+        return { ms: Date.now() - started, persistedAt, keys: window.__diagSaveE2E.keys, longTasks: window.__diagSaveE2E.longTasks, polls: window.__diagSaveE2E.polls, renderer: window.__inkstoneSaveDiag ?? [], main: await window.workspace.diagnostics.saveTrace() }
+      }, { projectId: book.id, started, text })
+      process.stdout.write(`DIAG save-after-replace ${process.platform} ${label}: ${JSON.stringify({ t0, ...result })}\n`)
+      return result.ms
+    }
+    // 先取一次「替换后到这里」主进程累计打点（含替换后的后台检查点窗口），再采样
+    process.stdout.write(`DIAG save-after-replace ${process.platform} main-before: ${JSON.stringify({ now: await page.evaluate(() => Math.round((performance.timeOrigin + performance.now()) * 10) / 10), main: ((events) => [...events.filter((e) => e.event.startsWith('cp:')), ...events.filter((e) => !e.event.startsWith('cp:')).slice(-12)])(await page.evaluate(() => window.workspace.diagnostics.saveTrace())) })}\n`)
+    const saveMs = await diagSample('sample1(asserted)', '后来加的')
+    const extra = [await diagSample('sample2(record only)', '再加一句'), await diagSample('sample3(record only)', '又一句')]
+    process.stdout.write(`DIAG save-after-replace ${process.platform} samples: ${JSON.stringify([saveMs, ...extra])}\n`)
     process.stdout.write(`P3 book-replace open chapter: refresh ${refreshMs}ms (limit 1000ms), save after undo/edit ${saveMs}ms (limit 2000ms)\n`)
     assert.ok(refreshMs <= 1000, `替换后打开章刷新 ${refreshMs}ms 应 ≤1s`)
     assert.ok(saveMs <= 2000, `替换后撤销/继续写的保存 ${saveMs}ms 应 ≤2s`)
