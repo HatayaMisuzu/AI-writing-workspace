@@ -1920,7 +1920,10 @@ try {
       const diag = await page.evaluate(() => ({ disabled: document.querySelector('[data-testid="book-replace-all"]')?.hasAttribute('disabled'), text: document.querySelector('[data-testid="book-replace-all"]')?.textContent, error: document.querySelector('[data-testid="book-replace-error"]')?.textContent, summary: document.querySelector('[data-testid="book-find-summary"]')?.textContent, modal: document.querySelector('[role="dialog"]')?.textContent }))
       throw new Error(`确认框未出现：${JSON.stringify(diag)}；${error.message}`)
     }
-    assert.ok((await page.getByRole('dialog').textContent()).includes('当前章的撤销记录会清空，可用快照整批恢复'), '确认框须提示撤销记录会清空')
+    const confirmText = await page.getByRole('dialog').textContent()
+    assert.ok(confirmText.includes('当前章的撤销记录会清空'), '确认框须提示撤销记录会清空')
+    assert.ok(confirmText.includes('整批恢复只能在本页进行') && confirmText.includes('要到历史页逐章恢复'), '确认框须说明整批恢复只在本页、之后去历史页逐章恢复')
+    assert.ok(!confirmText.includes('或历史页'), '确认框不得再说可在历史页整批恢复')
     const replaced = await timeAction('[data-testid="book-replace-confirm"]', '[data-testid="book-replace-done"]')
     const replacePhases = JSON.stringify(await page.evaluate(() => window.__bookReplaceTiming))
     process.stdout.write(`P3 book-replace phases: ${replacePhases}\n`)
