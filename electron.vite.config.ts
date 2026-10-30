@@ -13,7 +13,8 @@ export default defineConfig({
   },
   renderer: {
     root: 'src/renderer',
-    resolve: { alias: { '@renderer': resolve('src/renderer/src'), '@shared': resolve('src/shared') } },
+    // 诊断分支：VITE_DIAG_KEYSTROKE=1 时换成 React profiling 构建，生产包里 <Profiler onRender> 才会回调
+    resolve: { alias: [{ find: '@renderer', replacement: resolve('src/renderer/src') }, { find: '@shared', replacement: resolve('src/shared') }, ...(process.env.VITE_DIAG_KEYSTROKE === '1' ? [{ find: /^react-dom\/client$/, replacement: 'react-dom/profiling' }] : [])] },
     plugins: [react()]
   }
 })

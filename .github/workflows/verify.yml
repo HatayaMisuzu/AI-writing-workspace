@@ -1,14 +1,22 @@
 name: Verify
 
+# 诊断分支 diag-thousand-chapter-keystroke（永不合并）：只跑千章书按键剖析 e2e。
+# profiling=0：生产构建（真实耗时）；profiling=1：react-dom/profiling + <Profiler onRender> 计数（有额外开销，只看次数/占比）
 on:
   push:
-  pull_request:
   workflow_dispatch:
 
 jobs:
-  verify-windows:
+  diag-windows:
     runs-on: windows-latest
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        profiling: ['0', '1']
+    env:
+      INKSTONE_DIAG_KEYSTROKE: '1'
+      VITE_DIAG_KEYSTROKE: ${{ matrix.profiling }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -16,45 +24,24 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - run: npm run release:preflight
-      - run: npm run verify
       - run: npm run test:e2e
-      - name: Upload e2e CPU profiles (P3 PR-44 diag)
-        if: always()
+      - if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: e2e-cpuprofile-windows
+          name: diag-windows-profiling${{ matrix.profiling }}
           path: e2e-artifacts/
           if-no-files-found: warn
-      - run: npm audit --omit=dev
-      # S0b：electron 等运行时在 devDependencies，--omit=dev 看不到；含 dev 依赖的高危门禁
-      - run: npm audit --audit-level=high
 
-  package-windows:
-    runs-on: windows-latest
-    needs: verify-windows
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 22
-          cache: npm
-      - run: npm ci
-      - run: npm run dist
-      - shell: pwsh
-        run: |
-          $env:INKSTONE_PACKAGED_EXE = (Get-ChildItem release/win-unpacked/*.exe | Select-Object -First 1).FullName
-          npm run test:package-smoke
-      - uses: actions/upload-artifact@v7
-        with:
-          name: inkstone-windows
-          path: release/*
-          if-no-files-found: error
-
-  verify-linux:
+  diag-linux:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        profiling: ['0', '1']
+    env:
+      INKSTONE_DIAG_KEYSTROKE: '1'
+      VITE_DIAG_KEYSTROKE: ${{ matrix.profiling }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -62,45 +49,12 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - run: npm run release:preflight
-      - run: npm run verify
-      # Linux e2e：Playwright 的 Electron loader 会强制 --password-store=basic（应用按设计拒绝明文回退），
-      # 因此 e2e 在 Linux 上绕开 loader，直接启动 Electron 并经 CDP 连接，配合真实解锁的 gnome-keyring。
       - run: sudo apt-get update && sudo apt-get install -y gnome-keyring dbus-x11
-      # Ubuntu 24.04 默认限制非特权 user namespace，Chromium 沙箱需要放开；应用本身保持 sandbox 开启
       - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - run: xvfb-run -a dbus-run-session -- bash scripts/ci/linux-e2e.sh
-      - name: Upload e2e CPU profiles (P3 PR-44 diag)
-        if: always()
+      - if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: e2e-cpuprofile-linux
+          name: diag-linux-profiling${{ matrix.profiling }}
           path: e2e-artifacts/
           if-no-files-found: warn
-      - run: npm audit --omit=dev
-      # S0b：electron 等运行时在 devDependencies，--omit=dev 看不到；含 dev 依赖的高危门禁
-      - run: npm audit --audit-level=high
-
-  package-linux:
-    runs-on: ubuntu-24.04
-    needs: verify-linux
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 22
-          cache: npm
-      - run: npm ci
-      # 仅构建目录产物（linux-unpacked），不出 AppImage
-      - run: npm run dist:linux-dir
-      # Ubuntu 24.04 默认限制非特权 user namespace，Chromium 沙箱需要放开；应用本身保持 sandbox 开启
-      - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-      - run: |
-          export INKSTONE_PACKAGED_EXE="$PWD/release/linux-unpacked/inkstone"
-          xvfb-run -a npm run test:package-smoke
-      - uses: actions/upload-artifact@v7
-        with:
-          name: inkstone-linux-dir
-          path: release/linux-unpacked
-          if-no-files-found: error

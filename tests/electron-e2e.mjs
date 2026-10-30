@@ -240,6 +240,149 @@ const openChapter = (page, title) => page.locator('.chapter-row', { hasText: tit
 let running
 try {
   running = await launch()
+  // ───── 诊断（分支 diag-thousand-chapter-keystroke，永不合并）：INKSTONE_DIAG_KEYSTROKE=1 时只跑千章书按键剖析，然后跳过其余用例 ─────
+  diagGate: {
+  if (process.env.INKSTONE_DIAG_KEYSTROKE === '1') {
+    const page = running.page
+    const artifacts = join(process.cwd(), 'e2e-artifacts'); mkdirSync(artifacts, { recursive: true })
+    const log = (label, value) => process.stdout.write(`DIAG ${label}: ${typeof value === 'string' ? value : JSON.stringify(value)}\n`)
+    const stats = (arr) => { const s = [...arr].sort((a, b) => a - b); const q = (p) => s.length ? s[Math.min(s.length - 1, Math.max(0, Math.ceil(s.length * p) - 1))] : null; return { n: s.length, p50: q(0.5), p95: q(0.95), max: s.at(-1) ?? null, mean: s.length ? +(s.reduce((a, b) => a + b, 0) / s.length).toFixed(1) : null } }
+    const seedBook = (title, chapters) => page.evaluate(async ({ title, chapters }) => {
+      const seg = '夜色沉沉，远处灯火一盏盏亮起，她把旧信折好收进怀里。'
+      const project = await window.workspace.projects.create({ title, projectType: 'novel', description: '' })
+      const volume = (await window.workspace.documents.tree(project.id)).find((item) => item.type === 'volume')
+      const started = performance.now()
+      for (let n = 1; n <= chapters; n += 1) {
+        const text = Array.from({ length: 88 }, () => seg).join('')
+        const node = await window.workspace.documents.create({ projectId: project.id, parentId: volume.id, type: 'chapter', title: `第${n}章` })
+        await window.workspace.documents.save({ projectId: project.id, documentId: node.id, editorJson: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text }] }] }, plainText: text, expectedRevision: 0 })
+      }
+      return { id: project.id, seedMs: Math.round(performance.now() - started) }
+    }, { title, chapters })
+    const openBook = async (title, chapterTitle) => {
+      await page.reload()
+      await page.locator('.work-row', { hasText: title }).getByRole('button', { name: '继续写作' }).click()
+      await page.locator('.manuscript-editor').waitFor()
+      await page.locator(`.chapter-open[title="${chapterTitle}"]`).click()
+      await page.waitForFunction((t) => document.querySelector('.chapter-row.active .chapter-open')?.getAttribute('title') === t, chapterTitle)
+      await page.waitForTimeout(1500)
+      await page.locator('.manuscript-editor p').first().click()
+      await page.keyboard.press('End')
+    }
+    // 安装测量：keydown.timeStamp → rAF（F14 口径）/ rAF 后 MessageChannel（≈绘制后）；Event Timing（input→next paint）；longtask；IPC 包装
+    const install = () => page.evaluate(() => {
+      const d = window.__diag = { keys: [], events: [], longTasks: [], ipc: [], t0: performance.now() }
+      window.addEventListener('keydown', (event) => {
+        const start = event.timeStamp; const rec = { start, raf: null, post: null }
+        d.keys.push(rec)
+        requestAnimationFrame(() => { rec.raf = performance.now() - start; const ch = new MessageChannel(); ch.port1.onmessage = () => { rec.post = performance.now() - start }; ch.port2.postMessage(0) })
+      }, true)
+      try { new PerformanceObserver((list) => { for (const e of list.getEntries()) d.events.push({ name: e.name, start: e.startTime, dur: e.duration, inputDelay: e.processingStart - e.startTime, proc: e.processingEnd - e.processingStart, presentDelay: e.startTime + e.duration - e.processingEnd, id: e.interactionId }) }).observe({ type: 'event', durationThreshold: 16, buffered: false }) } catch (error) { d.eventTimingError = String(error) }
+      new PerformanceObserver((list) => { for (const e of list.getEntries()) d.longTasks.push({ start: Math.round(e.startTime), dur: Math.round(e.duration) }) }).observe({ type: 'longtask' })
+      d.ipcWrap = []
+      for (const [ns, fns] of Object.entries({ documents: ['save', 'tree', 'get'], linter: ['run'], projects: ['list', 'touch'], characters: ['list', 'hoverPrefs'] })) {
+        for (const fn of fns) {
+          try {
+            const obj = window.workspace[ns]; const orig = obj[fn]
+            if (orig.__diag) continue
+            const wrapped = async (...args) => { const t = performance.now(); try { return await orig(...args) } finally { d.ipc.push({ name: `${ns}.${fn}`, at: Math.round(t), ms: Math.round(performance.now() - t) }) } }
+            wrapped.__diag = true; obj[fn] = wrapped
+            d.ipcWrap.push(`${ns}.${fn}:${obj[fn] === wrapped ? 'ok' : 'readonly'}`)
+          } catch (error) { d.ipcWrap.push(`${ns}.${fn}:err ${error.message}`) }
+        }
+      }
+      return d.ipcWrap
+    })
+    const reset = () => page.evaluate(() => { const d = window.__diag; d.keys = []; d.events = []; d.longTasks = []; d.ipc = []; d.t0 = performance.now(); window.__diagRenders = []; window.__diagCounts = {} })
+    const collect = () => page.evaluate(() => { const d = window.__diag; return { keys: d.keys, events: d.events, longTasks: d.longTasks, ipc: d.ipc, t0: d.t0, renders: window.__diagRenders ?? [], counts: window.__diagCounts ?? {}, eventTimingError: d.eventTimingError } })
+    const typeKeys = async (n, gapMs) => { for (let i = 0; i < n; i += 1) { await page.keyboard.press('a'); if (gapMs) await page.waitForTimeout(gapMs) } await page.waitForTimeout(3000) }
+    const summarize = (label, raw, keys) => {
+      const raf = raw.keys.map((k) => k.raf).filter((v) => v != null); const post = raw.keys.map((k) => k.post).filter((v) => v != null)
+      const kd = raw.events.filter((e) => e.name === 'keydown'); const byInteraction = new Map(); for (const e of raw.events) if (e.id) byInteraction.set(e.id, Math.max(byInteraction.get(e.id) ?? 0, e.dur))
+      log(`${label} key→rAF`, stats(raf)); log(`${label} key→postRAF(≈paint)`, stats(post))
+      log(`${label} EventTiming keydown dur(>=16ms only, count ${kd.length}/${keys})`, stats(kd.map((e) => e.dur)))
+      log(`${label} EventTiming keydown inputDelay/processing/presentation p50`, { inputDelay: stats(kd.map((e) => e.inputDelay)).p50, processing: stats(kd.map((e) => e.proc)).p50, presentation: stats(kd.map((e) => e.presentDelay)).p50 })
+      const evNames = {}; for (const e of raw.events) { const s = (evNames[e.name] ??= { n: 0, procSum: 0, durMax: 0 }); s.n += 1; s.procSum += e.proc; s.durMax = Math.max(s.durMax, e.dur) } ; log(`${label} EventTiming by type`, Object.fromEntries(Object.entries(evNames).map(([k, v]) => [k, { n: v.n, procMean: +(v.procSum / v.n).toFixed(1), durMax: Math.round(v.durMax) }])))
+      log(`${label} interactions(>=16ms) worst-event dur`, stats([...byInteraction.values()]))
+      log(`${label} longtasks`, { n: raw.longTasks.length, totalMs: raw.longTasks.reduce((a, b) => a + b.dur, 0), stats: stats(raw.longTasks.map((t) => t.dur)) })
+      const ipc = {}; for (const c of raw.ipc) { const s = (ipc[c.name] ??= { n: 0, ms: 0, max: 0 }); s.n += 1; s.ms += c.ms; s.max = Math.max(s.max, c.ms) } ; log(`${label} IPC during typing`, ipc)
+      const rend = {}; for (const r of raw.renders) { const s = (rend[`${r.id}:${r.phase}`] ??= { n: 0, actualSum: 0, actualMax: 0, baseMax: 0 }); s.n += 1; s.actualSum += r.actual; s.actualMax = Math.max(s.actualMax, r.actual); s.baseMax = Math.max(s.baseMax, r.base) }
+      log(`${label} React Profiler (per ${keys} keys)`, Object.fromEntries(Object.entries(rend).map(([k, v]) => [k, { commits: v.n, perKey: +(v.n / keys).toFixed(2), actualSumMs: Math.round(v.actualSum), actualMeanMs: +(v.actualSum / v.n).toFixed(2), actualMaxMs: +v.actualMax.toFixed(1), baseMaxMs: +v.baseMax.toFixed(1) }])))
+      log(`${label} render counters (per ${keys} keys)`, Object.fromEntries(Object.entries(raw.counts).map(([k, v]) => [k, { total: v, perKey: +(v / keys).toFixed(2) }])))
+      // 与慢键对齐：取最慢 5 键，列出它们 ±(时长) 内的 React commit 与 IPC
+      const slow = raw.keys.filter((k) => k.post != null).sort((a, b) => b.post - a.post).slice(0, 5).map((k) => ({ at: Math.round(k.start - raw.t0), post: Math.round(k.post),
+        commits: raw.renders.filter((r) => r.commit >= k.start - 1 && r.commit <= k.start + k.post).map((r) => `${r.id}:${r.phase}:${r.actual.toFixed(1)}`),
+        ipc: raw.ipc.filter((c) => c.at >= k.start - 100 && c.at <= k.start + k.post).map((c) => `${c.name}:${c.ms}`) }))
+      log(`${label} slowest keys`, slow)
+      writeFileSync(join(artifacts, `diag-${label}-${process.platform}.json`), JSON.stringify(raw))
+      return { label, raf: stats(raf), post: stats(post) }
+    }
+    const traceRun = async (label, run) => {
+      let session; const events = []
+      try {
+        session = await page.context().newCDPSession(page)
+        session.on('Tracing.dataCollected', (msg) => { events.push(...msg.value) })
+        await session.send('Tracing.start', { traceConfig: { includedCategories: ['devtools.timeline', 'disabled-by-default-devtools.timeline', 'v8.execute', 'blink.user_timing', 'toplevel', 'latencyInfo', 'input', 'blink'], recordMode: 'recordAsMuchAsPossible' }, transferMode: 'ReportEvents' })
+      } catch (error) { log(`${label} trace`, `unavailable (${error.message})`); return run() }
+      try { return await run() } finally {
+        try {
+          const done = new Promise((r) => session.once('Tracing.tracingComplete', r))
+          await session.send('Tracing.end'); await done
+          writeFileSync(join(artifacts, `trace-${label}-${process.platform}.json`), JSON.stringify({ traceEvents: events }))
+          const threads = new Map(); for (const e of events) if (e.name === 'thread_name') threads.set(`${e.pid}:${e.tid}`, e.args?.name)
+          const mainKey = [...threads].filter(([, n]) => n === 'CrRendererMain').map(([k]) => k)
+          const onMain = events.filter((e) => mainKey.includes(`${e.pid}:${e.tid}`) && e.ph === 'X' && typeof e.dur === 'number')
+          const by = {}; for (const e of onMain) { const k = e.name === 'EventDispatch' ? `EventDispatch(${e.args?.data?.type})` : e.name; const s = (by[k] ??= { n: 0, ms: 0, max: 0 }); s.n += 1; s.ms += e.dur / 1000; s.max = Math.max(s.max, e.dur / 1000) }
+          const top = Object.entries(by).sort((a, b) => b[1].ms - a[1].ms).slice(0, 25).map(([k, v]) => `${k} n=${v.n} total=${v.ms.toFixed(0)}ms max=${v.max.toFixed(1)}ms`)
+          log(`${label} trace main-thread top (inclusive)`, `\n    ${top.join('\n    ')}`)
+          const layouts = onMain.filter((e) => e.name === 'Layout')
+          const begins = events.filter((e) => e.name === 'Layout' && e.ph === 'B' && mainKey.includes(`${e.pid}:${e.tid}`))
+          const layoutArgs = (layouts.length ? layouts : begins).map((e) => e.args?.beginData).filter(Boolean)
+          log(`${label} trace Layout`, { n: layouts.length || begins.length, totalObjects: stats(layoutArgs.map((a) => a.totalObjects ?? 0)), dirtyObjects: stats(layoutArgs.map((a) => a.dirtyObjects ?? 0)), durMs: stats(layouts.map((e) => +(e.dur / 1000).toFixed(2))) })
+          const style = onMain.filter((e) => e.name === 'UpdateLayoutTree')
+          log(`${label} trace UpdateLayoutTree`, { n: style.length, elementCount: stats(style.map((e) => e.args?.elementCount ?? 0)), durMs: stats(style.map((e) => +(e.dur / 1000).toFixed(2))) })
+          const paint = onMain.filter((e) => ['Paint', 'PrePaint', 'Layerize', 'Commit', 'HitTest', 'IntersectionObserverController::computeIntersections'].includes(e.name))
+          const pb = {}; for (const e of paint) { const s = (pb[e.name] ??= []); s.push(+(e.dur / 1000).toFixed(2)) } ; log(`${label} trace paint-side`, Object.fromEntries(Object.entries(pb).map(([k, v]) => [k, stats(v)])))
+          const kd = onMain.filter((e) => e.name === 'EventDispatch' && ['keydown', 'keypress', 'beforeinput', 'input', 'keyup', 'selectionchange'].includes(e.args?.data?.type))
+          const kb = {}; for (const e of kd) { const s = (kb[e.args.data.type] ??= []); s.push(+(e.dur / 1000).toFixed(2)) } ; log(`${label} trace key EventDispatch durations`, Object.fromEntries(Object.entries(kb).map(([k, v]) => [k, stats(v)])))
+          const tasks = onMain.filter((e) => e.name === 'RunTask' && e.dur > 16000).map((e) => e.dur / 1000)
+          log(`${label} trace RunTask >16ms`, stats(tasks))
+          // JS 热点（trace 里的 FunctionCall 按 url:function 聚合）
+          const fc = {}; for (const e of onMain.filter((x) => x.name === 'FunctionCall' || x.name === 'TimerFire' || x.name === 'FireAnimationFrame')) { const d = e.args?.data ?? {}; const k = `${e.name} ${d.functionName ?? ''} ${(d.url ?? '').split('/').pop()}:${d.lineNumber ?? ''}`; const s = (fc[k] ??= { n: 0, ms: 0 }); s.n += 1; s.ms += e.dur / 1000 }
+          log(`${label} trace JS entry points`, `\n    ${Object.entries(fc).sort((a, b) => b[1].ms - a[1].ms).slice(0, 12).map(([k, v]) => `${v.ms.toFixed(0)}ms n=${v.n} ${k}`).join('\n    ')}`)
+        } catch (error) { log(`${label} trace`, `analysis failed (${error.message})`) }
+        await session.detach().catch(() => undefined)
+      }
+    }
+    const book = await seedBook('千章按键剖析', 1000)
+    log('seed', book)
+    await openBook('千章按键剖析', '第500章')
+    log('ipc wrap', await install())
+    log('dom', await page.evaluate(() => ({ chapterRows: document.querySelectorAll('.chapter-row').length, allElements: document.querySelectorAll('*').length, editorParagraphs: document.querySelectorAll('.manuscript-editor p').length, editorChars: document.querySelector('.manuscript-editor').textContent.length })))
+    await typeKeys(20, 60) // 预热
+    const results1 = []
+    // A：基线，120 键，每 60ms 一键（F14 口径节奏）
+    await reset(); await typeKeys(120, 60); results1.push(summarize('A-1000ch-paced', await collect(), 120))
+    // B：同一状态，30 键带 Chrome trace
+    await reset(); await traceRun('B-1000ch-trace', () => typeKeys(30, 60)); results1.push(summarize('B-1000ch-traced', await collect(), 30))
+    // C：30 键带 CPU profile（JS 自身耗时热点）
+    await reset(); await cpuProfile(page, 'C-1000ch-keystrokes', () => typeKeys(30, 60), join(artifacts, `C-1000ch-keystrokes-${process.platform}.cpuprofile`)); results1.push(summarize('C-1000ch-cpuprofile', await collect(), 30))
+    // D：连打（无间隔，keyboard.type 逐字），100 字
+    await reset(); await page.keyboard.type('b'.repeat(100)); await page.waitForTimeout(3000); results1.push(summarize('D-1000ch-burst', await collect(), 100))
+    // E：对照——注入 CSS 隐藏侧栏章树（React 仍渲染，浏览器不做样式/布局）
+    await page.addStyleTag({ content: '.manuscript-tree .volume { display: none !important }' }); await page.waitForTimeout(500)
+    await reset(); await typeKeys(120, 60); results1.push(summarize('E-1000ch-tree-display-none', await collect(), 120))
+    // F：对照——章树行 content-visibility:auto（CSS 估算收益）
+    await page.addStyleTag({ content: '.manuscript-tree .volume { display: block !important } .chapter-row { content-visibility: auto; contain-intrinsic-size: auto 36px }' }); await page.waitForTimeout(500)
+    await reset(); await typeKeys(120, 60); results1.push(summarize('F-1000ch-row-content-visibility', await collect(), 120))
+    // G：对照——同样的章内容，只有 3 章的小书
+    const small = await seedBook('三章对照', 3)
+    log('seed small', small)
+    await openBook('三章对照', '第2章'); await install(); await typeKeys(20, 60)
+    await reset(); await typeKeys(120, 60); results1.push(summarize('G-3ch-paced', await collect(), 120))
+    log('TABLE', `\n    ${results1.map((r) => `${r.label}\tkey→rAF p50 ${r.raf.p50?.toFixed(1)} p95 ${r.raf.p95?.toFixed(1)} max ${r.raf.max?.toFixed(1)}\tkey→postRAF p50 ${r.post.p50?.toFixed(1)} p95 ${r.post.p95?.toFixed(1)} max ${r.post.max?.toFixed(1)} (n=${r.post.n})`).join('\n    ')}`)
+    break diagGate
+  }
   await record('首次启动并创建作品', async () => {
     await running.page.getByRole('button', { name: '新建作品' }).first().click()
     await running.page.getByLabel('作品名称').fill('E2E 长篇')
@@ -2100,6 +2243,7 @@ try {
   })
 
   process.stdout.write(`Electron E2E: ${results.length} passed\n`)
+  } // diagGate
 } finally {
   if (running?.app) await running.app.close().catch(() => {})
   fixture.close()

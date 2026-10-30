@@ -8,6 +8,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { LINT_GROUPS, type Character, type CharacterHoverPrefs, type DocumentContent, type DocumentNode, type DocumentTaskTarget, type LocalLintIssue, type ProofreadIssue, type TextPatch } from '../../../shared/domain'
 import { textIdentity } from '../../../shared/text-identity'
 import { findTextRange, findTextRanges, plainTextRangeToPm } from '../services/prosemirror-range'
+import { diagCount } from '../services/diag-keystroke'
 import { LIVE_WORD_COUNT_DELAY_MS, liveWordCountOf } from '../services/live-word-count'
 import { averageBlockHeight, type BlockMetrics } from '../services/block-height-estimate'
 import { SaveCoordinator, type SaveState } from '../services/save-coordinator'
@@ -55,6 +56,7 @@ export function EditorSurface({ node, content, focusMode, onFocusMode, onSaved, 
   const [saveError, setSaveError] = useState<string>()
   const [localIssues, setLocalIssues] = useState<LocalLintIssue[]>([])
   const [aiIssues, setAiIssues] = useState<ProofreadIssue[]>([])
+  diagCount('EditorSurface-render')
   const [proofreadOpen, setProofreadOpen] = useState(false)
   const [proofreadBusy, setProofreadBusy] = useState(false)
   const [aiProofreadRan, setAiProofreadRan] = useState(false)
