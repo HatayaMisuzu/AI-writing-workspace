@@ -237,6 +237,8 @@ export class DocumentService {
   private writeContentInTx(input: {
     projectId: string; documentId: string; editorJson: Record<string, unknown>; plainText: string
     styleSample?: { origin: TextOrigin; text: string }; writingStats?: 'human' | 'skip'
+    /** 全书替换 / 整批恢复：机械改写不是人的文风样本，跳过（style_samples 按 document_id 查无索引，1000 章会 O(n²)） */
+    styleSamples?: 'skip'
   }, current: DocumentContent, ftsRowids?: Map<string, number[]>): number {
     const prevWords = countChineseWords(current.plainText)
     const now = Date.now()
@@ -261,7 +263,7 @@ export class DocumentService {
       .run(input.documentId, input.projectId, revision)
     if (input.styleSample) this.styleSamples.record({ projectId: input.projectId, documentId: input.documentId,
       origin: input.styleSample.origin, text: input.styleSample.text, sourceRevision: revision })
-    else this.styleSamples.recordHumanIfSafe(input.projectId, input.documentId, input.plainText, revision)
+    else if (input.styleSamples !== 'skip') this.styleSamples.recordHumanIfSafe(input.projectId, input.documentId, input.plainText, revision)
     if (!skipHuman) {
       const delta = wordCount - prevWords
       if (delta > 0) this.writingDaily.addHumanWords(input.projectId, { added: delta })
@@ -305,7 +307,7 @@ export class DocumentService {
         regex: input.regex, caseSensitive: input.caseSensitive, hits: item.hits, batchHits: hits
       })
       this.onBatchStep('snapshot', index)
-      const revision = this.writeContentInTx({ projectId: input.projectId, documentId: item.documentId, editorJson: item.editorJson, plainText: item.plainText, writingStats: 'skip' }, current, fts)
+      const revision = this.writeContentInTx({ projectId: input.projectId, documentId: item.documentId, editorJson: item.editorJson, plainText: item.plainText, writingStats: 'skip', styleSamples: 'skip' }, current, fts)
       this.onBatchStep('write', index)
       return { documentId: item.documentId, revision }
     }) })
@@ -334,7 +336,7 @@ export class DocumentService {
         this.createSnapshot(projectId, row.document_id, 'pre_restore', { restoredFrom: row.id, batchId })
         this.onBatchStep('snapshot', index)
         const revision = this.writeContentInTx({ projectId, documentId: row.document_id,
-          editorJson: JSON.parse(row.content) as Record<string, unknown>, plainText: row.plain_text, writingStats: 'skip' }, current, fts)
+          editorJson: JSON.parse(row.content) as Record<string, unknown>, plainText: row.plain_text, writingStats: 'skip', styleSamples: 'skip' }, current, fts)
         this.onBatchStep('write', index)
         restored.push({ documentId: row.document_id, revision })
       })

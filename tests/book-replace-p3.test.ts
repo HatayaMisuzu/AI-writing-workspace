@@ -107,6 +107,18 @@ describe('documents:replaceBatch', () => {
     })
     expect(s.daily.getDay(s.project.id)).toEqual(day)
   })
+  it('全书替换 / 整批恢复不写文风样本（机械改写不是人的文风）', () => {
+    const s = setup(2)
+    const long = '林舟看见远处灯，'.repeat(30)
+    s.ids.forEach((id) => s.docs.saveContent({ projectId: s.project.id, documentId: id, editorJson: doc(long), plainText: long }))
+    const samples = (): string => JSON.stringify(s.db.raw.prepare('SELECT * FROM style_samples ORDER BY id').all())
+    const before = samples()
+    expect(before).not.toBe('[]')
+    const result = s.docs.replaceBatch({ projectId: s.project.id, items: replaceItems(s).map((item) => ({ ...item, hits: 30 })), ...meta })
+    expect(samples()).toBe(before)
+    s.docs.restoreBatch(s.project.id, result.batchId)
+    expect(samples()).toBe(before)
+  })
   it('任一章 revision 冲突：整批回滚，库里逐字节不变', () => {
     const s = setup(5)
     const items = replaceItems(s); items[3] = { ...items[3], expectedRevision: items[3].expectedRevision + 1 }
