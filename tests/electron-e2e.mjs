@@ -1188,15 +1188,16 @@ try {
     await page.locator('.manuscript-editor', { hasText: '宾客在坐' }).waitFor()
     await openLint(page)
     await page.locator('.lint-group[data-group="wordlist_replace"] .proofread-issue').first().getByRole('button', { name: '定位' }).click()
-    // 读 ProseMirror 选区（tiptap 把 editor 挂在 .ProseMirror DOM 上）；DOM 选区在点按钮后不一定同步
-    const pmSel = () => page.evaluate(() => { const ed = document.querySelector('.manuscript-editor .ProseMirror')?.editor; const { from, to, empty } = ed.state.selection
-      return { empty, text: ed.state.doc.textBetween(from, to), before: ed.state.doc.textBetween(Math.max(0, from - 4), from) } })
-    await page.waitForFunction(() => { const ed = document.querySelector('.manuscript-editor .ProseMirror')?.editor; return ed && !ed.state.selection.empty })
-    assert.equal((await pmSel()).text, '在坐', '定位应选中原词')
+    // tiptap 的 focus() 在下一帧才把选区写进 DOM，所以用 waitForFunction 等待
+    const domSel = () => page.evaluate(() => { const s = window.getSelection(); const inEditor = !!s?.anchorNode && !!document.querySelector('.manuscript-editor')?.contains(s.anchorNode)
+      return { inEditor, collapsed: s?.isCollapsed, text: s?.toString(), before: s?.focusNode?.textContent?.slice(0, s.focusOffset) } })
+    await page.waitForFunction(() => window.getSelection()?.toString() === '在坐', undefined, { timeout: 5000 }).catch(() => undefined)
+    { const s0 = await domSel(); assert.equal(s0.text, '在坐', `定位应选中原词，实际 ${JSON.stringify(s0)}`) }
     await page.getByRole('button', { name: '关闭校对' }).click()
-    const sel = await pmSel()
-    assert.equal(sel.empty, true, '关闭校对后选区应已折叠')
-    assert.ok(sel.before?.endsWith('宾客在坐'), `光标应在定位词末尾，实际前文 ${sel.before}`)
+    await page.waitForFunction(() => { const s = window.getSelection(); return s?.isCollapsed && !!s.anchorNode && !!document.querySelector('.manuscript-editor')?.contains(s.anchorNode) }, undefined, { timeout: 5000 }).catch(() => undefined)
+    const sel = await domSel()
+    assert.equal(sel.inEditor && sel.collapsed, true, `关闭校对后选区应折叠在正文里，实际 ${JSON.stringify(sel)}`)
+    assert.ok(sel.before?.endsWith('宾客在坐'), `光标应在定位词末尾，实际 ${JSON.stringify(sel)}`)
     await page.keyboard.type('X')
     await page.locator('.manuscript-editor', { hasText: '宾客在坐X' }).waitFor()
     await page.keyboard.press('Control+z')
