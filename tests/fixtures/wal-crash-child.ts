@@ -64,8 +64,16 @@ const main = async (): Promise<void> => {
   const status = { mode, attempts, autoCheckpoint: db.autoCheckpoint, busy: db.checkpointer?.busy ?? false, last: db.checkpointer?.last ?? null, walBytes: db.checkpointer?.walBytes() ?? 0 }
   process.stdout.write(`READY ${JSON.stringify({ status, projectId: project.id, hashes: chapterHashes(db.raw, project.id) })}\n`)
   if (mode === 'quit-stuck' || mode === 'quit-dead') {
+    // 测试侧分段计时（不改行为）：包一层实例 close，记 closeForQuit 内主连接 close 的起止；workerMs = 进入 closeForQuit → 主连接 close 开始
+    const origClose = db.close.bind(db)
+    const quitStarted = performance.now()
+    let mainCloseStart = 0; let mainCloseEnd = 0
+    db.close = () => { if (!mainCloseStart) mainCloseStart = performance.now(); origClose(); if (!mainCloseEnd) mainCloseEnd = performance.now() }
+    const walBefore = db.checkpointer?.walBytes() ?? 0
     const result = await db.closeForQuit(QUIT_CLOSE_LIMIT_MS)
-    process.stdout.write(`CLOSED ${JSON.stringify({ ...result, limitMs: QUIT_CLOSE_LIMIT_MS, mainClosed: db.closed })}\n`)
+    const segments = { workerMs: Math.round(mainCloseStart - quitStarted), mainCloseMs: Math.round(mainCloseEnd - mainCloseStart), walBytesBeforeClose: walBefore }
+    if (process.env.INKSTONE_QUIT_TEST_DIAG === '1') process.stderr.write(`QDIAG ${JSON.stringify({ quitStarted: Math.round(quitStarted), mainCloseStart: Math.round(mainCloseStart), mainCloseEnd: Math.round(mainCloseEnd), resolved: Math.round(performance.now()) })}\n`)
+    process.stdout.write(`CLOSED ${JSON.stringify({ ...result, limitMs: QUIT_CLOSE_LIMIT_MS, mainClosed: db.closed, segments })}\n`)
     process.exit(0)
   }
   setInterval(() => { void reader }, 1_000)
