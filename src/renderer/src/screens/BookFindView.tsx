@@ -145,7 +145,7 @@ export function BookFindView({ projectId, chapters, onOpenHit, onBeforeReplace, 
     {progress && progress.groups.length > visible && <button onClick={() => setVisible((value) => value + GROUP_PAGE)}>显示更多章节（还有 {progress.groups.length - visible} 章）</button>}
     {confirming && <Modal title="全书替换" onClose={() => setConfirming(false)}>
       <p>将把「{query}」替换为「{replacement}」：{selectedGroups.length} 章，共 {selectedHits.toLocaleString()} 处（按库中最新内容重新计算）。</p>
-      <p>替换前会给每章拍快照，可在这里或历史页「全书替换前」整批恢复。当前章的撤销记录会清空，可用快照整批恢复。全书替换不计入码字和小黑屋目标。</p>
+      <p>替换前会给每章拍「全书替换前」快照。整批恢复只能在本页进行（替换完成后点「撤销本次全书替换」）；离开本作品或重启应用后，要到历史页逐章恢复。当前章的撤销记录会清空，Ctrl+Z 退不回替换前。全书替换不计入码字和小黑屋目标。</p>
       <div className="modal-actions"><button onClick={() => setConfirming(false)}>取消</button><button className="primary" data-testid="book-replace-confirm" onClick={() => { setConfirming(false); void replaceAll() }}>确认替换</button></div>
     </Modal>}
     {restoreResult && <Modal title="整批恢复结果" onClose={() => setRestoreResult(undefined)}>

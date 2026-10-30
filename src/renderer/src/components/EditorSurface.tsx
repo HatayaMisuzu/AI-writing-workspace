@@ -14,7 +14,10 @@ import { SaveCoordinator, type SaveState } from '../services/save-coordinator'
 import { BATCH_PROPOSE_LIMIT, LINT_PAGE_SIZE, batchSlice, pageLintGroups } from '../services/lint-drawer-paging'
 import { shiftIssuesAfterEdit, type AppliedLocalEdit } from '../services/lint-incremental'
 import { longParagraphChunksPlugin } from '../services/long-paragraph-chunks'
+import { docEdgeNavigationPlugin, revealDocEdge } from '../services/doc-edge-navigation'
+import { revealPos } from '../services/find-highlight'
 import { isStaleContent } from '../services/content-adoption'
+import { createFrameCoalescer } from '../services/frame-coalescer'
 import { NameMatcher, termsFromCharacters } from '../../../shared/name-matcher'
 import { CHARACTERS_CHANGED_EVENT, HOVER_DEGRADE_NOTICE, characterHoverPlugin, hitAt, ignoreHoverAt, isHoverDegraded, setHoverMatcher, type DecoratedHit } from '../services/character-hover'
 import { CharacterHoverCard } from './CharacterHoverCard'
@@ -123,6 +126,8 @@ export function EditorSurface({ node, content, focusMode, onFocusMode, onSaved, 
   const [hoverDegraded, setHoverDegraded] = useState(false)
   const shortcutRef = useRef<(() => void) | undefined>(undefined)
   const chunkExtension = useMemo(() => Extension.create({ name: 'longParagraphChunks', addProseMirrorPlugins: () => [longParagraphChunksPlugin()] }), [])
+  const docEdgeExtension = useMemo(() => Extension.create({ name: 'docEdgeNavigation',
+    addProseMirrorPlugins: () => [docEdgeNavigationPlugin({ reveal: (_view, _pos, edge) => { void revealDocEdge(writingPageRef.current?.parentElement, edge) } })] }), [])
   const hoverExtension = useMemo(() => Extension.create({ name: 'characterHover',
     addProseMirrorPlugins: () => [characterHoverPlugin({ onShortcut: () => shortcutRef.current?.() })] }), [])
   useEffect(() => {
@@ -138,7 +143,7 @@ export function EditorSurface({ node, content, focusMode, onFocusMode, onSaved, 
     { ignoredTerms: hoverPrefs.ignoredTerms, enabledSingleTerms: hoverPrefs.enabledSingleTerms }) : null, [characters, hoverPrefs])
 
   const editor = useEditor({
-    extensions: [StarterKit, CharacterCount, Placeholder.configure({ placeholder: '从这里开始写……' }), hoverExtension, chunkExtension],
+    extensions: [StarterKit, CharacterCount, Placeholder.configure({ placeholder: '从这里开始写……' }), hoverExtension, chunkExtension, docEdgeExtension],
     content: content.editorJson,
     editorProps: { attributes: { class: 'manuscript-editor', spellcheck: 'false' } },
     onUpdate: ({ editor: activeEditor }) => {
@@ -197,15 +202,17 @@ export function EditorSurface({ node, content, focusMode, onFocusMode, onSaved, 
       const current = parseFloat(page.style.getPropertyValue('--block-estimate')) || 0
       if (Math.abs(next - current) >= 0.1) page.style.setProperty('--block-estimate', `${next}px`)
     }
-    updateBlockEstimateRef.current = measure
-    let lastWidth = -1
-    const observer = new ResizeObserver(() => {
-      const width = viewDom()?.clientWidth ?? -1
-      if (width !== lastWidth) { lastWidth = width; measure() }
-    })
-    const attach = (): void => { const dom = viewDom(); if (dom) { observer.observe(dom); measure() } }
+    // 按 rAF 合帧，且只在宽度或文档（ProseMirror doc 不可变，引用变即内容变）真的变了时才测
+    const coalescer = createFrameCoalescer<{ width: number; doc: unknown }>(() => {
+      const dom = viewDom()
+      if (!dom || !writingPageRef.current) return undefined
+      return { width: dom.clientWidth, doc: editor.state.doc }
+    }, measure, (a, b) => a.width === b.width && a.doc === b.doc)
+    updateBlockEstimateRef.current = coalescer.schedule
+    const observer = new ResizeObserver(() => coalescer.schedule())
+    const attach = (): void => { const dom = viewDom(); if (dom) { observer.observe(dom); coalescer.flush() } }
     if (viewDom()) attach(); else editor.on('create', attach)
-    return () => { editor.off('create', attach); observer.disconnect(); updateBlockEstimateRef.current = () => undefined }
+    return () => { editor.off('create', attach); observer.disconnect(); coalescer.cancel(); updateBlockEstimateRef.current = () => undefined }
   }, [editor, content.documentId, content.revision])
 
   useEffect(() => {
@@ -442,7 +449,10 @@ export function EditorSurface({ node, content, focusMode, onFocusMode, onSaved, 
   const jumpToLocalIssue = (issue: LocalLintIssue): void => {
     if (!editor) return
     const range = plainTextRangeToPm(editor.state.doc, issue.from, issue.to)
-    if (range) editor.chain().focus().setTextSelection(range).scrollIntoView().run()
+    if (!range) return
+    // 不用 ProseMirror 的 scrollIntoView（tiptap focus 默认也会下一帧 scrollIntoView）：分块超长段上会卡死，改用 revealPos 瞬时滚动
+    editor.chain().focus(null, { scrollIntoView: false }).setTextSelection(range).run()
+    void revealPos(editor.view, scrollerOf(), range.from)
   }
 
   const runAiProofread = async (): Promise<void> => {

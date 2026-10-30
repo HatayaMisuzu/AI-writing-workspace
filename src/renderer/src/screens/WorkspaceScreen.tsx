@@ -17,6 +17,7 @@ import { RelatedTimelineEvents, TimelineView } from './TimelineView'
 import { Modal } from '../components/Modal'
 import { BlackroomBar, BlackroomEmergencyDialog, BlackroomEntryDialog } from '../components/Blackroom'
 import { parseSearchSnippet } from '../services/search-snippet'
+import { createIdleTask, patchTreeAfterSave } from '../services/tree-patch'
 import { chapterWordRangeHint } from '../services/chapter-word-range-view'
 
 const renderSnippet = (snippet: string): React.ReactNode[] => {
@@ -24,6 +25,8 @@ const renderSnippet = (snippet: string): React.ReactNode[] => {
 }
 
 const NARROW_QUERY = '(max-width: 1080px)'
+const TREE_IDLE_REFRESH_TIMEOUT_MS = 1000
+
 export function WorkspaceScreen({ project, onProjectChanged, onSettings, onRegisterBeforeLeave, onFocusLockChange }: {
   project: Project; onProjectChanged(): void; onSettings(): void; onRegisterBeforeLeave(handler?: () => Promise<void>): void; onFocusLockChange?(locked: boolean): void
 }): React.JSX.Element {
@@ -76,6 +79,15 @@ export function WorkspaceScreen({ project, onProjectChanged, onSettings, onRegis
   const refreshTree = useCallback(async (): Promise<DocumentNode[]> => {
     const next = await window.workspace.documents.tree(project.id); setTree(next); return next
   }, [project.id])
+  // 保存回执只给章节树打局部补丁；补不上（章不在树里）才在空闲时全量刷新，rIC 带 timeout 兜底
+  const refreshTreeRef = useRef(refreshTree)
+  refreshTreeRef.current = refreshTree
+  const idleTreeRefresh = useMemo(() => createIdleTask(() => { void refreshTreeRef.current().catch(() => undefined) }, TREE_IDLE_REFRESH_TIMEOUT_MS), [])
+  useEffect(() => () => idleTreeRefresh.cancel(), [idleTreeRefresh])
+  const patchTreeOnSave = useCallback((saved: DocumentContent): void => {
+    // schedule 是合并的（幂等），放在 updater 里不怕 StrictMode 双调
+    setTree((current) => { const result = patchTreeAfterSave(current, saved); if (result.needsFullRefresh) idleTreeRefresh.schedule(); return result.tree })
+  }, [idleTreeRefresh])
   useEffect(() => { quickIdeaText.current = ideaText }, [ideaText])
   const flushAll = useCallback(async (): Promise<void> => {
     await editorController.current?.flush()
@@ -290,7 +302,7 @@ export function WorkspaceScreen({ project, onProjectChanged, onSettings, onRegis
       : <div className="workspace-actions"><button onClick={() => setSearchOpen(true)}><Search size={16} />全文检索</button><button onClick={() => setIdeaOpen(true)}><Lightbulb size={16} />快速灵感 <kbd>Ctrl J</kbd></button>{selected && <button onClick={() => setPatchOpen(true)}><SlidersHorizontal size={16} />修改提案</button>}{selected && selection && selection.text.trim() && <button type="button" onClick={() => void registerForeshadow()}><BookmarkPlus size={16} />登记为伏笔</button>}<span />{focusMode && <button onClick={() => setFocusMode(false)}><SidebarClose size={16} />退出专注</button>}</div>}
       {navigationError && <div className="navigation-error" role="alert">{navigationError}</div>}
       {section === 'manuscript' && selected && content ? <div className="manuscript-with-outline">
-          <EditorSurface node={selected} content={content} focusMode={hideChrome} onFocusMode={setFocusMode} blackroomLocked={locked} onBlackroom={() => setBlackroomEntryOpen(true)} onSaved={(saved) => { setContent(saved); void refreshTree(); onProjectChanged(); if (locked) void refreshLock() }} onSelection={setSelection} onRegisterController={registerController} onOpenPatches={() => setPatchOpen(true)} onOpenCharacter={(id) => void openCharacter(id)} findRequest={findRequest} onFindRequestDone={() => setFindRequest(undefined)} />
+          <EditorSurface node={selected} content={content} focusMode={hideChrome} onFocusMode={setFocusMode} blackroomLocked={locked} onBlackroom={() => setBlackroomEntryOpen(true)} onSaved={(saved) => { setContent(saved); patchTreeOnSave(saved); onProjectChanged(); if (locked) void refreshLock() }} onSelection={setSelection} onRegisterController={registerController} onOpenPatches={() => setPatchOpen(true)} onOpenCharacter={(id) => void openCharacter(id)} findRequest={findRequest} onFindRequestDone={() => setFindRequest(undefined)} />
           {!hideChrome && <div className="manuscript-aside-stack"><ChapterOutlineAside projectId={project.id} chapter={selected} />{selected.type === 'chapter' && <RelatedTimelineEvents projectId={project.id} chapterId={selected.id} onOpenEvent={(id) => void openTimelineEvent(id)} />}</div>}
         </div>
         : section === 'outline' ? <OutlineView projectId={project.id} tree={tree} onTreeChanged={async () => { await refreshTree(); onProjectChanged() }} onOpenChapter={(node) => void openDocument(node)} onRegisterFlush={registerAuxiliaryFlush} />
