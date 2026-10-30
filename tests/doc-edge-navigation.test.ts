@@ -3,7 +3,7 @@ import { getSchema } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
 import { EditorState, TextSelection, type Transaction } from '@tiptap/pm/state'
 import type { EditorView } from '@tiptap/pm/view'
-import { docEdgeNavigationPlugin, docEdgeOf, docEdgeSelection } from '../src/renderer/src/services/doc-edge-navigation'
+import { docEdgeNavigationPlugin, docEdgeOf, docEdgeSelection, hasLongParagraph, revealTarget } from '../src/renderer/src/services/doc-edge-navigation'
 
 const schema = getSchema([StarterKit])
 const long = '林舟在会上说，他慢慢地看。'.repeat(600)
@@ -41,12 +41,26 @@ describe('PR45 Ctrl+Home/End 由编辑器处理（不走 Chromium 原生光标�
     expect(handle(view, ev({ key: 'End', ctrlKey: true }))).toBe(true)
     expect(dispatched).toHaveLength(1)
     expect(state.selection.head).toBe(doc.content.size - 1)
-    expect(revealed).toEqual([doc.content.size - 1])
+    expect(revealed).toEqual([doc.content.size - 2]) // 段末边界 → 滚到最后一个字
     expect(handle(view, ev({ key: 'Home', ctrlKey: true, shiftKey: true }))).toBe(true)
     expect(state.selection.anchor).toBe(doc.content.size - 1); expect(state.selection.head).toBe(1)
     expect(handle(view, ev({ key: 'End' }))).toBe(false)
     enabled = false
     expect(handle(view, ev({ key: 'End', ctrlKey: true }))).toBe(false)
     expect(dispatched).toHaveLength(2)
+  })
+
+  it('普通（无超长段）文档不接管，交给原生；滚动目标在段末时退到最后一个字', () => {
+    const short = schema.node('doc', null, [schema.node('paragraph', null, [schema.text('短段')])])
+    expect(hasLongParagraph(short)).toBe(false)
+    expect(hasLongParagraph(doc)).toBe(true)
+    const plugin = docEdgeNavigationPlugin({ reveal: () => undefined })
+    const state = EditorState.create({ schema, doc: short, plugins: [plugin] })
+    const view = { state, dispatch: () => { throw new Error('should not dispatch') } } as unknown as EditorView
+    expect(plugin.props.handleKeyDown!.call(plugin, view, ev({ key: 'End', ctrlKey: true }))).toBe(false)
+    const end = TextSelection.create(short, 3)
+    expect(revealTarget(end)).toBe(2)
+    expect(revealTarget(TextSelection.create(short, 2))).toBe(2)
+    expect(revealTarget(TextSelection.create(short, 1))).toBe(1)
   })
 })
