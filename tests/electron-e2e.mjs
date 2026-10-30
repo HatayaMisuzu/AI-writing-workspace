@@ -1538,7 +1538,7 @@ try {
     await page.getByRole('button', { name: '关闭本章大纲' }).click()
     // 全书查找（PR-2a）在小黑屋内同样可用：纯本地，点命中跳回本章并定位
     await page.getByRole('button', { name: '全书查找', exact: true }).click()
-    await page.getByLabel('全书查找', { exact: true }).fill('天亮时')
+    await page.getByRole('textbox', { name: '全书查找', exact: true }).fill('天亮时')
     await page.locator('[data-testid="book-find-summary"][data-done="true"]').waitFor()
     const outlineGroup = page.getByTestId('book-find-group').filter({ hasText: '大纲长章' })
     await outlineGroup.locator('.book-find-hit').first().click()
@@ -1686,7 +1686,7 @@ try {
     await page.reload()
     await page.locator('.work-row', { hasText: '全书查找千章' }).getByRole('button', { name: '继续写作' }).click()
     await page.getByRole('navigation', { name: '作品内容区' }).getByRole('button', { name: '全书查找' }).click()
-    const input = page.getByLabel('全书查找', { exact: true })
+    const input = page.getByRole('textbox', { name: '全书查找', exact: true })
     await input.waitFor()
     // 页面内计时：从输入事件起（含 150ms 去抖），到首个分组出现 / 全部完成；同时记录主线程长任务
     const timeBookFind = (query) => page.evaluate(async (query) => {
