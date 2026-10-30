@@ -1353,13 +1353,15 @@ try {
     const count = () => document.querySelector('[data-testid="find-count"]')?.textContent ?? ''
     const actions = {
       open: () => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'h', ctrlKey: true, bubbles: true })),
-      input: () => { const input = panel().querySelector('input[aria-label="查找"]'); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, arg); input.dispatchEvent(new Event('input', { bubbles: true })) },
+      input: () => { const input = panel().querySelector('input[aria-label="查找"]'); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, arg.query); input.dispatchEvent(new Event('input', { bubbles: true })) },
       prev: () => panel().querySelector('button[aria-label="上一处"]').click(),
+      next: () => panel().querySelector('button[aria-label="下一处"]').click(),
       replaceAll: () => [...panel().querySelectorAll('button')].find((button) => button.textContent === '全部替换').click(),
     }
     const done = {
       open: () => Boolean(panel()?.querySelector('input[aria-label="替换为"]')),
-      input: () => count().includes('共 1000 处'),
+      input: () => count().includes(`共 ${arg?.expect ?? 1000} 处`),
+      next: () => { const box = document.querySelector('.writing-scroll').getBoundingClientRect(); const range = [...(CSS.highlights.get('find-current') ?? [])][0]; const rect = range?.getBoundingClientRect(); return Boolean(rect && rect.height > 0 && rect.top >= box.top && rect.bottom <= box.bottom) },
       prev: () => count() === '第 1000 / 共 1000 处',
       replaceAll: () => /已替换 1000 处/.test(document.querySelector('[data-testid="find-notice"]')?.textContent ?? ''),
     }
@@ -1497,17 +1499,21 @@ try {
     await page.getByTestId('blackroom-bar').waitFor({ state: 'detached' })
   })
 
-  const findPerf = async (page, label, { enforceLimit = true, jump = true } = {}) => {
+  const findPerf = async (page, label, { enforceLimit = true } = {}) => {
     await page.locator('.manuscript-editor').click()
     await page.keyboard.press('Control+Home')
     const openMs = await timeFindStep(page, 'open')
-    const inputMs = await timeFindStep(page, 'input', '远处星')
-    // 含格式的长段落不分块：跳转时整段布局阻塞主线程（实测 >30s 未返回），只记录替换耗时，跳转作为已知风险写进 PR
-    const jumpMs = jump ? await timeFindStep(page, 'prev') : Number.NaN
+    // 跳到段末唯一命中（光标在开头，需滚过整章）；再查 1000 处并从第 1 处 Shift+Enter 回绕到第 1000 处
+    await timeFindStep(page, 'input', { query: '砚台石', expect: 1 })
+    const endMs = await timeFindStep(page, 'next')
+    const inputMs = await timeFindStep(page, 'input', { query: '远处星' })
+    const jumpMs = await timeFindStep(page, 'prev')
     await page.getByLabel('替换为').fill('远处月')
     const replaceMs = await timeFindStep(page, 'replaceAll')
-    process.stdout.write(`P3 find ${label}: open ${openMs.toFixed(1)}ms, input ${inputMs.toFixed(1)}ms, jump ${jumpMs.toFixed(1)}ms, replace-all 1000 ${replaceMs.toFixed(1)}ms (limit 1000ms)\n`)
-    if (enforceLimit) for (const [name, ms] of [['打开', openMs], ['输入后刷新', inputMs], ['跳转', jumpMs], ['全部替换 1000 处', replaceMs]]) assert.ok(ms <= 1000, `${label} ${name} ${ms.toFixed(1)}ms 应 ≤1000ms`)
+    process.stdout.write(`P3 find ${label}: open ${openMs.toFixed(1)}ms, input ${inputMs.toFixed(1)}ms, jump-to-end ${endMs.toFixed(1)}ms, jump-wrap-to-1000 ${jumpMs.toFixed(1)}ms, replace-all 1000 ${replaceMs.toFixed(1)}ms (limit 1000ms${enforceLimit ? '' : '; replace-all record only'})\n`)
+    // 跳转（段末、回绕）在所有长章里都 ≤1s；含格式长段落的全部替换只记录
+    const limited = [['打开', openMs], ['输入后刷新', inputMs], ['跳到段末', endMs], ['Shift+Enter 回绕到第 1000 处', jumpMs], ...(enforceLimit ? [['全部替换 1000 处', replaceMs]] : [])]
+    for (const [name, ms] of limited) assert.ok(ms <= 1000, `${label} ${name} ${ms.toFixed(1)}ms 应 ≤1000ms`)
     await page.getByTestId('find-count').filter({ hasText: '无匹配' }).waitFor()
     const replaced = await page.evaluate(() => document.querySelector('.manuscript-editor').textContent)
     assert.equal((replaced.match(/远处月/g) ?? []).length, 1000, '1000 处全部替换')
@@ -1526,7 +1532,7 @@ try {
     const page = running.page
     const viewport = page.viewportSize()
     await page.setViewportSize({ width: 1600, height: 900 })
-    await createChapter(page, '查找单段长章', [{ text: perfSentences.join('') }])
+    await createChapter(page, '查找单段长章', [{ text: perfSentences.join('') + '末尾砚台石。' }])
     await openFresh(page, '查找单段长章', '林舟在会上说')
     await findPerf(page, 'single paragraph 198968 chars')
     if (viewport) await page.setViewportSize(viewport)
@@ -1536,13 +1542,13 @@ try {
     const page = running.page
     const viewport = page.viewportSize()
     await page.setViewportSize({ width: 1600, height: 900 })
-    await createChapter(page, '查找多段长章', perfSentences.map((text) => ({ text })))
+    await createChapter(page, '查找多段长章', [...perfSentences.map((text) => ({ text })), { text: '末尾砚台石。' }])
     await openFresh(page, '查找多段长章', '林舟在会上说')
     await findPerf(page, 'multi paragraph 5852 blocks')
     if (viewport) await page.setViewportSize(viewport)
   })
 
-  await record('P3 性能（只记录）：含粗体的 19.9 万字长段落全部替换 1000 处（逐处慢路径），断言正确与一次撤销恢复，耗时只打印不设上限', async () => {
+  await record('P3 性能：含粗体的 19.9 万字长段落查找打开 / 刷新 / 跳到段末 / Shift+Enter 回绕到第 1000 处各 ≤1s；全部替换 1000 处（逐处慢路径）只记录耗时，断言正确与一次撤销恢复', async () => {
     const page = running.page
     const viewport = page.viewportSize()
     await page.setViewportSize({ width: 1600, height: 900 })
@@ -1550,6 +1556,7 @@ try {
     const content = perfSentences.map((text, i) => i % 100 === 0 ? { type: 'text', text, marks: [{ type: 'bold' }] } : { type: 'text', text })
     const merged = []
     for (const item of content) { const last = merged.at(-1); if (last && !last.marks && !item.marks) last.text += item.text; else merged.push({ ...item }) }
+    merged.at(-1).text += '末尾砚台石。'
     await page.evaluate(async ({ projectId, merged }) => {
       const tree = await window.workspace.documents.tree(projectId)
       const volume = tree.find((item) => item.type === 'volume')
@@ -1558,7 +1565,7 @@ try {
     }, { projectId: ids.projectId, merged })
     await openFresh(page, '查找粗体长段', '林舟在会上说')
     assert.ok(await page.locator('.manuscript-editor strong').count() > 0, '段内确有粗体')
-    await findPerf(page, 'bold long paragraph (record only)', { enforceLimit: false, jump: false })
+    await findPerf(page, 'bold long paragraph (record only)', { enforceLimit: false })
     if (viewport) await page.setViewportSize(viewport)
   })
 

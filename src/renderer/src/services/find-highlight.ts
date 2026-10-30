@@ -45,22 +45,19 @@ export function clearFindHighlights(): void {
 const frame = (): Promise<void> => new Promise((resolve) => requestAnimationFrame(() => resolve()))
 
 /**
- * 把 pos 滚到滚动容器上部 1/3 处。content-visibility:auto 的块进入视口后才按真实高度布局，
- * 估算高度偏小时一次滚动会落在目标之前，所以逐帧校正，直到目标在可视区且位置不再变化（最多 REVEAL_MAX_FRAMES 帧）。
+ * 把 pos 滚到滚动容器上部 1/3 处：下一帧量一次（单次 coordsAtPos）并瞬时滚动，再下一帧最多校正一次。
+ * 不做逐帧收敛：每次 coordsAtPos 都可能强制布局整段（含格式的超长段落不分块），多次校正会把卡顿成倍放大。
+ * .writing-scroll 设了 scroll-behavior:smooth，所以用 behavior:'instant'。
  */
-export const REVEAL_MAX_FRAMES = 24
+export const REVEAL_CORRECTIONS = 1
 export async function revealPos(view: EditorView, scroller: HTMLElement | null | undefined, pos: number): Promise<void> {
   if (!scroller) return
-  let lastTop = Number.NaN
-  for (let attempt = 0; attempt < REVEAL_MAX_FRAMES; attempt += 1) {
-    if (view.isDestroyed) return
+  for (let attempt = 0; attempt <= REVEAL_CORRECTIONS; attempt += 1) {
+    await frame()
+    if (view.isDestroyed || pos > view.state.doc.content.size) return
     const coords = view.coordsAtPos(pos)
     const box = scroller.getBoundingClientRect()
-    const visible = coords.top >= box.top && coords.bottom <= box.bottom
-    if (visible && Math.abs(coords.top - lastTop) < 1) return
-    lastTop = coords.top
-    // .writing-scroll 设了 scroll-behavior:smooth；逐帧校正必须用 instant，否则会叠加在未完成的平滑动画上
-    if (!visible) scroller.scrollTo({ top: scroller.scrollTop + coords.top - (box.top + box.height / 3), behavior: 'instant' })
-    await frame()
+    if (coords.top >= box.top && coords.bottom <= box.bottom) return
+    scroller.scrollTo({ top: scroller.scrollTop + coords.top - (box.top + box.height / 3), behavior: 'instant' })
   }
 }
