@@ -4,6 +4,7 @@ import type { FocusLockInput, FocusLockStatus, ChapterWordRange, DocumentContent
 import { ProjectSidebar, type ProjectSection } from '../components/ProjectSidebar'
 import { EditorSurface, type EditorController, type EditorSelection } from '../components/EditorSurface'
 import { AssistantPanel } from '../components/AssistantPanel'
+import { BookFindView, type BookFindTarget } from './BookFindView'
 import { ChapterOutlineAside, CharactersView, HistoryView, IdeasView, MemoryView, NotesView, OutlineView, PatchDrawer } from './ProjectViews'
 import { DailyStatsView } from './DailyStatsView'
 import { PromptTemplatesView } from './PromptTemplatesView'
@@ -159,6 +160,14 @@ export function WorkspaceScreen({ project, onProjectChanged, onSettings, onRegis
     try { await flushAll(); setSection(next); setNavigationError(undefined) }
     catch (error) { setNavigationError(`保存失败，无法离开当前内容：${error instanceof Error ? error.message : String(error)}`) }
   }
+  // 全书查找点击命中 → 打开该章并让编辑器打开章内查找定位；编辑器消费后清掉，避免之后切回正文时重复触发
+  const [findRequest, setFindRequest] = useState<(BookFindTarget & { token: number }) | undefined>()
+  const findToken = useRef(0)
+  const openBookHit = async (target: BookFindTarget): Promise<void> => {
+    findToken.current += 1
+    setFindRequest({ ...target, token: findToken.current })
+    await openChapterById(target.documentId)
+  }
   const openChapterById = async (chapterId: string): Promise<void> => {
     const node = tree.find((item) => item.id === chapterId)
     if (!node) { setNavigationError('关联章节已被删除。'); return }
@@ -264,11 +273,11 @@ export function WorkspaceScreen({ project, onProjectChanged, onSettings, onRegis
   return <div className={hideChrome ? `workspace-screen is-focus${locked ? ' is-blackroom' : ''}` : 'workspace-screen'}>
     {!hideChrome && <ProjectSidebar project={project} tree={tree} selectedId={selected?.id} section={section} onSection={(next) => { setTimelineFocus(undefined); setCharacterFocus(undefined); void changeSection(next) }} onSelect={(node) => void openDocument(node)} onNewVolume={() => void requestCreateNode('volume')} onNewChapter={(parent) => void requestCreateNode('chapter', parent)} onRename={(node) => setNodeEditor({ node, action: 'rename', title: node.title })} onDelete={(node) => setNodeEditor({ node, action: 'delete', title: node.title })} onReorder={async (documentId, parentId, orderIndex) => { try { await flushAll(); await window.workspace.documents.reorder(project.id, documentId, parentId, orderIndex); await refreshTree() } catch (error) { setNavigationError(String(error)) } }}  onSetStatus={async (node, status) => { try { await window.workspace.documents.setStatus(project.id, node.id, status); await refreshTree() } catch (error) { setNavigationError(String(error)) } }} />}
     <div className="workspace-main">
-      {locked && lockStatus ? <div className="workspace-actions blackroom-actions"><BlackroomBar status={lockStatus} chapters={tree.filter((node) => node.type === 'chapter')} selectedId={selected?.id} onSelectChapter={(node) => void openDocument(node)} onFinish={() => void finishBlackroom()} onEmergency={() => setBlackroomExitOpen(true)} /><button onClick={() => setIdeaOpen(true)}><Lightbulb size={16} />快速灵感 <kbd>Ctrl J</kbd></button></div>
+      {locked && lockStatus ? <div className="workspace-actions blackroom-actions"><BlackroomBar status={lockStatus} chapters={tree.filter((node) => node.type === 'chapter')} selectedId={selected?.id} onSelectChapter={(node) => void openDocument(node)} onFinish={() => void finishBlackroom()} onEmergency={() => setBlackroomExitOpen(true)} /><button onClick={() => void changeSection(section === 'book-find' ? 'manuscript' : 'book-find')}><Search size={16} />{section === 'book-find' ? '回到正文' : '全书查找'}</button><button onClick={() => setIdeaOpen(true)}><Lightbulb size={16} />快速灵感 <kbd>Ctrl J</kbd></button></div>
       : <div className="workspace-actions"><button onClick={() => setSearchOpen(true)}><Search size={16} />全文检索</button><button onClick={() => setIdeaOpen(true)}><Lightbulb size={16} />快速灵感 <kbd>Ctrl J</kbd></button>{selected && <button onClick={() => setPatchOpen(true)}><SlidersHorizontal size={16} />修改提案</button>}{selected && selection && selection.text.trim() && <button type="button" onClick={() => void registerForeshadow()}><BookmarkPlus size={16} />登记为伏笔</button>}<span />{focusMode && <button onClick={() => setFocusMode(false)}><SidebarClose size={16} />退出专注</button>}</div>}
       {navigationError && <div className="navigation-error" role="alert">{navigationError}</div>}
       {section === 'manuscript' && selected && content ? <div className="manuscript-with-outline">
-          <EditorSurface node={selected} content={content} focusMode={hideChrome} onFocusMode={setFocusMode} blackroomLocked={locked} onBlackroom={() => setBlackroomEntryOpen(true)} onSaved={(saved) => { setContent(saved); void refreshTree(); onProjectChanged(); if (locked) void refreshLock() }} onSelection={setSelection} onRegisterController={registerController} onOpenPatches={() => setPatchOpen(true)} onOpenCharacter={(id) => void openCharacter(id)} />
+          <EditorSurface node={selected} content={content} focusMode={hideChrome} onFocusMode={setFocusMode} blackroomLocked={locked} onBlackroom={() => setBlackroomEntryOpen(true)} onSaved={(saved) => { setContent(saved); void refreshTree(); onProjectChanged(); if (locked) void refreshLock() }} onSelection={setSelection} onRegisterController={registerController} onOpenPatches={() => setPatchOpen(true)} onOpenCharacter={(id) => void openCharacter(id)} findRequest={findRequest} onFindRequestDone={() => setFindRequest(undefined)} />
           {!hideChrome && <div className="manuscript-aside-stack"><ChapterOutlineAside projectId={project.id} chapter={selected} />{selected.type === 'chapter' && <RelatedTimelineEvents projectId={project.id} chapterId={selected.id} onOpenEvent={(id) => void openTimelineEvent(id)} />}</div>}
         </div>
         : section === 'outline' ? <OutlineView projectId={project.id} tree={tree} onTreeChanged={async () => { await refreshTree(); onProjectChanged() }} onOpenChapter={(node) => void openDocument(node)} onRegisterFlush={registerAuxiliaryFlush} />
@@ -279,6 +288,7 @@ export function WorkspaceScreen({ project, onProjectChanged, onSettings, onRegis
         : section === 'references' ? <NotesView projectId={project.id} section="reference" onRegisterFlush={registerAuxiliaryFlush} />
         : section === 'characters' ? <CharactersView projectId={project.id} onRegisterFlush={registerAuxiliaryFlush} focusCharacterId={characterFocus} onOpenTimelineEvent={(id) => void openTimelineEvent(id)} />
         : section === 'prompts' ? <PromptTemplatesView project={project} />
+        : section === 'book-find' ? <BookFindView projectId={project.id} chapters={tree.filter((node) => node.type === 'chapter')} onOpenHit={(target) => void openBookHit(target)} />
         : section === 'proofing' ? <ProofingView project={project} tree={tree} locked={locked} onOpenChapter={(id) => void openChapterById(id)} />
         : section === 'daily' ? <DailyStatsView project={project} />
         : section === 'stockpile' ? <StockpileView project={project} chapters={tree.filter((node) => node.type === 'chapter')} onProgressChanged={() => { onProjectChanged(); void refreshTree() }} />

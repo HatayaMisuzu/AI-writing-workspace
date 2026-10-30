@@ -18,7 +18,7 @@ import { isStaleContent } from '../services/content-adoption'
 import { NameMatcher, termsFromCharacters } from '../../../shared/name-matcher'
 import { CHARACTERS_CHANGED_EVENT, HOVER_DEGRADE_NOTICE, characterHoverPlugin, hitAt, ignoreHoverAt, isHoverDegraded, setHoverMatcher, type DecoratedHit } from '../services/character-hover'
 import { CharacterHoverCard } from './CharacterHoverCard'
-import { FindReplacePanel } from './FindReplacePanel'
+import { FindReplacePanel, type FindInitial } from './FindReplacePanel'
 import { ChapterHeadingsPanel } from './ChapterHeadingsPanel'
 
 export interface EditorSelection { fromPm: number; toPm: number; text: string }
@@ -41,7 +41,10 @@ const issueLabel = (kind: string): string => ({
   quote: '引号', punctuation: '标点', wordlist_replace: '词表替换', wordlist_hint: '词表提示', repeat_char: '重复字', halfwidth: '全半角', typo: '错别字', grammar: '语法', reference: '指代', repetition: '重复', format: '格式'
 }[kind] ?? '文字提示')
 
-export function EditorSurface({ node, content, focusMode, onFocusMode, onSaved, onSelection, onRegisterController, onOpenPatches, blackroomLocked = false, onBlackroom, onOpenCharacter }: {
+export function EditorSurface({ node, content, focusMode, onFocusMode, onSaved, onSelection, onRegisterController, onOpenPatches, blackroomLocked = false, onBlackroom, onOpenCharacter, findRequest, onFindRequestDone }: {
+  /** 全书查找点击命中：打开章内查找并定位（token 变化才触发）。 */
+  findRequest?: FindInitial & { documentId: string; token: number }
+  onFindRequestDone?(): void
   blackroomLocked?: boolean; onBlackroom?(): void; onOpenCharacter?(characterId: string): void
   node: DocumentNode; content: DocumentContent; focusMode: boolean; onFocusMode(value: boolean): void
   onSaved(content: DocumentContent): void; onSelection(selection?: EditorSelection): void
@@ -403,6 +406,12 @@ export function EditorSurface({ node, content, focusMode, onFocusMode, onSaved, 
     return () => window.removeEventListener('keydown', onKey)
   }, [openFind])
   useEffect(() => { setFindMode(undefined) }, [node.id])
+  const [findInitial, setFindInitial] = useState<(FindInitial & { token: number }) | undefined>()
+  useEffect(() => {
+    if (!findRequest || findRequest.documentId !== node.id) return
+    setFindInitial(findRequest); openFind('find'); onFindRequestDone?.()
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 只按 token 触发
+  }, [findRequest?.token, node.id])
 
   // 出屋后重新检查（屋内不跑自动检查）
   const wasLocked = useRef(blackroomLocked)
@@ -525,7 +534,7 @@ export function EditorSurface({ node, content, focusMode, onFocusMode, onSaved, 
     </div>
     {saveError && <div className="save-error" role="alert">{saveError}</div>}
     <div className="writing-scroll"><article className="writing-page" ref={writingPageRef}><h1>{node.title}</h1><EditorContent editor={editor} /></article></div>
-    {editor && findMode && <FindReplacePanel key={node.id} editor={editor} mode={findMode} focusToken={findFocusToken} scroller={scrollerOf} onMode={openFind} onClose={closeFind} />}
+    {editor && findMode && <FindReplacePanel key={`${node.id}:${findInitial?.token ?? 0}`} initial={findInitial} editor={editor} mode={findMode} focusToken={findFocusToken} scroller={scrollerOf} onMode={openFind} onClose={closeFind} />}
     {editor && headingsOpen && <ChapterHeadingsPanel key={node.id} editor={editor} scroller={scrollerOf} onClose={() => setHeadingsOpen(false)} />}
     <div className="editor-status"><span>{liveWordCount.toLocaleString()} 字</span>{visibleLocalIssues.length > 0 && <button className="proofread-count" onClick={() => setProofreadOpen(true)}>{visibleLocalIssues.length} 条校对提示</button>}{hoverDegraded && hoverPrefs?.enabled && <span className="hover-degraded" data-testid="hover-degraded">{HOVER_DEGRADE_NOTICE}</span>}</div>
     {hoverCard && <CharacterHoverCard term={hoverCard.hit.term} position={hoverCard.position} showOpenLink={!blackroomLocked && Boolean(onOpenCharacter)}

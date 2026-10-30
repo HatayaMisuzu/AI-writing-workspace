@@ -584,3 +584,14 @@ button.link { border: 0; background: none; padding: 0; color: var(--accent, #2f6
 .chapter-headings .level-2 button { padding-left: 18px; }
 .chapter-headings .level-3 button, .chapter-headings .level-4 button { padding-left: 28px; }
 .chapter-headings .scene strong { font-weight: 400; color: var(--muted, #666); }
+
+/* 全书查找（PR-2a） */
+.book-find { display: flex; flex-direction: column; gap: 12px; padding: 24px; max-width: 880px; margin: 0 auto; width: 100%; overflow: auto; }
+.book-find-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.book-find-controls input[type="search"], .book-find-controls input[type="text"] { flex: 1 1 280px; min-width: 0; padding: 6px 10px; }
+.book-find-summary { color: var(--muted, #777); font-size: 13px; }
+.book-find-groups { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.book-find-title { all: unset; cursor: pointer; font-weight: 600; display: flex; justify-content: space-between; width: 100%; }
+.book-find-hit { all: unset; cursor: pointer; display: block; padding: 4px 8px; border-radius: 4px; line-height: 1.6; }
+.book-find-hit:hover, .book-find-hit:focus-visible { background: rgba(127, 127, 127, 0.12); outline: none; }
+.book-find-hit mark { background: rgba(255, 200, 0, 0.45); color: inherit; }

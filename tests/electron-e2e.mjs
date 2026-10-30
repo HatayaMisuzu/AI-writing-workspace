@@ -1536,6 +1536,16 @@ try {
     await page.getByRole('button', { name: '章内大纲', exact: true }).click()
     await page.getByTestId('chapter-headings').locator('li button', { hasText: '一、夜行' }).click()
     await page.getByRole('button', { name: '关闭本章大纲' }).click()
+    // 全书查找（PR-2a）在小黑屋内同样可用：纯本地，点命中跳回本章并定位
+    await page.getByRole('button', { name: '全书查找', exact: true }).click()
+    await page.getByRole('textbox', { name: '全书查找', exact: true }).fill('天亮时')
+    await page.locator('[data-testid="book-find-summary"][data-done="true"]').waitFor()
+    const outlineGroup = page.getByTestId('book-find-group').filter({ hasText: '大纲长章' })
+    await outlineGroup.locator('.book-find-hit').first().click()
+    await page.getByTestId('find-count').filter({ hasText: '共 1 处' }).waitFor()
+    assert.equal(await page.getByLabel('查找', { exact: true }).inputValue(), '天亮时', '跳转后章内查找预填查询')
+    assert.equal(await page.evaluate(() => window.getSelection()?.toString()), '天亮时', '跳转后选中该处命中')
+    await page.getByLabel('查找', { exact: true }).press('Escape')
     await page.waitForTimeout(500)
     const after = await snapshotNetwork(page)
     for (const key of Object.keys(before)) assert.equal(after[key] - before[key], 0, `小黑屋内查找/大纲 ${key} 网络应为 0`)
@@ -1653,6 +1663,102 @@ try {
     await openFresh(page, '查找粗体长段', '林舟在会上说')
     await undoSaveControl(page, 'bold long paragraph pr39', '末尾砚台石。')
     if (viewport) await page.setViewportSize(viewport)
+  })
+
+  await record('P3 全书查找：1000 章按章分组，首批分组可见 ≤1s、全量 ≤5s、搜索期间单个主线程任务 ≤200ms；超 10 万处截断并禁用；点命中定位', async () => {
+    const page = running.page
+    const mainTitle = await page.evaluate(async (projectId) => (await window.workspace.projects.list(true)).find((item) => item.id === projectId).title, ids.projectId)
+    // 1000 章 × 约 3000 字（88 句 × 34 字），每章 10 处「远处星」；只有第 997 章含「砚台石」
+    const book = await page.evaluate(async (seg) => {
+      const project = await window.workspace.projects.create({ title: '全书查找千章', projectType: 'novel', description: '' })
+      const tree = await window.workspace.documents.tree(project.id)
+      const volume = tree.find((item) => item.type === 'volume')
+      const started = performance.now()
+      for (let n = 1; n <= 1000; n += 1) {
+        const sentences = Array.from({ length: 88 }, (_, i) => i % 9 === 0 && i < 90 ? seg.replace('远处灯', '远处星') : seg)
+        if (n === 997) sentences[40] = sentences[40].replace('夜色', '砚台石')
+        const text = sentences.join('')
+        const node = await window.workspace.documents.create({ projectId: project.id, parentId: volume.id, type: 'chapter', title: `第${n}章` })
+        await window.workspace.documents.save({ projectId: project.id, documentId: node.id, editorJson: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text }] }] }, plainText: text, expectedRevision: 0 })
+      }
+      return { id: project.id, seedMs: Math.round(performance.now() - started) }
+    }, seg34)
+    await page.reload()
+    await page.locator('.work-row', { hasText: '全书查找千章' }).getByRole('button', { name: '继续写作' }).click()
+    await page.getByRole('navigation', { name: '作品内容区' }).getByRole('button', { name: '全书查找' }).click()
+    const input = page.getByRole('textbox', { name: '全书查找', exact: true })
+    await input.waitFor()
+    // 页面内计时：从输入事件起（含 150ms 去抖），到首个分组出现 / 全部完成；同时记录主线程长任务
+    const timeBookFind = (query) => page.evaluate(async (query) => {
+      const frame = () => new Promise((resolve) => requestAnimationFrame(() => resolve()))
+      // 对照：同一套 longtask 监听下同步忙等约 120ms，必须能记录到 ≥100ms 的任务；记录完断开，真实测量用新的空记录
+      const controlTasks = []
+      const control = new PerformanceObserver((list) => { for (const entry of list.getEntries()) controlTasks.push(Math.round(entry.duration)) })
+      control.observe({ type: 'longtask' })
+      await frame()
+      const busyUntil = performance.now() + 120
+      while (performance.now() < busyUntil) { /* 故意占住主线程 */ }
+      await frame(); await frame(); await new Promise((resolve) => setTimeout(resolve, 50))
+      for (const entry of control.takeRecords()) controlTasks.push(Math.round(entry.duration))
+      control.disconnect()
+      const controlMs = controlTasks.length ? Math.max(...controlTasks) : 0
+      await frame()
+      const longTasks = []
+      const observer = new PerformanceObserver((list) => { for (const entry of list.getEntries()) longTasks.push(Math.round(entry.duration)) })
+      observer.observe({ type: 'longtask' })
+      const el = document.querySelector('input[aria-label="全书查找"]')
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set
+      const started = performance.now()
+      setter.call(el, query); el.dispatchEvent(new Event('input', { bubbles: true }))
+      let firstMs
+      // 先等旧结果被清掉（查询变化即清空），再开始认新结果，避免读到上一次的 done
+      while (document.querySelector('[data-testid="book-find-summary"]')) {
+        if (performance.now() - started > 5_000) throw new Error('book find stale results not cleared')
+        await frame()
+      }
+      while (true) {
+        if (firstMs === undefined && document.querySelector('[data-testid="book-find-group"]')) firstMs = performance.now() - started
+        if (document.querySelector('[data-testid="book-find-summary"][data-done="true"]') && firstMs !== undefined) break
+        if (performance.now() - started > 60_000) throw new Error('book find timeout')
+        await frame()
+      }
+      const doneMs = performance.now() - started
+      await frame(); await frame()
+      observer.disconnect()
+      return { controlMs, firstMs: Math.round(firstMs), doneMs: Math.round(doneMs), maxLongTask: longTasks.length ? Math.max(...longTasks) : 0, longTasks: longTasks.length,
+        summary: document.querySelector('[data-testid="book-find-summary"]').textContent, groups: document.querySelectorAll('[data-testid="book-find-group"]').length }
+    }, query)
+    const all = await timeBookFind('远处星')
+    process.stdout.write(`P3 book-find longtask control (all): ${all.controlMs}ms (need >=100ms)\n`)
+    assert.ok(all.controlMs >= 100, `longtask 对照：忙等 120ms 只记录到 ${all.controlMs}ms，监听不可信`)
+    process.stdout.write(`P3 book-find 1000 chapters: seed ${book.seedMs}ms; first-group ${all.firstMs}ms (limit 1000ms), done ${all.doneMs}ms (limit 5000ms), max long task ${all.maxLongTask}ms over ${all.longTasks} (limit 200ms); ${all.summary}\n`)
+    assert.equal(all.summary, '1000 章 · 共 10,000 处')
+    assert.equal(all.groups, 200, '一次只渲染前 200 章')
+    assert.ok(all.firstMs <= 1000, `首批分组可见 ${all.firstMs}ms 应 ≤1s`)
+    assert.ok(all.doneMs <= 5000, `全量搜索 ${all.doneMs}ms 应 ≤5s`)
+    assert.ok(all.maxLongTask <= 200, `搜索期间最长主线程任务 ${all.maxLongTask}ms 应 ≤200ms`)
+    // 截断：「狠狠」每章 176 处 × 1000 = 17.6 万处 > 10 万
+    const over = await timeBookFind('狠狠')
+    process.stdout.write(`P3 book-find longtask control (over): ${over.controlMs}ms (need >=100ms)\n`)
+    assert.ok(over.controlMs >= 100, `longtask 对照：忙等 120ms 只记录到 ${over.controlMs}ms，监听不可信`)
+    process.stdout.write(`P3 book-find truncated: done ${over.doneMs}ms, max long task ${over.maxLongTask}ms; ${over.summary}\n`)
+    assert.match(over.summary, /共 100,000 处.*请缩小查找范围/)
+    assert.equal(await page.getByRole('button', { name: /替换/ }).count(), 0, '2a 没有替换入口')
+    // 唯一命中：第 997 章，点击跳转并定位
+    const one = await timeBookFind('砚台石')
+    process.stdout.write(`P3 book-find longtask control (one): ${one.controlMs}ms (need >=100ms)\n`)
+    assert.ok(one.controlMs >= 100, `longtask 对照：忙等 120ms 只记录到 ${one.controlMs}ms，监听不可信`)
+    process.stdout.write(`P3 book-find single hit: done ${one.doneMs}ms, max long task ${one.maxLongTask}ms; ${one.summary}\n`)
+    assert.equal(one.summary, '1 章 · 共 1 处')
+    await page.getByTestId('book-find-group').filter({ hasText: '第997章' }).locator('.book-find-hit').click()
+    await page.getByTestId('find-count').filter({ hasText: '第 1 / 共 1 处' }).waitFor()
+    assert.equal(await page.evaluate(() => window.getSelection()?.toString()), '砚台石')
+    await page.getByLabel('查找', { exact: true }).press('Escape')
+    // 收尾：归档千章书，回到主作品
+    await page.evaluate((id) => window.workspace.projects.archive(id, true), book.id)
+    await page.reload()
+    await page.locator('.work-row', { hasText: mainTitle }).getByRole('button', { name: '继续写作' }).click()
+    await page.locator('.manuscript-editor').waitFor()
   })
 
   await record('F15 ⑫ 锁定可见性：作品库 / 其他作品显示被锁书名与回去入口；AI 报错带书名无前缀；Esc 只关紧急出口对话框', async () => {
