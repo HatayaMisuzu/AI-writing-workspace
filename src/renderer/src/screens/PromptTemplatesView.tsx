@@ -1,3 +1,4 @@
+import { displayProjectTitle } from '../services/project-title'
 import { Copy, RotateCcw, Save } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import type { AIMode, Project } from '../../../shared/domain'
@@ -58,7 +59,7 @@ export function PromptTemplatesView({ project }: { project: Project }): React.JS
     await guard(`g:${mode}`, async () => { applyGlobal(await window.workspace.prompts.setGlobal(mode, text)); apply(await window.workspace.prompts.list(project.id)) }, '已保存（全局，所有沿用全局的作品立即生效）')
   }
   const copySource = (): PromptCopySource => copyFrom === 'global' ? { kind: 'global' } : { kind: 'project', projectId: copyFrom }
-  const sourceName = copyFrom === 'global' ? '全局模板' : `《${others.find((item) => item.id === copyFrom)?.title ?? '其他作品'}》`
+  const sourceName = copyFrom === 'global' ? '全局模板' : `《${displayProjectTitle(others.find((item) => item.id === copyFrom)?.title ?? '其他作品')}》`
   const label = (entry: PromptTemplateEntry): string => entry.source === 'builtin' ? '内置默认' : `${PROMPT_SOURCE_LABELS[entry.source]}${entry.source === 'project' ? '覆盖' : '模板'}`
 
   return <section className="project-view" data-testid="prompt-templates-view">
@@ -83,7 +84,7 @@ export function PromptTemplatesView({ project }: { project: Project }): React.JS
       <header><h2>从其他作品复制</h2><small>先预览，确认后才写入；写入后本书切换为「本书自定义」</small></header>
       <select aria-label="复制来源" value={copyFrom} onChange={(event) => { setCopyFrom(event.target.value); setPreview(undefined) }}>
         <option value="global">全局模板</option>
-        {others.map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}
+        {others.map((item) => <option key={item.id} value={item.id}>{displayProjectTitle(item.title)}</option>)}
       </select>
       <button type="button" onClick={() => void guard('copy', async () => setPreview(await window.workspace.prompts.previewCopy(project.id, copySource())), '已生成预览（尚未写入）')}><Copy size={14} />预览</button>
       {preview && <div className="prompt-copy-preview" data-testid="prompt-copy-preview">

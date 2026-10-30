@@ -5,6 +5,7 @@
  * - 同一 term 属于多张卡：同一区间返回全部 characterIds（不自动选）。
  * - 单字 term 默认不参与（可按 characterId+term 打开）；忽略列表中的 term 不参与。
  * - 比较前 trim、全角→半角；空 term 忽略。全角半角是 1:1 的 UTF-16 映射，区间下标即原文下标。
+ * - 英文（ASCII A–Z）大小写不敏感：term 与正文都折成小写再比较（1:1 映射，下标不变）；命中返回首个原 term。
  */
 export type NameTermKind = 'name' | 'alias'
 export interface NameTerm { term: string; characterId: string; kind: NameTermKind }
@@ -23,8 +24,10 @@ export const MATCHER_LIMITS = { characters: 2000, terms: 10_000, chapterChars: 2
 export const normalizeWidth = (text: string): string => text.replace(/[\uFF01-\uFF5E\u3000]/g, (char) =>
   char === '\u3000' ? ' ' : String.fromCharCode(char.charCodeAt(0) - 0xFEE0))
 export const normalizeTerm = (term: string): string => normalizeWidth(term.trim())
+/** ASCII 大写 → 小写（长度不变）；只给匹配器内部比较用，不改 normalizeTerm 的语义。 */
+export const foldAsciiCase = (text: string): string => text.replace(/[A-Z]/g, (char) => String.fromCharCode(char.charCodeAt(0) + 32))
 export const isSingleCharTerm = (term: string): boolean => [...normalizeTerm(term)].length === 1
-const refKey = (characterId: string, term: string): string => `${characterId}\u0000${normalizeTerm(term)}`
+const refKey = (characterId: string, term: string): string => `${characterId}\u0000${foldAsciiCase(normalizeTerm(term))}`
 /** NaN（越界）→ false */
 const isAlnumCode = (code: number): boolean => (code >= 48 && code <= 57) || (code >= 65 && code <= 90) || (code >= 97 && code <= 122)
 
@@ -55,7 +58,7 @@ export class NameMatcher {
     const enabled = new Set((options.enabledSingleTerms ?? []).map((ref) => refKey(ref.characterId, ref.term)))
     const ignored = new Set((options.ignoredTerms ?? []).map((ref) => refKey(ref.characterId, ref.term)))
     for (const item of terms) {
-      const normalized = normalizeTerm(item.term)
+      const normalized = foldAsciiCase(normalizeTerm(item.term))
       if (!normalized) continue
       const key = refKey(item.characterId, normalized)
       if (ignored.has(key)) continue
@@ -101,7 +104,7 @@ export class NameMatcher {
   /** 扫描 text，返回不重叠命中（下标为 UTF-16 偏移）。 */
   match(text: string): NameHit[] {
     if (!this.termCount || !text) return []
-    const source = normalizeWidth(text)
+    const source = foldAsciiCase(normalizeWidth(text))
     const best = new Int32Array(source.length)
     const nodes = this.nodes
     let state = 0

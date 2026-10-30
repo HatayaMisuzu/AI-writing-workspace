@@ -1,3 +1,4 @@
+import { displayProjectTitle } from '../services/project-title'
 import { userErrorMessage } from '../../../shared/user-error'
 import { Archive, Download, FileText, MoreHorizontal, Plus, Search, ShieldCheck } from 'lucide-react'
 import { useMemo, useState } from 'react'
@@ -47,8 +48,8 @@ export function LibraryScreen({ projects, onOpen, onCreate, onImport, onImportMa
       <button className="primary" onClick={onCreate}><Plus size={17} />新建作品</button>
     </section> : <>
       <section className="recent-shelf"><h2>最近写作</h2><div className="recent-row">{recent.map((project, index) => <button key={project.id} className="recent-work" onClick={() => onOpen(project)}>
-        <span className={`cover cover-${index % 3}`}><span>{project.title.slice(0, 4)}</span></span>
-        <span className="recent-meta"><strong>{project.title}</strong><small>{typeName[project.projectType]} · {formatCount(project.totalWordCount)} 字</small><small>{relative(project.updatedAt)}</small></span>
+        <span className={`cover cover-${index % 3}`}><span>{displayProjectTitle(project.title).slice(0, 4)}</span></span>
+        <span className="recent-meta"><strong>{displayProjectTitle(project.title)}</strong><small>{typeName[project.projectType]} · {formatCount(project.totalWordCount)} 字</small><small>{relative(project.updatedAt)}</small></span>
       </button>)}</div></section>
       <section className="library-list-section">
         <div className="list-toolbar">
@@ -58,7 +59,7 @@ export function LibraryScreen({ projects, onOpen, onCreate, onImport, onImportMa
         <div className="works-table">
           <div className="table-head"><span>作品名称</span><span>类型</span><span>最后编辑</span><span>总字数</span><span>本地状态</span><span /></div>
           {filtered.map((project, index) => <div className="work-row" key={project.id} onDoubleClick={() => onOpen(project)}>
-            <div className="work-name"><span className={`mini-cover cover-${index % 3}`}>{project.title.slice(0, 1)}</span><strong>{project.title}</strong></div>
+            <div className="work-name"><span className={`mini-cover cover-${index % 3}`}>{displayProjectTitle(project.title).slice(0, 1)}</span><strong>{displayProjectTitle(project.title)}</strong></div>
             <span>{typeName[project.projectType]}</span><span>{relative(project.updatedAt)}</span><span>{formatCount(project.totalWordCount)}</span>
             <span className="local-status"><ShieldCheck size={15} />本地保存</span>
             <div className="row-actions"><button className="text-action" onClick={() => onOpen(project)}>继续写作</button><button className="icon-button" onClick={() => setMenuId(menuId === project.id ? undefined : project.id)}><MoreHorizontal size={18} /></button>
@@ -94,7 +95,7 @@ function ExportRangeDialog({ project, onClose, onExport }: { project: Project; o
       onClose()
     } catch (next) { setError(userErrorMessage(next)) }
   }
-  return <Modal title={`导出《${project.title}》`} onClose={onClose}>
+  return <Modal title={`导出《${displayProjectTitle(project.title)}》`} onClose={onClose}>
     <label>格式<select value={format} onChange={(event) => setFormat(event.target.value as ExportFormat)}><option value="txt">TXT</option><option value="md">Markdown</option><option value="docx">DOCX</option></select></label>
     <label>第<input type="number" min={1} value={from} onChange={(event) => setFrom(event.target.value)} />章 – 第<input type="number" min={1} value={to} onChange={(event) => setTo(event.target.value)} />章</label>
     <label><input type="checkbox" checked={onlyFinal} onChange={(event) => setOnlyFinal(event.target.checked)} />仅定稿</label>

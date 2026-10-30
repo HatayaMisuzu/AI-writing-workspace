@@ -262,7 +262,7 @@ export function AssistantPanel({ project, documentId, documentText, documentRevi
           : proposals?.length !== item.proposals?.length ? { ...item, proposals } : item
       }))
     } catch (error) { setMessages((current) => current.map((item) => item.id === messageId
-      ? { ...item, proposalError: `记忆提案处理失败：${error instanceof Error ? error.message : String(error)}` } : item)) }
+      ? { ...item, proposalError: `记忆提案处理失败：${userErrorMessage(error)}` } : item)) }
   }
 
   const proposeSelectedCandidate = async (message: ViewMessage): Promise<void> => {

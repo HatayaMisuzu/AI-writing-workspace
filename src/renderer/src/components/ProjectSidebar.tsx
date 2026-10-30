@@ -1,3 +1,4 @@
+import { displayProjectTitle } from '../services/project-title'
 import { ChevronDown, FileText, Lightbulb, Pencil, Plus, Trash2 } from 'lucide-react'
 import type { ChapterStatus, DocumentNode, Project } from '../../../shared/domain'
 import { CHAPTER_STATUS_LABEL, CHAPTER_STATUSES } from '../../../shared/stockpile'
@@ -19,7 +20,7 @@ export function ProjectSidebar({ project, tree, selectedId, section, onSection, 
 }): React.JSX.Element {
   const volumes = tree.filter((node) => node.type === 'volume')
   return <aside className="project-sidebar">
-    <div className="project-name"><strong>{project.title}</strong></div>
+    <div className="project-name"><strong>{displayProjectTitle(project.title)}</strong></div>
     <nav className="project-sections" aria-label="作品内容区">{sections.map(([value, label]) => <button key={value} className={section === value ? 'active' : ''} onClick={() => onSection(value)}>{label}</button>)}</nav>
     {section === 'manuscript' ? <div className="manuscript-tree">
       {volumes.length === 0 && <div className="tree-empty"><FileText size={24} /><p>先建立一卷，再开始写第一章。</p></div>}
@@ -42,6 +43,6 @@ export function ProjectSidebar({ project, tree, selectedId, section, onSection, 
         </div>)}
       </div>})}
       <div className="tree-actions"><button onClick={onNewVolume}><Plus size={15} />新建卷</button><button onClick={() => onNewChapter(volumes[0]?.id)}><Plus size={15} />新建章</button></div>
-    </div> : <div className="section-hint"><Lightbulb size={22} /><strong>{sections.find(([value]) => value === section)?.[1]}</strong><p>此区域的内容只属于《{project.title}》。</p></div>}
+    </div> : <div className="section-hint"><Lightbulb size={22} /><strong>{sections.find(([value]) => value === section)?.[1]}</strong><p>此区域的内容只属于《{displayProjectTitle(project.title)}》。</p></div>}
   </aside>
 }
