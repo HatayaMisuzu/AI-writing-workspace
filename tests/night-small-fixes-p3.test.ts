@@ -61,3 +61,27 @@ describe('关闭校对折叠「定位」留下的选区', () => {
     expect(source).toContain('setTextSelection(editor.state.selection.to)')
   })
 })
+
+describe('小修⑥ 重命名后同步大标题', async () => {
+  const { syncSelectedTitle } = await import('../src/renderer/src/services/selected-node')
+  const node = { id: 'c1', title: '旧名' } as never as import('../src/shared/domain').DocumentNode
+  it('树里同 id 标题变了 → 返回新标题；没变/找不到/未选中 → 原样', () => {
+    expect(syncSelectedTitle(node, [{ ...node, title: '新名' }])?.title).toBe('新名')
+    expect(syncSelectedTitle(node, [node])).toBe(node)
+    expect(syncSelectedTitle(node, [])).toBe(node)
+    expect(syncSelectedTitle(undefined, [node])).toBeUndefined()
+  })
+  it('WorkspaceScreen 在 updateNode 刷新树后同步 selected', () => {
+    expect(read('src/renderer/src/screens/WorkspaceScreen.tsx')).toContain('setSelected((current) => syncSelectedTitle(current, nextTree))')
+  })
+})
+
+describe('小修⑦ 窄侧栏样式', () => {
+  it('行网格给徽标留 auto 列，徽标不折行不收缩，标题省略号', () => {
+    const css = read('src/renderer/src/styles.css')
+    expect(css).toContain('grid-template-columns: minmax(0, 1fr) auto 26px 26px')
+    expect(css).toMatch(/\.chapter-status-badge \{[^}]*flex-shrink: 0;[^}]*white-space: nowrap;/)
+    expect(css).toMatch(/\.chapter-title \{[^}]*text-overflow: ellipsis/)
+    expect(css).toMatch(/\.chapter-open \{[^}]*min-width: 0/)
+  })
+})
