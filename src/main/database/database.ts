@@ -2,13 +2,25 @@ import { DatabaseSync } from 'node:sqlite'
 import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { schema } from './schema'
+import { WalCheckpointer, type CheckpointOutcome, type WalCheckpointerOptions } from './wal-checkpointer'
 
 export const CURRENT_SCHEMA_VERSION = 10
 
+export interface AppDatabaseOptions {
+  /** 后台 WAL 检查点参数；false = 不用后台检查点（批量提交后立即恢复自动检查点）。:memory: 库总是不用。 */
+  checkpointer?: WalCheckpointerOptions | false
+}
+
 export class AppDatabase {
   readonly raw: DatabaseSync
+  readonly path: string
+  readonly checkpointer?: WalCheckpointer
+  private isClosed = false
+  private autoCheckpointHolds = 0
+  private autoCheckpointSaved = 1000
 
-  constructor(path: string) {
+  constructor(path: string, options: AppDatabaseOptions = {}) {
+    this.path = path
     if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true })
     this.raw = new DatabaseSync(path)
     this.raw.exec('PRAGMA foreign_keys = ON')
@@ -19,10 +31,82 @@ export class AppDatabase {
     }
     this.raw.exec(schema)
     this.migrate(existingVersion)
+    if (path !== ':memory:' && options.checkpointer !== false) this.checkpointer = new WalCheckpointer(path, options.checkpointer ?? {})
   }
 
+  get closed(): boolean { return this.isClosed }
+
+  /** 同步关闭（兼容旧调用）：通知后台检查点 worker 关闭（不等待），再关主连接。 */
   close(): void {
+    if (this.isClosed) return
+    this.isClosed = true
+    void this.checkpointer?.close()
     this.raw.close()
+  }
+
+  /** 应用退出用：先等后台检查点 worker 跑完当前检查点并关闭自己的连接，再关主连接。 */
+  async closeAsync(): Promise<void> {
+    if (this.isClosed) return
+    await this.checkpointer?.close()
+    this.close()
+  }
+
+  /** 主连接当前的 wal_autocheckpoint（页数；0 = 关闭）。 */
+  get autoCheckpoint(): number {
+    return Number((this.raw.prepare('PRAGMA wal_autocheckpoint').get() as { wal_autocheckpoint: number }).wal_autocheckpoint)
+  }
+
+  /** 等后台检查点（含排队的）全部结束；结束后自动检查点已恢复原值。 */
+  async checkpointIdle(): Promise<void> {
+    await this.checkpointer?.idle()
+    while (this.pendingRelease) await this.pendingRelease
+  }
+
+  private pendingRelease?: Promise<void>
+
+  /**
+   * 大批量写（全书替换 / 整批恢复）专用事务：事务前读出并把 wal_autocheckpoint 设为 0，COMMIT 不再顺带做 ~54MB 的检查点。
+   * - 失败 / 抛错 / 中途取消：finally 里立即恢复原值。
+   * - 提交成功：请求后台 PASSIVE 检查点，检查点（含重试）结束后才恢复原值——期间主连接普通保存不会顺带触发那次大检查点；
+   *   后台检查点失败只记日志并照样恢复原值（交还 SQLite 自动检查点，WAL 不会无限增长）。
+   * - 上一轮后台检查点失败：退化为不暂停（见 WalCheckpointer 注释），保证 WAL 有界。
+   * - 多个批量重叠：引用计数，最后一个结束时才恢复，恢复的是第一个批量开始前读到的原值。
+   */
+  bulkTransaction<T>(fn: () => T): T {
+    const cp = this.checkpointer
+    if (cp && !cp.closed && cp.consecutiveFailures > 0) {
+      // 退化模式：上一轮后台检查点失败 → 本次不暂停自动检查点（COMMIT 内同步检查点，慢但 WAL 有界），提交后再探测一次后台检查点
+      const result = this.transaction(fn)
+      void cp.request()
+      return result
+    }
+    if (this.autoCheckpointHolds === 0) {
+      this.autoCheckpointSaved = this.autoCheckpoint
+      this.raw.exec('PRAGMA wal_autocheckpoint = 0')
+    }
+    this.autoCheckpointHolds += 1
+    let committed = false
+    try {
+      const result = this.transaction(fn)
+      committed = true
+      return result
+    } finally {
+      if (committed && this.checkpointer && !this.checkpointer.closed) {
+        const release = this.checkpointer.request().then((outcome: CheckpointOutcome) => { void outcome; this.releaseAutoCheckpoint() })
+        const tracked: Promise<void> = release.finally(() => { if (this.pendingRelease === tracked) this.pendingRelease = undefined })
+        this.pendingRelease = tracked
+      } else {
+        this.releaseAutoCheckpoint()
+      }
+    }
+  }
+
+  private releaseAutoCheckpoint(): void {
+    this.autoCheckpointHolds = Math.max(0, this.autoCheckpointHolds - 1)
+    if (this.autoCheckpointHolds > 0 || this.isClosed) return
+    try { this.raw.exec(`PRAGMA wal_autocheckpoint = ${Math.trunc(this.autoCheckpointSaved)}`) } catch (error) {
+      console.warn(`[wal-checkpoint] restore wal_autocheckpoint failed: ${(error as Error).message}`)
+    }
   }
 
   transaction<T>(fn: () => T): T {

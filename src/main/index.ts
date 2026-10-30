@@ -85,4 +85,11 @@ if (!app.requestSingleInstanceLock()) {
 }
 
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit() })
-app.on('will-quit', () => database?.close())
+// P3 PR-2b：退出时先让后台 WAL 检查点 worker 跑完当前检查点并关闭自己的连接，再关主连接，然后真正退出
+app.on('will-quit', (event) => {
+  const db = database
+  if (!db || db.closed) return
+  event.preventDefault()
+  database = undefined
+  void db.closeAsync().catch((error: unknown) => console.warn(`[wal-checkpoint] close failed: ${(error as Error).message}`)).finally(() => app.quit())
+})

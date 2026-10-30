@@ -1867,13 +1867,15 @@ try {
       const snaps = await window.workspace.snapshots.list(projectId, node.id)
       return { bookReplace: snaps.filter((snap) => snap.metadata?.kind === 'book_replace').length, preRestore: snaps.filter((snap) => snap.reason === 'pre_restore').length }
     }, { projectId: book.id, title })
-    // 两层断言（组长决定 2026-10-30）：
-    // 1) 两平台「读取 + 事务体」≤5s（不含 COMMIT，取 main 侧返回的分阶段 timing）——代码可控部分，用来抓回归；
-    // 2) 总时长 Linux ≤5s、Windows ≤20s 只作兜底——COMMIT 耗时取决于 runner 磁盘 fsync（默认回滚日志 journal_mode=DELETE，
-    //    Windows runner 上约 30MB 单事务 COMMIT 实测 2.7–7.8s），不是代码可控的；不改 WAL、不拆事务。
+    // 两层断言（组长决定 2026-10-30，18:34 批准方案 1 后更新）：
+    // 1) 两平台「读取 + 事务体 + COMMIT」≤5s（main 侧分阶段 timing）；
+    // 2) 总时长 Linux ≤5s、Windows ≤10s 兜底。
+    // 根因更正：产品库本来就是 WAL + synchronous=NORMAL（不是回滚日志）。exp-commit-profile run 41037852801 实测千章 COMMIT 本身约 70ms，
+    // 慢在 COMMIT 内自动 WAL 检查点（约 54MB 写回主库 + fsync），Windows C: 盘 2.7–4.1s、D: 盘约 0.3s。
+    // 现在批量事务暂停自动检查点，提交后由 worker 线程独立连接跑 PASSIVE 检查点。本 e2e 的 userData 在 tmpdir()，Windows 上即 C:\Users\...\Temp。
     const codeLimitMs = 5_000
-    const batchLimitMs = process.platform === 'win32' ? 20_000 : 5_000
-    const codeMs = (phases) => { const t = JSON.parse(phases ?? '{}'); return (t.readMs ?? NaN) + (t.bodyMs ?? NaN) }
+    const batchLimitMs = process.platform === 'win32' ? 10_000 : 5_000
+    const codeMs = (phases) => { const t = JSON.parse(phases ?? '{}'); return (t.readMs ?? NaN) + (t.bodyMs ?? NaN) + (t.commitMs ?? NaN) }
     const nav = page.getByRole('navigation', { name: '作品内容区' })
     // 打开章（第 997 章）有未保存输入时直接去全书查找：切区段先 flush，输入不丢
     await page.locator('.manuscript-editor').click()
@@ -1900,16 +1902,41 @@ try {
     assert.ok(replaced.controlMs >= 100, `longtask 对照：忙等 120ms 只记录到 ${replaced.controlMs}ms，监听不可信`)
     process.stdout.write(`P3 book-replace 1000 chapters: replace-all ${replaced.doneMs}ms (limit ${batchLimitMs}ms), max long task ${replaced.maxLongTask}ms over ${replaced.longTasks}; ${replaced.text}\n`)
     const replaceCodeMs = codeMs(replacePhases)
-    process.stdout.write(`P3 book-replace read+body ${replaceCodeMs}ms (limit ${codeLimitMs}ms), total ${replaced.doneMs}ms (limit ${batchLimitMs}ms)\n`)
-    assert.ok(replaceCodeMs <= codeLimitMs, `全部替换 读取+事务体 ${replaceCodeMs}ms 应 ≤${codeLimitMs}ms；分阶段（读/事务体/提交）${replacePhases}`)
+    process.stdout.write(`P3 book-replace read+body+commit ${replaceCodeMs}ms (limit ${codeLimitMs}ms), total ${replaced.doneMs}ms (limit ${batchLimitMs}ms)\n`)
+    assert.ok(replaceCodeMs <= codeLimitMs, `全部替换 读取+事务体+COMMIT ${replaceCodeMs}ms 应 ≤${codeLimitMs}ms；分阶段（读/事务体/提交）${replacePhases}`)
     assert.ok(replaced.doneMs <= batchLimitMs, `全部替换 ${replaced.doneMs}ms 应 ≤${batchLimitMs}ms；分阶段（读/事务体/提交）${replacePhases}`)
     assert.equal(await page.getByTestId('book-replace-error').count(), 0, '连点两次不出现第二次替换的冲突错误')
     assert.equal((await snapshotKinds('第1章')).bookReplace, 1, '连点两次只发一次 replaceBatch（每章只一份全书替换快照）')
     assert.match(replaced.text, /已替换 999 章 9,990 处/)
     assert.equal(await page.getByTestId('book-replace-error').count(), 0)
-    const ch1 = await chapterText('第1章'); const ch2 = await chapterText('第2章'); const ch997 = await chapterText('第997章')
+    // 后台检查点进行期间：IPC 往返、普通保存（第2章，未参与替换）、切章读取（第500章）各 ≤300ms；然后等检查点结束记录耗时
+    const probeCheckpoint = (label) => page.evaluate(async ({ projectId, label }) => {
+      const d = window.workspace.diagnostics
+      const before = await d.walCheckpoint()
+      let t = performance.now(); await window.workspace.projects.list(true); const ipcMs = performance.now() - t
+      const tree = await window.workspace.documents.tree(projectId)
+      const ch2 = tree.find((item) => item.title === '第2章'); const ch500 = tree.find((item) => item.title === '第500章')
+      const current = await window.workspace.documents.get(projectId, ch2.id)
+      const text = `${current.plainText}·${label}检查点期间保存`
+      t = performance.now()
+      await window.workspace.documents.save({ projectId, documentId: ch2.id, editorJson: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text }] }] }, plainText: text, expectedRevision: current.revision })
+      const saveMs = performance.now() - t
+      t = performance.now(); await window.workspace.documents.get(projectId, ch500.id); const switchMs = performance.now() - t
+      const during = await d.walCheckpoint()
+      const started = performance.now(); let after = during
+      while (after.busy && performance.now() - started < 60_000) { await new Promise((resolve) => setTimeout(resolve, 20)); after = await d.walCheckpoint() }
+      return { busyBefore: before.busy, busyAfterProbe: during.busy, walMB: +(before.walBytes / 1048576).toFixed(1), autoCheckpointDuring: before.autoCheckpoint, ipcMs: Math.round(ipcMs), saveMs: Math.round(saveMs), switchMs: Math.round(switchMs), checkpoint: after.last, autoCheckpointAfter: after.autoCheckpoint, waitedMs: Math.round(performance.now() - started), dbPath: before.dbPath }
+    }, { projectId: book.id, label })
+    const assertProbe = (label, probe) => {
+      process.stdout.write(`P3 book-${label} background checkpoint: ${JSON.stringify(probe)}\n`)
+      for (const [name, ms] of [['IPC 往返', probe.ipcMs], ['普通保存', probe.saveMs], ['切章读取', probe.switchMs]]) assert.ok(ms <= 300, `${label} 后台检查点期间 ${name} ${ms}ms 应 ≤300ms；${JSON.stringify(probe)}`)
+      assert.equal(probe.checkpoint?.ok, true, `${label} 后台检查点应成功：${JSON.stringify(probe)}`)
+      assert.ok(probe.autoCheckpointAfter > 0, '检查点结束后自动检查点恢复原值')
+    }
+    assertProbe('replace', await probeCheckpoint('替换'))
+    const ch1 = await chapterText('第1章'); let ch2 = await chapterText('第2章'); const ch997 = await chapterText('第997章')
     assert.ok(ch1.includes('远处月') && !ch1.includes('远处星'), '勾选的章已替换')
-    assert.ok(ch2.includes('远处星') && !ch2.includes('远处月'), '取消勾选的章不被替换')
+    assert.ok(ch2.includes('远处星') && !ch2.includes('远处月') && ch2.includes('替换检查点期间保存'), '取消勾选的章不被替换；检查点期间的保存已落库')
     assert.ok(ch997.includes('Q未存') && ch997.includes('远处月') && !ch997.includes('远处星'), '打开章：未保存输入不丢，替换生效')
     // 替换后打开章刷新 ≤1s（从库里重载新内容和新 revision）
     const refreshStarted = Date.now()
@@ -1945,11 +1972,13 @@ try {
     process.stdout.write(`P3 book-replace longtask control (restore): ${restored.controlMs}ms (need >=100ms)\n`)
     assert.ok(restored.controlMs >= 100, `longtask 对照：忙等 120ms 只记录到 ${restored.controlMs}ms，监听不可信`)
     const restorePhases = JSON.stringify(await page.evaluate(() => window.__bookRestoreTiming))
+    assertProbe('restore', await probeCheckpoint('恢复'))
+    ch2 = await chapterText('第2章')
     process.stdout.write(`P3 book-restore phases: ${restorePhases}\n`)
     process.stdout.write(`P3 book-replace 1000 chapters: restore-batch ${restored.doneMs}ms (limit ${batchLimitMs}ms), max long task ${restored.maxLongTask}ms over ${restored.longTasks}; ${restored.text}\n`)
     const restoreCodeMs = codeMs(restorePhases)
-    process.stdout.write(`P3 book-restore read+body ${restoreCodeMs}ms (limit ${codeLimitMs}ms), total ${restored.doneMs}ms (limit ${batchLimitMs}ms)\n`)
-    assert.ok(restoreCodeMs <= codeLimitMs, `整批恢复 读取+事务体 ${restoreCodeMs}ms 应 ≤${codeLimitMs}ms；分阶段（读/事务体/提交）${restorePhases}`)
+    process.stdout.write(`P3 book-restore read+body+commit ${restoreCodeMs}ms (limit ${codeLimitMs}ms), total ${restored.doneMs}ms (limit ${batchLimitMs}ms)\n`)
+    assert.ok(restoreCodeMs <= codeLimitMs, `整批恢复 读取+事务体+COMMIT ${restoreCodeMs}ms 应 ≤${codeLimitMs}ms；分阶段（读/事务体/提交）${restorePhases}`)
     assert.ok(restored.doneMs <= batchLimitMs, `整批恢复 ${restored.doneMs}ms 应 ≤${batchLimitMs}ms；分阶段（读/事务体/提交）${restorePhases}`)
     assert.equal(await page.getByTestId('book-replace-error').count(), 0, '连点两次不出现恢复错误')
     assert.equal((await snapshotKinds('第1章')).preRestore, 1, '连点两次只发一次 restoreBatch（每章只一份 pre_restore 快照）')

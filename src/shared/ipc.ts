@@ -151,6 +151,10 @@ export interface WorkspaceApi {
   }
   /** S2 e2e：读取 webRequest 拦截日志 */
   network: { blockedLog(): Promise<Array<{ url: string; reason: string; at: number }>> }
+  /** P3 PR-2b e2e：后台 WAL 检查点状态（界面不展示） */
+  diagnostics: {
+    walCheckpoint(): Promise<{ busy: boolean; runs: number; last: { ok: boolean; ms: number; attempts: number; error?: string; walBytes?: number } | null; walBytes: number; autoCheckpoint: number; dbPath: string }>
+  }
   /** S9：日更统计与可选目标（数据层无默认目标；UI 在 S10）。 */
   writing: {
     getDay(projectId: string, date?: string): Promise<WritingDailyRow>

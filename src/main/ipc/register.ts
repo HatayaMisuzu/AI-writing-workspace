@@ -330,6 +330,11 @@ export function registerIpc(db: AppDatabase, codec: SecretCodec, network?: Netwo
     } catch (error) { return { ok: false, message: error instanceof Error ? error.message : '服务配置不可用' } }
   })
   handle('network:blocked-log', () => network?.getBlockedLog() ?? [])
+  // P3 PR-2b：后台 WAL 检查点状态（e2e 计时用；界面不展示）
+  handle('diagnostics:wal-checkpoint', () => {
+    const cp = db.checkpointer
+    return { busy: cp?.busy ?? false, runs: cp?.runs ?? 0, last: cp?.last ?? null, walBytes: cp?.walBytes() ?? 0, autoCheckpoint: db.autoCheckpoint, dbPath: db.path }
+  })
 
   handle('backup:export-project', async (projectId: string) => {
     projectId = parse(idSchema, projectId)

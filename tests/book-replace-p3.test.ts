@@ -150,9 +150,11 @@ describe('documents:replaceBatch', () => {
     const snapshotCount = countSnapshots(s)
     const day = s.daily.getDay(s.project.id)
     const contents = s.ids.map((id) => s.docs.getContent(s.project.id, id))
+    s.db.raw.exec('PRAGMA wal_autocheckpoint = 777')
     s.docs.fault = fault
     expect(() => s.docs.replaceBatch({ projectId: s.project.id, items, ...meta })).toThrow(`INJECTED_${fault.stage}_${fault.index}`)
     s.docs.fault = undefined
+    expect(s.db.autoCheckpoint, '失败后 wal_autocheckpoint 恢复原值').toBe(777)
     expect(dumpAll(s.db)).toBe(before)
     expect(countSnapshots(s)).toBe(snapshotCount)
     expect(s.daily.getDay(s.project.id)).toEqual(day)
@@ -210,9 +212,11 @@ describe('snapshots:restoreBatch', () => {
     const s = setup(4)
     const result = s.docs.replaceBatch({ projectId: s.project.id, items: replaceItems(s), ...meta })
     const before = dumpAll(s.db)
+    s.db.raw.exec('PRAGMA wal_autocheckpoint = 555')
     s.docs.fault = { stage: 'write', index: 2 }
     expect(() => s.docs.restoreBatch(s.project.id, result.batchId)).toThrow('INJECTED_write_2')
     s.docs.fault = undefined
+    expect(s.db.autoCheckpoint, '恢复失败后 wal_autocheckpoint 恢复原值').toBe(555)
     expect(dumpAll(s.db)).toBe(before)
   })
 })

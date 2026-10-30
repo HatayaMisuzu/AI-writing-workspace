@@ -315,7 +315,7 @@ export class DocumentService {
     const batchId = randomUUID()
     const hits = input.items.reduce((sum, item) => sum + item.hits, 0)
     const t0 = performance.now(); let t1 = t0; let t2 = t0
-    const contents = this.db.transaction(() => { const fts = this.ftsRowidMap(input.projectId); t1 = performance.now(); const out = input.items.map((item, index) => {
+    const contents = this.db.bulkTransaction(() => { const fts = this.ftsRowidMap(input.projectId); t1 = performance.now(); const out = input.items.map((item, index) => {
       const node = this.assertNode(input.projectId, item.documentId)
       if (node.type !== 'chapter' && node.type !== 'scene') throw new Error('BOOK_REPLACE_NOT_CHAPTER')
       const current = this.rawContent(input.projectId, item.documentId)
@@ -345,7 +345,7 @@ export class DocumentService {
       ORDER BY s.created_at, s.rowid`).all(projectId, batchId) as Array<{ id: string; document_id: string; revision: number; content: string; plain_text: string }>
     if (!rows.length) throw new Error('BOOK_REPLACE_BATCH_NOT_FOUND')
     const t1 = performance.now(); let t2 = t1
-    const result = this.db.transaction(() => {
+    const result = this.db.bulkTransaction(() => {
       const fts = this.ftsRowidMap(projectId)
       const restored: Array<{ documentId: string; revision: number }> = []
       const skipped: Array<{ documentId: string; title: string; reason: 'changed' | 'deleted' }> = []
