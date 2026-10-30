@@ -1764,6 +1764,65 @@ try {
     assert.ok(one.controlMs >= 100, `longtask 对照：忙等 120ms 只记录到 ${one.controlMs}ms，监听不可信`)
     process.stdout.write(`P3 book-find single hit: done ${one.doneMs}ms, max long task ${one.maxLongTask}ms; ${one.summary}\n`)
     assert.equal(one.summary, '1 章 · 共 1 处')
+    // 验收补测 a：查询一变，旧结果在去抖（150ms）窗口内即已清空、不可点——拿着旧命中按钮的引用去点也不会跳转
+    const stale = await page.evaluate(async () => {
+      const frame = () => new Promise((resolve) => requestAnimationFrame(() => resolve()))
+      const oldHit = document.querySelector('[data-testid="book-find-group"] .book-find-hit')
+      if (!oldHit) throw new Error('no old hit')
+      const el = document.querySelector('input[aria-label="全书查找"]')
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set
+      const started = performance.now()
+      setter.call(el, '远处星'); el.dispatchEvent(new Event('input', { bubbles: true }))
+      await frame(); await frame()
+      const elapsed = performance.now() - started
+      const result = { elapsed: Math.round(elapsed), connected: oldHit.isConnected, groups: document.querySelectorAll('[data-testid="book-find-group"]').length,
+        summary: !!document.querySelector('[data-testid="book-find-summary"]') }
+      oldHit.click()
+      await frame(); await frame()
+      return { ...result, stillInBookFind: !!document.querySelector('[data-testid="book-find"]'), findBar: !!document.querySelector('[data-testid="find-count"]') }
+    })
+    process.stdout.write(`P3 book-find stale-click: ${JSON.stringify(stale)}\n`)
+    assert.ok(stale.elapsed < 150, `须在去抖窗口内检查（实际 ${stale.elapsed}ms）`)
+    assert.equal(stale.connected, false, '旧命中按钮已移除'); assert.equal(stale.groups, 0, '旧分组已清空'); assert.equal(stale.summary, false, '旧摘要已清空')
+    assert.equal(stale.stillInBookFind, true, '点旧命中不跳转'); assert.equal(stale.findBar, false, '点旧命中不打开章内查找')
+    // 验收补测 b：千章重搜进行中连续打字（替换框 20 键，每 30ms 一键），逐键测「输入事件 → 下一帧渲染出新值」延迟与长任务
+    const typing = await page.evaluate(async () => {
+      const frame = () => new Promise((resolve) => requestAnimationFrame(() => resolve()))
+      const started = performance.now()
+      while (!document.querySelector('[data-testid="book-find-group"]')) { if (performance.now() - started > 5_000) throw new Error('search did not start'); await frame() }
+      if (document.querySelector('[data-testid="book-find-summary"][data-done="true"]')) throw new Error('search already done before typing')
+      const longTasks = []
+      const observer = new PerformanceObserver((list) => { for (const entry of list.getEntries()) longTasks.push(Math.round(entry.duration)) })
+      observer.observe({ type: 'longtask' })
+      const el = document.querySelector('input[aria-label="全书替换为"]')
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set
+      const text = '连续输入不卡顿测试一二三四五六七八九十甲'
+      const latencies = []; let duringSearch = 0
+      for (let i = 1; i <= 20; i += 1) {
+        const want = text.slice(0, i)
+        const t = performance.now()
+        setter.call(el, want); el.dispatchEvent(new Event('input', { bubbles: true }))
+        await frame()
+        while (el.value !== want) await frame()
+        latencies.push(Math.round(performance.now() - t))
+        if (!document.querySelector('[data-testid="book-find-summary"][data-done="true"]')) duringSearch += 1
+        await new Promise((resolve) => setTimeout(resolve, 30))
+      }
+      while (!document.querySelector('[data-testid="book-find-summary"][data-done="true"]')) { if (performance.now() - started > 60_000) throw new Error('search timeout'); await frame() }
+      await frame(); await frame()
+      for (const entry of observer.takeRecords()) longTasks.push(Math.round(entry.duration))
+      observer.disconnect()
+      return { maxLatency: Math.max(...latencies), latencies, duringSearch, maxLongTask: longTasks.length ? Math.max(...longTasks) : 0, value: el.value,
+        summary: document.querySelector('[data-testid="book-find-summary"]').textContent }
+    })
+    process.stdout.write(`P3 book-find typing-during-search: max key→render ${typing.maxLatency}ms (limit 100ms), keys during search ${typing.duringSearch}/20, max long task ${typing.maxLongTask}ms (limit 200ms); ${JSON.stringify(typing.latencies)}\n`)
+    assert.ok(typing.duringSearch >= 5, `须有足够按键落在搜索进行中（实际 ${typing.duringSearch}）`)
+    assert.ok(typing.maxLatency <= 100, `搜索中按键到渲染 ${typing.maxLatency}ms 应 ≤100ms`)
+    assert.ok(typing.maxLongTask <= 200, `搜索中长任务 ${typing.maxLongTask}ms 应 ≤200ms`)
+    assert.equal(typing.value, '连续输入不卡顿测试一二三四五六七八九十甲')
+    assert.equal(typing.summary, '1000 章 · 共 10,000 处', '打字不打断搜索')
+    await page.getByRole('textbox', { name: '全书替换为', exact: true }).fill('')
+    assert.equal((await timeBookFind('砚台石')).summary, '1 章 · 共 1 处')
     await page.getByTestId('book-find-group').filter({ hasText: '第997章' }).locator('.book-find-hit').click()
     await page.getByTestId('find-count').filter({ hasText: '第 1 / 共 1 处' }).waitFor()
     assert.equal(await page.evaluate(() => window.getSelection()?.toString()), '砚台石')
