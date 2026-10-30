@@ -1,5 +1,6 @@
 import { Worker } from 'node:worker_threads'
 import { statSync } from 'node:fs'
+import { cpDiag } from './cp-diag'
 
 /**
  * P3 PR-2b（组长 2026-10-30 批准方案 1）：大批量事务提交后，把 WAL 检查点移出主线程。
@@ -136,8 +137,9 @@ export class WalCheckpointer {
   close(): Promise<void> {
     if (this.closing) return this.closing
     const worker = this.worker
+    cpDiag('checkpointer-close', { hasWorker: Boolean(worker), running: Boolean(this.running), queued: Boolean(this.queued), stack: new Error().stack?.split('\n').slice(2, 6).map((l) => l.trim()) })
     this.closing = !worker ? Promise.resolve() : new Promise<void>((resolve) => {
-      const timer = setTimeout(() => { void worker.terminate() }, 2_000)
+      const timer = setTimeout(() => { cpDiag('worker-close-timeout-terminate', { threadId: worker.threadId }); void worker.terminate() }, 2_000)
       worker.once('exit', () => { clearTimeout(timer); resolve() })
       worker.postMessage({ type: 'close' })
     })
@@ -153,6 +155,7 @@ export class WalCheckpointer {
   private async runRound(): Promise<CheckpointOutcome> {
     const startedAt = Date.now()
     const generationAtStart = this.readGeneration()
+    cpDiag('round-start', { run: this.runs + 1, genStart: generationAtStart, walBytes: this.walBytes(), hasWorker: Boolean(this.worker) })
     let ms = 0
     let attempt: Attempt = { ok: false, ms: 0, error: 'CHECKPOINT_NOT_RUN' }
     let attempts = 0
@@ -162,6 +165,7 @@ export class WalCheckpointer {
       attempt = await this.attempt()
       attempts += 1
       try { this.options.onAttempt?.(attempt) } catch { /* 回调失败不影响 */ }
+      cpDiag('attempt', { run: this.runs + 1, i, ok: attempt.ok, ms: Math.round(attempt.ms * 100) / 100, busy: attempt.busy, log: attempt.log, checkpointed: attempt.checkpointed, error: attempt.error })
       ms += attempt.ms
       const complete = attempt.ok && attempt.busy === 0 && (attempt.checkpointed ?? 0) >= (attempt.log ?? 0)
       if (complete) break
@@ -175,6 +179,7 @@ export class WalCheckpointer {
     }
     this.runs += 1
     this.last = outcome
+    cpDiag('round-end', { run: this.runs, ok: outcome.ok, attempts, busy: outcome.busy, log: outcome.log, checkpointed: outcome.checkpointed, genStart: generationAtStart, genEnd: this.readGeneration(), quiet: outcome.quiet, walBytes: outcome.walBytes, error: outcome.error, closing: Boolean(this.closing) })
     this.consecutiveFailures = complete ? 0 : this.consecutiveFailures + 1
     if (!complete) this.warn(`[wal-checkpoint] background checkpoint failed after ${attempts} attempt(s): ${outcome.error}; falling back to SQLite auto-checkpoint`)
     if (this.consecutiveFailures >= this.failWarnCount) this.warn(`[wal-checkpoint] ${this.consecutiveFailures} consecutive failures`)
@@ -213,11 +218,13 @@ export class WalCheckpointer {
     if (this.worker) return this.worker
     const worker = new Worker(WORKER_SOURCE, { eval: true, workerData: { path: this.path, inject: this.options.inject ?? {} } })
     worker.unref()
+    cpDiag('worker-start', { threadId: worker.threadId })
     worker.on('message', (message: { type: string } & Attempt) => {
       if (message.type === 'done') this.settleAttempt({ ok: message.ok, ms: message.ms, busy: message.busy, log: message.log, checkpointed: message.checkpointed, error: message.error })
     })
-    worker.on('error', (error) => { this.settleAttempt({ ok: false, ms: 0, error: `CHECKPOINT_WORKER_ERROR:${error.message}` }) })
-    worker.on('exit', () => {
+    worker.on('error', (error) => { cpDiag('worker-error', { threadId: worker.threadId, error: String(error?.stack ?? error) }); this.settleAttempt({ ok: false, ms: 0, error: `CHECKPOINT_WORKER_ERROR:${error.message}` }) })
+    worker.on('exit', (exitCode) => {
+      cpDiag('worker-exit', { threadId: worker.threadId, exitCode, closing: Boolean(this.closing), pendingAttempt: Boolean(this.pendingAttempt), current: this.worker === worker })
       if (this.worker === worker) this.worker = undefined
       this.settleAttempt({ ok: false, ms: 0, error: 'CHECKPOINT_WORKER_EXITED' })
     })

@@ -1,14 +1,18 @@
 name: Verify
 
+# diag-hw1 诊断分支：临时只跑检查点相关单测（重复），两平台
 on:
   push:
-  pull_request:
   workflow_dispatch:
 
 jobs:
-  verify-windows:
-    runs-on: windows-latest
-    timeout-minutes: 30
+  diag:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -16,91 +20,17 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - run: npm run release:preflight
-      - run: npm run verify
-      - run: npm run test:e2e
-      - name: Upload e2e CPU profiles (P3 PR-44 diag)
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: e2e-cpuprofile-windows
-          path: e2e-artifacts/
-          if-no-files-found: warn
-      - run: npm audit --omit=dev
-      # S0b：electron 等运行时在 devDependencies，--omit=dev 看不到；含 dev 依赖的高危门禁
-      - run: npm audit --audit-level=high
-
-  package-windows:
-    runs-on: windows-latest
-    needs: verify-windows
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 22
-          cache: npm
-      - run: npm ci
-      - run: npm run dist
-      - shell: pwsh
-        run: |
-          $env:INKSTONE_PACKAGED_EXE = (Get-ChildItem release/win-unpacked/*.exe | Select-Object -First 1).FullName
-          npm run test:package-smoke
+      - run: npx tsc --noEmit -p tsconfig.json || true
+        continue-on-error: true
+      - name: diag loops
+        shell: bash
+        env:
+          G_ONLY: ${{ matrix.os == 'windows-latest' && '8' || '15' }}
+          PAIR: ${{ matrix.os == 'windows-latest' && '1' || '3' }}
+          FULL: '1'
+        run: bash scripts/ci/diag-hw1.sh
       - uses: actions/upload-artifact@v7
-        with:
-          name: inkstone-windows
-          path: release/*
-          if-no-files-found: error
-
-  verify-linux:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 22
-          cache: npm
-      - run: npm ci
-      - run: npm run release:preflight
-      - run: npm run verify
-      # Linux e2e：Playwright 的 Electron loader 会强制 --password-store=basic（应用按设计拒绝明文回退），
-      # 因此 e2e 在 Linux 上绕开 loader，直接启动 Electron 并经 CDP 连接，配合真实解锁的 gnome-keyring。
-      - run: sudo apt-get update && sudo apt-get install -y gnome-keyring dbus-x11
-      # Ubuntu 24.04 默认限制非特权 user namespace，Chromium 沙箱需要放开；应用本身保持 sandbox 开启
-      - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-      - run: xvfb-run -a dbus-run-session -- bash scripts/ci/linux-e2e.sh
-      - name: Upload e2e CPU profiles (P3 PR-44 diag)
         if: always()
-        uses: actions/upload-artifact@v7
         with:
-          name: e2e-cpuprofile-linux
-          path: e2e-artifacts/
-          if-no-files-found: warn
-      - run: npm audit --omit=dev
-      # S0b：electron 等运行时在 devDependencies，--omit=dev 看不到；含 dev 依赖的高危门禁
-      - run: npm audit --audit-level=high
-
-  package-linux:
-    runs-on: ubuntu-24.04
-    needs: verify-linux
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 22
-          cache: npm
-      - run: npm ci
-      # 仅构建目录产物（linux-unpacked），不出 AppImage
-      - run: npm run dist:linux-dir
-      # Ubuntu 24.04 默认限制非特权 user namespace，Chromium 沙箱需要放开；应用本身保持 sandbox 开启
-      - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-      - run: |
-          export INKSTONE_PACKAGED_EXE="$PWD/release/linux-unpacked/inkstone"
-          xvfb-run -a npm run test:package-smoke
-      - uses: actions/upload-artifact@v7
-        with:
-          name: inkstone-linux-dir
-          path: release/linux-unpacked
-          if-no-files-found: error
+          name: diag-hw1-${{ matrix.os }}
+          path: diag-out/

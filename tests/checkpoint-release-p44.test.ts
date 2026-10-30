@@ -1,7 +1,8 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { cpDiag, walState } from '../src/main/database/cp-diag'
 import { AppDatabase, type AppDatabaseOptions } from '../src/main/database/database'
 import { ProjectService } from '../src/main/services/project-service'
 import { DocumentService } from '../src/main/services/document-service'
@@ -25,11 +26,13 @@ const doc = (text: string): Record<string, unknown> => ({ type: 'doc', content: 
 const body = (i: number): string => `第${i + 1}章：` + '林舟看见远处灯，远处灯又亮了。风从北面吹来。'.repeat(120)
 const meta = { query: '远处灯', replacement: '远处星', regex: false, caseSensitive: false }
 const ORIGINAL = 777
+beforeEach((ctx) => { cpDiag('test-begin', { test: ctx.task.name }) })
 vi.setConfig({ testTimeout: 180_000, hookTimeout: 60_000 })
 
 const dirs: string[] = []
 const dbs: AppDatabase[] = []
-afterEach(async () => {
+afterEach(async (ctx) => {
+  cpDiag('test-afterEach-close', { test: ctx.task.name, dbs: dbs.length })
   for (const db of dbs.splice(0)) await db.closeAsync().catch(() => undefined)
   dirs.splice(0).forEach((dir) => rmSync(dir, { recursive: true, force: true }))
 })
@@ -88,8 +91,10 @@ describe('G：检查点期间持续写入（每 700ms 一次保存）', () => {
     expect(s.db.checkpointer!.last).toMatchObject({ ok: true, quiet: true })
     expect(s.db.checkpointer!.last!.checkpointed).toBe(s.db.checkpointer!.last!.log)
     expect(s.db.autoCheckpoint).toBe(ORIGINAL)
+    cpDiag('G1-first-save-begin', { autoCheckpoint: s.db.autoCheckpoint, cpBusy: s.db.checkpointer!.busy, rel, last: s.db.checkpointer!.last, ...walState(s.path) })
     save(s, s.ids[1], '释放后')
     const first = lastCommit(s)
+    cpDiag('G1-first-save-end', { first, ...walState(s.path) })
     log(`first save after release: commitMs=${first.commitMs} autoCheckpoint=${first.autoCheckpoint}`)
     expect(first.autoCheckpoint).toBe(true)
     expect(first.commitMs).toBeLessThan(50)
@@ -100,7 +105,9 @@ describe('G：检查点期间持续写入（每 700ms 一次保存）', () => {
     const saves = await saveEvery(s, 700, 30_000)
     await s.db.checkpointIdle()
     const rel = s.db.releases[s.db.releases.length - 1]
+    cpDiag('G2-first-save-begin', { saves, autoCheckpoint: s.db.autoCheckpoint, cpBusy: s.db.checkpointer!.busy, rel, last: s.db.checkpointer!.last, ...walState(s.path) })
     save(s, s.ids[1], '释放后')
+    cpDiag('G2-first-save-end', { first: lastCommit(s), ...walState(s.path) })
     log(`natural 1000ch: saves=${saves} rounds=${rel.rounds} ms=${rel.ms} reason=${rel.reason} firstCommitMs=${lastCommit(s).commitMs}`)
     expect(rel.reason).toBe('quiet')
     expect(lastCommit(s).commitMs).toBeLessThan(50)

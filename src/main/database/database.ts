@@ -2,6 +2,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { schema } from './schema'
+import { cpDiag, cpDiagOn, walState } from './cp-diag'
 import { WalCheckpointer, type WalCheckpointerOptions } from './wal-checkpointer'
 
 export const CURRENT_SCHEMA_VERSION = 10
@@ -144,6 +145,8 @@ export class AppDatabase {
   /** 已提交、等释放循环释放的批量数 */
   private committedHolds = 0
   private writesDuringHold = 0
+  /** diag-hw1：最近一次释放的墙钟时刻 */
+  private diagReleasedAt = 0
 
   private async runReleaseLoop(cp: WalCheckpointer): Promise<void> {
     const started = Date.now()
@@ -156,6 +159,7 @@ export class AppDatabase {
       // 只等当前这一轮（不用 idle()：持续写入时队列一直有补做轮，idle 不返回，上限也就判不到）
       const outcome = (await cp.currentRound()) ?? cp.last
       const rounds = cp.runs - runsAtStart
+      cpDiag('release-loop-round', { rounds, ok: outcome?.ok, quiet: outcome?.quiet, checkpointed: outcome?.checkpointed, log: outcome?.log, busy: outcome?.busy, error: outcome?.error, fromLast: outcome === cp.last, cpBusy: cp.busy, writesDuringHold: this.writesDuringHold, gen: this.writeGeneration(), elapsedMs: Date.now() - started })
       if (cp.closed || this.isClosed) { reason = 'closed'; break }
       if (!outcome || !outcome.ok) { reason = 'failed'; break }
       if (outcome.quiet !== false) { reason = 'quiet'; break }
@@ -172,12 +176,15 @@ export class AppDatabase {
     }
     const holds = this.committedHolds
     this.committedHolds = 0
+    this.diagReleasedAt = Date.now()
+    cpDiag('release', { ...record, holds, cpLast: cp.last ? { ok: cp.last.ok, quiet: cp.last.quiet, checkpointed: cp.last.checkpointed, log: cp.last.log } : undefined, cpBusy: cp.busy, ...(cpDiagOn() ? walState(this.path) : {}) })
     this.releaseAutoCheckpoint(holds)
   }
 
   private releaseAutoCheckpoint(count: number): void {
     this.autoCheckpointHolds = Math.max(0, this.autoCheckpointHolds - count)
     if (this.autoCheckpointHolds > 0 || this.isClosed) return
+    cpDiag('autocheckpoint-restore', { value: Math.trunc(this.autoCheckpointSaved), cpBusy: this.checkpointer?.busy })
     try { this.raw.exec(`PRAGMA wal_autocheckpoint = ${Math.trunc(this.autoCheckpointSaved)}`) } catch (error) {
       console.warn(`[wal-checkpoint] restore wal_autocheckpoint failed: ${(error as Error).message}`)
     }
@@ -188,9 +195,11 @@ export class AppDatabase {
     try {
       const result = fn()
       const held = this.autoCheckpointHolds > 0
+      const before = cpDiagOn() && (held || this.releaseLoop || Date.now() - this.diagReleasedAt < 10_000) ? walState(this.path) : undefined
       const started = performance.now()
       this.raw.exec('COMMIT')
       this.commits.push({ at: Date.now(), commitMs: Math.round((performance.now() - started) * 100) / 100, autoCheckpoint: !held, held })
+      if (before) cpDiag('commit', { commitMs: this.commits[this.commits.length - 1].commitMs, held, releaseLoop: Boolean(this.releaseLoop), cpBusy: this.checkpointer?.busy, before, after: walState(this.path) })
       if (this.commits.length > 50) this.commits.splice(0, this.commits.length - 50)
       // 暂停期间（释放循环进行中）的每次写入：请求补做一轮检查点，合并进现有队列
       if (held && this.releaseLoop && this.checkpointer && !this.checkpointer.closed) {
