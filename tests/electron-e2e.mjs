@@ -1546,6 +1546,19 @@ try {
     assert.equal(await page.getByLabel('查找', { exact: true }).inputValue(), '天亮时', '跳转后章内查找预填查询')
     assert.equal(await page.evaluate(() => window.getSelection()?.toString()), '天亮时', '跳转后选中该处命中')
     await page.getByLabel('查找', { exact: true }).press('Escape')
+    // 全书替换（PR-2b）在小黑屋内也允许：替换再整批恢复，全程本地、网络 0
+    await page.getByRole('button', { name: '全书查找', exact: true }).click()
+    await page.getByRole('textbox', { name: '全书查找', exact: true }).fill('天亮时')
+    await page.locator('[data-testid="book-find-summary"][data-done="true"]').waitFor()
+    await page.getByRole('textbox', { name: '全书替换为', exact: true }).fill('天明时')
+    await page.getByTestId('book-replace-all').click()
+    await page.getByTestId('book-replace-confirm').click()
+    await page.getByTestId('book-replace-done').waitFor()
+    await page.getByTestId('book-restore').click()
+    await page.getByTestId('book-restore-summary').waitFor()
+    await page.getByRole('button', { name: '知道了' }).click()
+    await page.getByRole('button', { name: '回到正文', exact: true }).click()
+    await page.locator('.manuscript-editor').filter({ hasText: '天亮时' }).waitFor()
     await page.waitForTimeout(500)
     const after = await snapshotNetwork(page)
     for (const key of Object.keys(before)) assert.equal(after[key] - before[key], 0, `小黑屋内查找/大纲 ${key} 网络应为 0`)
@@ -1743,7 +1756,8 @@ try {
     assert.ok(over.controlMs >= 100, `longtask 对照：忙等 120ms 只记录到 ${over.controlMs}ms，监听不可信`)
     process.stdout.write(`P3 book-find truncated: done ${over.doneMs}ms, max long task ${over.maxLongTask}ms; ${over.summary}\n`)
     assert.match(over.summary, /共 100,000 处.*请缩小查找范围/)
-    assert.equal(await page.getByRole('button', { name: /替换/ }).count(), 0, '2a 没有替换入口')
+    assert.equal(await page.getByTestId('book-replace-all').isDisabled(), true, '结果截断时禁用全书替换')
+    await page.getByTestId('book-replace-disabled').filter({ hasText: '请缩小查找范围' }).waitFor()
     // 唯一命中：第 997 章，点击跳转并定位
     const one = await timeBookFind('砚台石')
     process.stdout.write(`P3 book-find longtask control (one): ${one.controlMs}ms (need >=100ms)\n`)
@@ -1754,6 +1768,109 @@ try {
     await page.getByTestId('find-count').filter({ hasText: '第 1 / 共 1 处' }).waitFor()
     assert.equal(await page.evaluate(() => window.getSelection()?.toString()), '砚台石')
     await page.getByLabel('查找', { exact: true }).press('Escape')
+    // ── P3 PR-2b：同一本千章书上全书替换 / 整批恢复 ──
+    // 页面内计时：点击到完成标记出现；同一套 longtask 监听 + 120ms 对照（对照记录完断开，真实测量用新的空记录）
+    const timeAction = (clickSelector, doneSelector) => page.evaluate(async ({ clickSelector, doneSelector }) => {
+      const frame = () => new Promise((resolve) => requestAnimationFrame(() => resolve()))
+      const controlTasks = []
+      const control = new PerformanceObserver((list) => { for (const entry of list.getEntries()) controlTasks.push(Math.round(entry.duration)) })
+      control.observe({ type: 'longtask' })
+      await frame()
+      const busyUntil = performance.now() + 120
+      while (performance.now() < busyUntil) { /* 故意占住主线程 */ }
+      await frame(); await frame(); await new Promise((resolve) => setTimeout(resolve, 50))
+      for (const entry of control.takeRecords()) controlTasks.push(Math.round(entry.duration))
+      control.disconnect()
+      const controlMs = controlTasks.length ? Math.max(...controlTasks) : 0
+      await frame()
+      const longTasks = []
+      const observer = new PerformanceObserver((list) => { for (const entry of list.getEntries()) longTasks.push(Math.round(entry.duration)) })
+      observer.observe({ type: 'longtask' })
+      const started = performance.now()
+      document.querySelector(clickSelector).click()
+      while (!document.querySelector(doneSelector)) {
+        if (performance.now() - started > 60_000) throw new Error(`timeout waiting for ${doneSelector}`)
+        await frame()
+      }
+      const doneMs = performance.now() - started
+      await frame(); await frame()
+      observer.disconnect()
+      return { controlMs, doneMs: Math.round(doneMs), maxLongTask: longTasks.length ? Math.max(...longTasks) : 0, longTasks: longTasks.length, text: document.querySelector(doneSelector).textContent }
+    }, { clickSelector, doneSelector })
+    const chapterText = (title) => page.evaluate(async ({ projectId, title }) => {
+      const node = (await window.workspace.documents.tree(projectId)).find((item) => item.title === title)
+      return (await window.workspace.documents.get(projectId, node.id)).plainText
+    }, { projectId: book.id, title })
+    const editorText = () => page.locator('.manuscript-editor').innerText()
+    const nav = page.getByRole('navigation', { name: '作品内容区' })
+    // 打开章（第 997 章）有未保存输入时直接去全书查找：切区段先 flush，输入不丢
+    await page.locator('.manuscript-editor').click()
+    await page.keyboard.press('Control+End')
+    await page.keyboard.type('Q未存')
+    await nav.getByRole('button', { name: '全书查找' }).click()
+    await input.waitFor()
+    const again = await timeBookFind('远处星')
+    assert.equal(again.summary, '1000 章 · 共 10,000 处')
+    await page.getByRole('checkbox', { name: '替换 第2章', exact: true }).uncheck()
+    await page.getByRole('textbox', { name: '全书替换为', exact: true }).fill('远处月')
+    const replaceButton = page.getByTestId('book-replace-all')
+    assert.equal(await replaceButton.textContent(), '替换 9,990 处 / 999 章', '取消勾选的章不计入')
+    await replaceButton.click()
+    await page.getByText('当前章的撤销记录会清空，可用快照整批恢复', { exact: false }).waitFor()
+    const replaced = await timeAction('[data-testid="book-replace-confirm"]', '[data-testid="book-replace-done"]')
+    process.stdout.write(`P3 book-replace longtask control (replace): ${replaced.controlMs}ms (need >=100ms)\n`)
+    assert.ok(replaced.controlMs >= 100, `longtask 对照：忙等 120ms 只记录到 ${replaced.controlMs}ms，监听不可信`)
+    process.stdout.write(`P3 book-replace 1000 chapters: replace-all ${replaced.doneMs}ms (limit 5000ms), max long task ${replaced.maxLongTask}ms over ${replaced.longTasks}; ${replaced.text}\n`)
+    assert.ok(replaced.doneMs <= 5000, `全部替换 ${replaced.doneMs}ms 应 ≤5s`)
+    assert.match(replaced.text, /已替换 999 章 9,990 处/)
+    assert.equal(await page.getByTestId('book-replace-error').count(), 0)
+    const ch1 = await chapterText('第1章'); const ch2 = await chapterText('第2章'); const ch997 = await chapterText('第997章')
+    assert.ok(ch1.includes('远处月') && !ch1.includes('远处星'), '勾选的章已替换')
+    assert.ok(ch2.includes('远处星') && !ch2.includes('远处月'), '取消勾选的章不被替换')
+    assert.ok(ch997.includes('Q未存') && ch997.includes('远处月') && !ch997.includes('远处星'), '打开章：未保存输入不丢，替换生效')
+    // 替换后打开章刷新 ≤1s（从库里重载新内容和新 revision）
+    const refreshStarted = Date.now()
+    await nav.getByRole('button', { name: '正文' }).click()
+    await page.waitForFunction(() => { const text = document.querySelector('.manuscript-editor')?.textContent ?? ''; return text.includes('Q未存') && text.includes('远处月') && !text.includes('远处星') }, undefined, { polling: 'raf', timeout: 10_000 })
+    const refreshMs = Date.now() - refreshStarted
+    // 撤销栈已清空：Ctrl+Z 不会退回替换前
+    await page.locator('.manuscript-editor').click()
+    for (let i = 0; i < 3; i += 1) await page.keyboard.press('Control+z')
+    await page.waitForTimeout(1_000)
+    const afterUndo = await editorText()
+    assert.ok(afterUndo.includes('远处月') && !afterUndo.includes('远处星') && afterUndo.includes('Q未存'), '替换后 Ctrl+Z 不回退替换')
+    assert.ok(!(await chapterText('第997章')).includes('远处星'), '撤销键不会把替换前文本写回库')
+    // 替换后在打开章继续写：保存 ≤2s 发出并落库（revision 已跟上，不会 REVISION_CONFLICT）
+    await page.keyboard.press('Control+End')
+    const saveStarted = Date.now()
+    await page.keyboard.type('后来加的')
+    const saveMs = await page.evaluate(async ({ projectId, started }) => {
+      const node = (await window.workspace.documents.tree(projectId)).find((item) => item.title === '第997章')
+      while (!(await window.workspace.documents.get(projectId, node.id)).plainText.includes('后来加的')) {
+        if (Date.now() - started > 10_000) throw new Error('save after replace not persisted')
+        await new Promise((resolve) => setTimeout(resolve, 25))
+      }
+      return Date.now() - started
+    }, { projectId: book.id, started: saveStarted })
+    process.stdout.write(`P3 book-replace open chapter: refresh ${refreshMs}ms (limit 1000ms), save after undo/edit ${saveMs}ms (limit 2000ms)\n`)
+    assert.ok(refreshMs <= 1000, `替换后打开章刷新 ${refreshMs}ms 应 ≤1s`)
+    assert.ok(saveMs <= 2000, `替换后撤销/继续写的保存 ${saveMs}ms 应 ≤2s`)
+    // 整批恢复：第 997 章替换后又改过 → 跳过并列出；其余 998 章恢复
+    await nav.getByRole('button', { name: '全书查找' }).click()
+    await page.getByTestId('book-replace-done').waitFor()
+    const restored = await timeAction('[data-testid="book-restore"]', '[data-testid="book-restore-summary"]')
+    process.stdout.write(`P3 book-replace longtask control (restore): ${restored.controlMs}ms (need >=100ms)\n`)
+    assert.ok(restored.controlMs >= 100, `longtask 对照：忙等 120ms 只记录到 ${restored.controlMs}ms，监听不可信`)
+    process.stdout.write(`P3 book-replace 1000 chapters: restore-batch ${restored.doneMs}ms (limit 5000ms), max long task ${restored.maxLongTask}ms over ${restored.longTasks}; ${restored.text}\n`)
+    assert.ok(restored.doneMs <= 5000, `整批恢复 ${restored.doneMs}ms 应 ≤5s`)
+    assert.equal(restored.text, '已恢复 998 章。')
+    const skippedText = await page.getByTestId('book-restore-skipped').textContent()
+    assert.ok(skippedText.includes('以下 1 章没有恢复：替换后又改过') && skippedText.includes('第997章'), skippedText)
+    await page.getByRole('button', { name: '知道了' }).click()
+    const r1 = await chapterText('第1章'); const r997 = await chapterText('第997章')
+    assert.ok(r1.includes('远处星') && !r1.includes('远处月'), '已恢复的章回到替换前')
+    assert.ok(r997.includes('后来加的') && r997.includes('远处月'), '跳过的章保留当前内容')
+    assert.equal(await chapterText('第2章'), ch2, '未参与的章不变')
     // 收尾：归档千章书，回到主作品
     await page.evaluate((id) => window.workspace.projects.archive(id, true), book.id)
     await page.reload()

@@ -22,6 +22,16 @@ export const documentSaveSchema = z.object({
   expectedRevision: nonNegativeIntSchema.optional(),
   styleSample: z.object({ origin: z.enum(['human', 'ai', 'ai_edited_by_human', 'mixed']), text: contentSchema }).optional()
 })
+// P3 PR-2b 全书替换：每项复用 documentSaveSchema 的字段约束；至多 10_000 章，hits 与 renderer 10 万处上限一致
+export const BOOK_REPLACE_MAX_CHAPTERS = 10_000
+export const bookReplaceSchema = z.object({
+  projectId: idSchema,
+  items: z.array(z.object({
+    documentId: idSchema, expectedRevision: nonNegativeIntSchema, editorJson: editorDocumentSchema, plainText: contentSchema,
+    hits: z.number().int().positive().max(100_000)
+  }).strict()).min(1).max(BOOK_REPLACE_MAX_CHAPTERS),
+  query: shortTextSchema.min(1), replacement: shortTextSchema, regex: z.boolean(), caseSensitive: z.boolean()
+}).strict().refine((input) => input.items.reduce((sum, item) => sum + item.hits, 0) <= 100_000, { message: '命中总数超过 100,000 处', path: ['items'] })
 // S3：大纲作为 project_notes 的一个 section；节点大纲（summary/beats/hook）走 outlineSaveSchema
 export const noteSectionSchema = z.enum(['story', 'reference', 'outline'])
 export const outlineSaveSchema = z.object({

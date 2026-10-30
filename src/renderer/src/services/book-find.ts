@@ -1,6 +1,8 @@
 import type { Node as ProseMirrorNode, Schema } from '@tiptap/pm/model'
 import { Node as PmNode } from '@tiptap/pm/model'
-import { buildFindRegExp, findMatches, type FindOptions } from './find-replace'
+import { EditorState } from '@tiptap/pm/state'
+import { getText, getTextSerializersFromSchema } from '@tiptap/react'
+import { applyReplacements, buildFindRegExp, findMatches, type FindOptions } from './find-replace'
 
 /**
  * 全书查找（P3 PR-2a，只查找）：在 renderer 逐章跑 PR-1 的 findMatches，语义与章内查找完全一致。
@@ -86,4 +88,49 @@ export const bookFindSummary = (progress: BookFindProgress): string => {
   if (progress.truncated) return `${head}（已达上限 ${BOOK_FIND_LIMIT.toLocaleString()} 处，结果已截断，请缩小查找范围）`
   if (!progress.done) return `${head} · 已查 ${progress.scanned} / ${progress.total} 章…`
   return progress.hits ? head : '无匹配'
+}
+
+/** 与编辑器保存时 editor.getText({ blockSeparator: '\n\n' }) 同一规则（StarterKit 的 hardBreak 等 renderText 生效）。 */
+export const docPlainText = (doc: ProseMirrorNode): string =>
+  getText(doc, { blockSeparator: '\n\n', textSerializers: getTextSerializersFromSchema(doc.type.schema) })
+
+export interface BookReplaceItem { documentId: string; expectedRevision: number; editorJson: Record<string, unknown>; plainText: string; hits: number }
+export interface BookReplacePlan { items: BookReplaceItem[]; hits: number; truncated: boolean; error?: string }
+
+/**
+ * 全书替换（P3 PR-2b）的准备：按库里最新内容（调用方先 flush）逐章重新查找并替换，不用搜索时的旧结果。
+ * 复用 PR-1 的 findMatches + applyReplacements（同一事务倒序替换、$1 展开）；总命中超过 limit 即 truncated（调用方必须放弃替换）。
+ * 每超出时间片让出主线程。
+ */
+export async function prepareBookReplace(input: {
+  chapterIds: string[]; schema: Schema; query: string; replacement: string; options: FindOptions
+  load(ids: string[]): Promise<Array<{ editorJson: Record<string, unknown>; revision: number }>>
+  limit?: number; batch?: number; sliceMs?: number
+}): Promise<BookReplacePlan> {
+  const { chapterIds, schema, query, replacement, options, load } = input
+  const limit = input.limit ?? BOOK_FIND_LIMIT; const batch = input.batch ?? BOOK_FIND_BATCH; const sliceMs = input.sliceMs ?? BOOK_FIND_SLICE_MS
+  const { error } = buildFindRegExp(query, options)
+  if (error || !query) return { items: [], hits: 0, truncated: false, error: error ?? '查找内容为空' }
+  const items: BookReplaceItem[] = []
+  let hits = 0
+  let sliceStart = now()
+  for (let offset = 0; offset < chapterIds.length; offset += batch) {
+    const ids = chapterIds.slice(offset, offset + batch)
+    const contents = await load(ids)
+    for (let i = 0; i < ids.length; i += 1) {
+      const doc = PmNode.fromJSON(schema, contents[i].editorJson)
+      const result = findMatches(doc, query, options, limit - hits)
+      if (result.truncated) return { items: [], hits: hits + result.matches.length, truncated: true }
+      if (result.matches.length) {
+        const tr = EditorState.create({ schema, doc }).tr
+        const count = applyReplacements(tr, result.matches, replacement, options.regex)
+        if (count) {
+          items.push({ documentId: ids[i], expectedRevision: contents[i].revision, editorJson: tr.doc.toJSON() as Record<string, unknown>, plainText: docPlainText(tr.doc), hits: count })
+          hits += count
+        }
+      }
+      if (now() - sliceStart > sliceMs) { await yieldToMain(); sliceStart = now() }
+    }
+  }
+  return { items, hits, truncated: false }
 }

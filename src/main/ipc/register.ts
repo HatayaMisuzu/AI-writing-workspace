@@ -49,7 +49,7 @@ const handle = <T extends unknown[], R>(channel: string, fn: (...args: T) => R |
 }
 
 import {
-  idSchema, shortTextSchema, contentSchema, nonNegativeIntSchema, projectCreateSchema, documentCreateSchema, documentSaveSchema, noteSaveSchema, characterSaveSchema, providerInputSchema, modelSchema, routeSchema, patchProposalSchema, snapshotReasonSchema, aiStartSchema, aiPreviewContextSchema, noteSectionSchema, outlineSaveSchema, batchCreateChaptersSchema, writingGoalsInputSchema, chapterStatusSchema, foreshadowRegisterSchema, foreshadowSetStateSchema, foreshadowUpdateMetaSchema, timelineSortModeSchema, timelineEventSaveSchema, chapterWordRangeSchema, promptTemplateModeSchema, promptTemplateTextSchema, promptTemplateScopeSchema, promptCopySourceSchema, hoverPrefsSchema, lintRunSchema, wordlistTextSchema, wordlistScopeSchema, lintRulesSchema, lintIgnoreSchema, importTokenSchema, patchRebaseSchema, patchPrepareBatchSchema, patchCompleteBatchSchema
+  idSchema, shortTextSchema, contentSchema, nonNegativeIntSchema, projectCreateSchema, documentCreateSchema, documentSaveSchema, noteSaveSchema, characterSaveSchema, providerInputSchema, modelSchema, routeSchema, patchProposalSchema, snapshotReasonSchema, aiStartSchema, aiPreviewContextSchema, noteSectionSchema, outlineSaveSchema, batchCreateChaptersSchema, writingGoalsInputSchema, chapterStatusSchema, foreshadowRegisterSchema, foreshadowSetStateSchema, foreshadowUpdateMetaSchema, timelineSortModeSchema, timelineEventSaveSchema, chapterWordRangeSchema, promptTemplateModeSchema, promptTemplateTextSchema, promptTemplateScopeSchema, promptCopySourceSchema, hoverPrefsSchema, lintRunSchema, wordlistTextSchema, wordlistScopeSchema, lintRulesSchema, lintIgnoreSchema, importTokenSchema, patchRebaseSchema, patchPrepareBatchSchema, patchCompleteBatchSchema, bookReplaceSchema
 } from './schemas'
 import { toUserFacingIpcError } from './validation-error'
 const parse = <T>(schema: z.ZodType<T>, value: unknown): T => schema.parse(value)
@@ -118,6 +118,9 @@ export function registerIpc(db: AppDatabase, codec: SecretCodec, network?: Netwo
 
   handle('snapshots:create', (projectId: string, documentId: string, reason: Parameters<DocumentService['createSnapshot']>[2]) => documents.createSnapshot(parse(idSchema, projectId), parse(idSchema, documentId), parse(snapshotReasonSchema, reason)))
   handle('snapshots:list', (projectId: string, documentId: string) => documents.listSnapshots(projectId, documentId))
+  // P3 PR-2b：全书替换 / 整批恢复。纯本地写库，和 documents:save 一样不加 assertNotFocusLocked（小黑屋内允许），无出站
+  handle('documents:replaceBatch', (input: unknown) => documents.replaceBatch(parse(bookReplaceSchema, input)))
+  handle('snapshots:restoreBatch', (projectId: unknown, batchId: unknown) => documents.restoreBatch(parse(idSchema, projectId), parse(idSchema, batchId)))
   handle('snapshots:restore', (projectId: string, snapshotId: string) => documents.restoreSnapshot(parse(idSchema, projectId), parse(idSchema, snapshotId)))
   handle('ideas:list', (projectId: string) => ideas.list(projectId))
   handle('ideas:create', (projectId: string, content: string, tags?: string[]) => ideas.create(parse(idSchema, projectId), parse(contentSchema, content), parse(z.array(shortTextSchema).max(1_000).optional(), tags)))

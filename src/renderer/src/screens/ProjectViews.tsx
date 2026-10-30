@@ -2,6 +2,7 @@ import { Check, Clock3, GitCompareArrows, Lightbulb, ListTree, Plus, RotateCcw, 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Character, CharacterHoverPrefs, DocumentContent, DocumentNode, Idea, MemoryItem, NodeOutline, ProjectNote, Snapshot, TextPatch } from '../../../shared/domain'
 import { Modal } from '../components/Modal'
+import { snapshotReason } from '../services/snapshot-label'
 import { buildHistoryDiff } from '../services/history-diff'
 import { buildOutlineCards, noteSectionLabel, outlinePreviewText, parseBatchOutlineLines } from '../services/outline-view'
 import { CHARACTER_FIELD_KEYS, CHARACTER_FIELD_LABELS, type CharacterFieldKey } from '../../../shared/domain'
@@ -11,9 +12,6 @@ import { ConfirmAction } from '../components/ConfirmAction'
 import { isSingleCharTerm } from '../../../shared/name-matcher'
 import { notifyCharactersChanged } from '../services/character-hover'
 
-const snapshotReason = (reason: Snapshot['reason']): string => ({
-  interval: '定时保存', large_delete: '大段删除前', ai_edit: 'AI 修改前', manual: '手动快照', pre_restore: '恢复前备份'
-}[reason])
 const patchStatus = (status: TextPatch['status']): string => ({ proposed: '待审阅', accepted: '已接受', rejected: '已拒绝', stale: '已失效' }[status])
 
 
@@ -122,7 +120,7 @@ export function HistoryView({ projectId, document, currentContent, onRestored }:
   const load = useCallback(() => { if (documentId) void window.workspace.snapshots.list(projectId, documentId).then(setSnapshots) }, [projectId, documentId])
   useEffect(load, [load])
   const diff = useMemo(() => compareSnapshot ? buildHistoryDiff(compareSnapshot.plainText, currentContent?.plainText ?? '') : [], [compareSnapshot, currentContent?.plainText])
-  return <section className="project-view"><header><div><h1>历史</h1><p>{document ? `${document.title} 的可恢复版本` : '请先选择章节'}</p></div>{document && <button onClick={async () => { await window.workspace.snapshots.create(projectId, document.id, 'manual'); load() }}><Clock3 size={16} />手动快照</button>}</header><div className="history-list">{snapshots.length === 0 && <div className="empty-section"><Clock3 size={28} /><h3>还没有历史快照</h3><p>手动创建，或在大段删除、定时保存和恢复前自动生成。</p></div>}{snapshots.map((snapshot) => <article key={snapshot.id}><div><strong>修订 {snapshot.revision}</strong><small>{new Date(snapshot.createdAt).toLocaleString()} · {snapshotReason(snapshot.reason)}</small></div><p>{snapshot.plainText.slice(0, 140) || '空文档'}{snapshot.plainText.length > 140 ? '…' : ''}</p><div className="history-actions"><button onClick={() => setCompareSnapshot(snapshot)}><GitCompareArrows size={14} />查看差异</button><ConfirmAction title="恢复历史版本" message="恢复前会自动创建当前版本快照。继续吗？" onConfirm={async () => { const restored = await window.workspace.snapshots.restore(projectId, snapshot.id); onRestored?.(restored); load() }}><RotateCcw size={14} />恢复此版本</ConfirmAction></div></article>)}</div>{compareSnapshot && <Modal title={`修订 ${compareSnapshot.revision} 与当前正文的差异`} onClose={() => setCompareSnapshot(undefined)} width={860}><div className="history-diff" aria-label="历史版本差异">{diff.length === 0 ? <p>两个版本没有文字差异。</p> : diff.map((segment, index) => segment.type === 'insert' ? <ins key={index}>{segment.value}</ins> : segment.type === 'delete' ? <del key={index}>{segment.value}</del> : <span key={index}>{segment.value}</span>)}</div><p className="diff-legend"><span className="insert">新增</span><span className="delete">删除</span> 差异只供查看，恢复前仍会保存当前版本。</p></Modal>}</section>
+  return <section className="project-view"><header><div><h1>历史</h1><p>{document ? `${document.title} 的可恢复版本` : '请先选择章节'}</p></div>{document && <button onClick={async () => { await window.workspace.snapshots.create(projectId, document.id, 'manual'); load() }}><Clock3 size={16} />手动快照</button>}</header><div className="history-list">{snapshots.length === 0 && <div className="empty-section"><Clock3 size={28} /><h3>还没有历史快照</h3><p>手动创建，或在大段删除、定时保存和恢复前自动生成。</p></div>}{snapshots.map((snapshot) => <article key={snapshot.id}><div><strong>修订 {snapshot.revision}</strong><small>{new Date(snapshot.createdAt).toLocaleString()} · {snapshotReason(snapshot)}</small></div><p>{snapshot.plainText.slice(0, 140) || '空文档'}{snapshot.plainText.length > 140 ? '…' : ''}</p><div className="history-actions"><button onClick={() => setCompareSnapshot(snapshot)}><GitCompareArrows size={14} />查看差异</button><ConfirmAction title="恢复历史版本" message="恢复前会自动创建当前版本快照。继续吗？" onConfirm={async () => { const restored = await window.workspace.snapshots.restore(projectId, snapshot.id); onRestored?.(restored); load() }}><RotateCcw size={14} />恢复此版本</ConfirmAction></div></article>)}</div>{compareSnapshot && <Modal title={`修订 ${compareSnapshot.revision} 与当前正文的差异`} onClose={() => setCompareSnapshot(undefined)} width={860}><div className="history-diff" aria-label="历史版本差异">{diff.length === 0 ? <p>两个版本没有文字差异。</p> : diff.map((segment, index) => segment.type === 'insert' ? <ins key={index}>{segment.value}</ins> : segment.type === 'delete' ? <del key={index}>{segment.value}</del> : <span key={index}>{segment.value}</span>)}</div><p className="diff-legend"><span className="insert">新增</span><span className="delete">删除</span> 差异只供查看，恢复前仍会保存当前版本。</p></Modal>}</section>
 }
 
 
