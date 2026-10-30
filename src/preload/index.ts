@@ -21,7 +21,7 @@ const api: WorkspaceApi = {
     tree: (projectId) => invoke('documents:tree', projectId), get: (projectId, documentId) => invoke('documents:get', projectId, documentId),
     create: (input) => invoke('documents:create', input), rename: (projectId, documentId, title) => invoke('documents:rename', projectId, documentId, title),
     reorder: (projectId, documentId, parentId, orderIndex) => invoke('documents:reorder', projectId, documentId, parentId, orderIndex),
-    delete: (projectId, documentId) => invoke('documents:delete', projectId, documentId), save: (input) => invoke('documents:save', input),
+    delete: (projectId, documentId) => invoke('documents:delete', projectId, documentId), save: (input) => invoke('documents:save', input), replaceBatch: (input) => invoke('documents:replaceBatch', input),
     search: (projectId, query) => invoke('documents:search', projectId, query),
     batchCreateChapters: (input) => invoke('documents:batch-create-chapters', input),
     setStatus: (projectId, documentId, status) => invoke('documents:set-status', projectId, documentId, status),
@@ -32,7 +32,8 @@ const api: WorkspaceApi = {
   snapshots: {
     create: (projectId, documentId, reason) => invoke('snapshots:create', projectId, documentId, reason),
     list: (projectId, documentId) => invoke('snapshots:list', projectId, documentId),
-    restore: (projectId, snapshotId) => invoke('snapshots:restore', projectId, snapshotId)
+    restore: (projectId, snapshotId) => invoke('snapshots:restore', projectId, snapshotId),
+    restoreBatch: (projectId, batchId) => invoke('snapshots:restoreBatch', projectId, batchId)
   },
   ideas: { list: (projectId) => invoke('ideas:list', projectId), create: (projectId, content, tags) => invoke('ideas:create', projectId, content, tags) },
   outlines: { get: (projectId, nodeId) => invoke('outlines:get', projectId, nodeId), list: (projectId) => invoke('outlines:list', projectId), save: (input) => invoke('outlines:save', input) },
@@ -87,6 +88,7 @@ const api: WorkspaceApi = {
     testUrl: (input) => invoke('providers:test-url', input)
   },
   network: { blockedLog: () => invoke('network:blocked-log') },
+  diagnostics: { walCheckpoint: () => invoke('diagnostics:wal-checkpoint') },
   writing: {
     getDay: (projectId, date) => invoke('writing:get-day', projectId, date),
     listRange: (projectId, fromDate, toDate) => invoke('writing:list-range', projectId, fromDate, toDate),

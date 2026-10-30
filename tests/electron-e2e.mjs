@@ -1546,6 +1546,19 @@ try {
     assert.equal(await page.getByLabel('查找', { exact: true }).inputValue(), '天亮时', '跳转后章内查找预填查询')
     assert.equal(await page.evaluate(() => window.getSelection()?.toString()), '天亮时', '跳转后选中该处命中')
     await page.getByLabel('查找', { exact: true }).press('Escape')
+    // 全书替换（PR-2b）在小黑屋内也允许：替换再整批恢复，全程本地、网络 0
+    await page.getByRole('button', { name: '全书查找', exact: true }).click()
+    await page.getByRole('textbox', { name: '全书查找', exact: true }).fill('天亮时')
+    await page.locator('[data-testid="book-find-summary"][data-done="true"]').waitFor()
+    await page.getByRole('textbox', { name: '全书替换为', exact: true }).fill('天明时')
+    await page.getByTestId('book-replace-all').click()
+    await page.getByTestId('book-replace-confirm').click()
+    await page.getByTestId('book-replace-done').waitFor()
+    await page.getByTestId('book-restore').click()
+    await page.getByTestId('book-restore-summary').waitFor()
+    await page.getByRole('button', { name: '知道了' }).click()
+    await page.getByRole('button', { name: '回到正文', exact: true }).click()
+    await page.locator('.manuscript-editor').filter({ hasText: '天亮时' }).waitFor()
     await page.waitForTimeout(500)
     const after = await snapshotNetwork(page)
     for (const key of Object.keys(before)) assert.equal(after[key] - before[key], 0, `小黑屋内查找/大纲 ${key} 网络应为 0`)
@@ -1743,17 +1756,240 @@ try {
     assert.ok(over.controlMs >= 100, `longtask 对照：忙等 120ms 只记录到 ${over.controlMs}ms，监听不可信`)
     process.stdout.write(`P3 book-find truncated: done ${over.doneMs}ms, max long task ${over.maxLongTask}ms; ${over.summary}\n`)
     assert.match(over.summary, /共 100,000 处.*请缩小查找范围/)
-    assert.equal(await page.getByRole('button', { name: /替换/ }).count(), 0, '2a 没有替换入口')
+    assert.equal(await page.getByTestId('book-replace-all').isDisabled(), true, '结果截断时禁用全书替换')
+    await page.getByTestId('book-replace-disabled').filter({ hasText: '请缩小查找范围' }).waitFor()
     // 唯一命中：第 997 章，点击跳转并定位
     const one = await timeBookFind('砚台石')
     process.stdout.write(`P3 book-find longtask control (one): ${one.controlMs}ms (need >=100ms)\n`)
     assert.ok(one.controlMs >= 100, `longtask 对照：忙等 120ms 只记录到 ${one.controlMs}ms，监听不可信`)
     process.stdout.write(`P3 book-find single hit: done ${one.doneMs}ms, max long task ${one.maxLongTask}ms; ${one.summary}\n`)
     assert.equal(one.summary, '1 章 · 共 1 处')
+    // 验收补测 a：查询一变，旧结果在去抖（150ms）窗口内即已清空、不可点——拿着旧命中按钮的引用去点也不会跳转
+    const stale = await page.evaluate(async () => {
+      const frame = () => new Promise((resolve) => requestAnimationFrame(() => resolve()))
+      const oldHit = document.querySelector('[data-testid="book-find-group"] .book-find-hit')
+      if (!oldHit) throw new Error('no old hit')
+      const el = document.querySelector('input[aria-label="全书查找"]')
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set
+      const started = performance.now()
+      setter.call(el, '远处星'); el.dispatchEvent(new Event('input', { bubbles: true }))
+      await frame(); await frame()
+      const elapsed = performance.now() - started
+      const result = { elapsed: Math.round(elapsed), connected: oldHit.isConnected, groups: document.querySelectorAll('[data-testid="book-find-group"]').length,
+        summary: !!document.querySelector('[data-testid="book-find-summary"]') }
+      oldHit.click()
+      await frame(); await frame()
+      return { ...result, stillInBookFind: !!document.querySelector('[data-testid="book-find"]'), findBar: !!document.querySelector('[data-testid="find-count"]') }
+    })
+    process.stdout.write(`P3 book-find stale-click: ${JSON.stringify(stale)}\n`)
+    assert.ok(stale.elapsed < 150, `须在去抖窗口内检查（实际 ${stale.elapsed}ms）`)
+    assert.equal(stale.connected, false, '旧命中按钮已移除'); assert.equal(stale.groups, 0, '旧分组已清空'); assert.equal(stale.summary, false, '旧摘要已清空')
+    assert.equal(stale.stillInBookFind, true, '点旧命中不跳转'); assert.equal(stale.findBar, false, '点旧命中不打开章内查找')
+    // 验收补测 b：千章重搜进行中连续打字（替换框 20 键，每 30ms 一键），逐键测「输入事件 → 下一帧渲染出新值」延迟与长任务
+    const typing = await page.evaluate(async () => {
+      const frame = () => new Promise((resolve) => requestAnimationFrame(() => resolve()))
+      const started = performance.now()
+      while (!document.querySelector('[data-testid="book-find-group"]')) { if (performance.now() - started > 5_000) throw new Error('search did not start'); await frame() }
+      if (document.querySelector('[data-testid="book-find-summary"][data-done="true"]')) throw new Error('search already done before typing')
+      const longTasks = []
+      const observer = new PerformanceObserver((list) => { for (const entry of list.getEntries()) longTasks.push(Math.round(entry.duration)) })
+      observer.observe({ type: 'longtask' })
+      const el = document.querySelector('input[aria-label="全书替换为"]')
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set
+      const text = '连续输入不卡顿测试一二三四五六七八九十甲'
+      const latencies = []; let duringSearch = 0
+      for (let i = 1; i <= 20; i += 1) {
+        const want = text.slice(0, i)
+        const t = performance.now()
+        setter.call(el, want); el.dispatchEvent(new Event('input', { bubbles: true }))
+        await frame()
+        while (el.value !== want) await frame()
+        latencies.push(Math.round(performance.now() - t))
+        if (!document.querySelector('[data-testid="book-find-summary"][data-done="true"]')) duringSearch += 1
+        await new Promise((resolve) => setTimeout(resolve, 30))
+      }
+      while (!document.querySelector('[data-testid="book-find-summary"][data-done="true"]')) { if (performance.now() - started > 60_000) throw new Error('search timeout'); await frame() }
+      await frame(); await frame()
+      for (const entry of observer.takeRecords()) longTasks.push(Math.round(entry.duration))
+      observer.disconnect()
+      return { maxLatency: Math.max(...latencies), latencies, duringSearch, maxLongTask: longTasks.length ? Math.max(...longTasks) : 0, value: el.value,
+        summary: document.querySelector('[data-testid="book-find-summary"]').textContent }
+    })
+    process.stdout.write(`P3 book-find typing-during-search: max key→render ${typing.maxLatency}ms (limit 100ms), keys during search ${typing.duringSearch}/20, max long task ${typing.maxLongTask}ms (limit 200ms); ${JSON.stringify(typing.latencies)}\n`)
+    assert.ok(typing.duringSearch >= 5, `须有足够按键落在搜索进行中（实际 ${typing.duringSearch}）`)
+    assert.ok(typing.maxLatency <= 100, `搜索中按键到渲染 ${typing.maxLatency}ms 应 ≤100ms`)
+    assert.ok(typing.maxLongTask <= 200, `搜索中长任务 ${typing.maxLongTask}ms 应 ≤200ms`)
+    assert.equal(typing.value, '连续输入不卡顿测试一二三四五六七八九十甲')
+    assert.equal(typing.summary, '1000 章 · 共 10,000 处', '打字不打断搜索')
+    await page.getByRole('textbox', { name: '全书替换为', exact: true }).fill('')
+    assert.equal((await timeBookFind('砚台石')).summary, '1 章 · 共 1 处')
     await page.getByTestId('book-find-group').filter({ hasText: '第997章' }).locator('.book-find-hit').click()
     await page.getByTestId('find-count').filter({ hasText: '第 1 / 共 1 处' }).waitFor()
     assert.equal(await page.evaluate(() => window.getSelection()?.toString()), '砚台石')
     await page.getByLabel('查找', { exact: true }).press('Escape')
+    // ── P3 PR-2b：同一本千章书上全书替换 / 整批恢复 ──
+    // 页面内计时：点击到完成标记出现；同一套 longtask 监听 + 120ms 对照（对照记录完断开，真实测量用新的空记录）
+    const timeAction = (clickSelector, doneSelector) => page.evaluate(async ({ clickSelector, doneSelector }) => {
+      const frame = () => new Promise((resolve) => requestAnimationFrame(() => resolve()))
+      const controlTasks = []
+      const control = new PerformanceObserver((list) => { for (const entry of list.getEntries()) controlTasks.push(Math.round(entry.duration)) })
+      control.observe({ type: 'longtask' })
+      await frame()
+      const busyUntil = performance.now() + 120
+      while (performance.now() < busyUntil) { /* 故意占住主线程 */ }
+      await frame(); await frame(); await new Promise((resolve) => setTimeout(resolve, 50))
+      for (const entry of control.takeRecords()) controlTasks.push(Math.round(entry.duration))
+      control.disconnect()
+      const controlMs = controlTasks.length ? Math.max(...controlTasks) : 0
+      await frame()
+      const longTasks = []
+      const observer = new PerformanceObserver((list) => { for (const entry of list.getEntries()) longTasks.push(Math.round(entry.duration)) })
+      observer.observe({ type: 'longtask' })
+      const started = performance.now()
+      // 防重入探针：同一任务内连点两次（React 尚未重渲染、按钮仍可点），第二次不得再发 IPC
+      const target = document.querySelector(clickSelector); target.click(); target.click()
+      while (!document.querySelector(doneSelector)) {
+        if (performance.now() - started > 60_000) throw new Error(`timeout waiting for ${doneSelector}`)
+        await frame()
+      }
+      const doneMs = performance.now() - started
+      await frame(); await frame()
+      observer.disconnect()
+      return { controlMs, doneMs: Math.round(doneMs), maxLongTask: longTasks.length ? Math.max(...longTasks) : 0, longTasks: longTasks.length, text: document.querySelector(doneSelector).textContent }
+    }, { clickSelector, doneSelector })
+    const chapterText = (title) => page.evaluate(async ({ projectId, title }) => {
+      const node = (await window.workspace.documents.tree(projectId)).find((item) => item.title === title)
+      return (await window.workspace.documents.get(projectId, node.id)).plainText
+    }, { projectId: book.id, title })
+    const editorText = () => page.locator('.manuscript-editor').innerText()
+    const snapshotKinds = (title) => page.evaluate(async ({ projectId, title }) => {
+      const node = (await window.workspace.documents.tree(projectId)).find((item) => item.title === title)
+      const snaps = await window.workspace.snapshots.list(projectId, node.id)
+      return { bookReplace: snaps.filter((snap) => snap.metadata?.kind === 'book_replace').length, preRestore: snaps.filter((snap) => snap.reason === 'pre_restore').length }
+    }, { projectId: book.id, title })
+    // 两层断言（组长决定 2026-10-30，18:34 批准方案 1 后更新）：
+    // 1) 两平台「读取 + 事务体 + COMMIT」≤5s（main 侧分阶段 timing）；
+    // 2) 总时长 Linux ≤5s、Windows ≤10s 兜底。
+    // 根因更正：产品库本来就是 WAL + synchronous=NORMAL（不是回滚日志）。exp-commit-profile run 41037852801 实测千章 COMMIT 本身约 70ms，
+    // 慢在 COMMIT 内自动 WAL 检查点（约 54MB 写回主库 + fsync），Windows C: 盘 2.7–4.1s、D: 盘约 0.3s。
+    // 现在批量事务暂停自动检查点，提交后由 worker 线程独立连接跑 PASSIVE 检查点。本 e2e 的 userData 在 tmpdir()，Windows 上即 C:\Users\...\Temp。
+    const codeLimitMs = 5_000
+    const batchLimitMs = process.platform === 'win32' ? 10_000 : 5_000
+    const codeMs = (phases) => { const t = JSON.parse(phases ?? '{}'); return (t.readMs ?? NaN) + (t.bodyMs ?? NaN) + (t.commitMs ?? NaN) }
+    const nav = page.getByRole('navigation', { name: '作品内容区' })
+    // 打开章（第 997 章）有未保存输入时直接去全书查找：切区段先 flush，输入不丢
+    await page.locator('.manuscript-editor').click()
+    await page.keyboard.press('Control+End')
+    await page.keyboard.type('Q未存')
+    await nav.getByRole('button', { name: '全书查找' }).click()
+    await input.waitFor()
+    const again = await timeBookFind('远处星')
+    assert.equal(again.summary, '1000 章 · 共 10,000 处')
+    await page.getByRole('checkbox', { name: '替换 第2章', exact: true }).uncheck()
+    await page.getByRole('textbox', { name: '全书替换为', exact: true }).fill('远处月')
+    const replaceButton = page.getByTestId('book-replace-all')
+    assert.equal(await replaceButton.textContent(), '替换 9,990 处 / 999 章', '取消勾选的章不计入')
+    await replaceButton.click()
+    try { await page.getByTestId('book-replace-confirm').waitFor({ timeout: 10_000 }) } catch (error) {
+      const diag = await page.evaluate(() => ({ disabled: document.querySelector('[data-testid="book-replace-all"]')?.hasAttribute('disabled'), text: document.querySelector('[data-testid="book-replace-all"]')?.textContent, error: document.querySelector('[data-testid="book-replace-error"]')?.textContent, summary: document.querySelector('[data-testid="book-find-summary"]')?.textContent, modal: document.querySelector('[role="dialog"]')?.textContent }))
+      throw new Error(`确认框未出现：${JSON.stringify(diag)}；${error.message}`)
+    }
+    assert.ok((await page.getByRole('dialog').textContent()).includes('当前章的撤销记录会清空，可用快照整批恢复'), '确认框须提示撤销记录会清空')
+    const replaced = await timeAction('[data-testid="book-replace-confirm"]', '[data-testid="book-replace-done"]')
+    const replacePhases = JSON.stringify(await page.evaluate(() => window.__bookReplaceTiming))
+    process.stdout.write(`P3 book-replace phases: ${replacePhases}\n`)
+    process.stdout.write(`P3 book-replace longtask control (replace): ${replaced.controlMs}ms (need >=100ms)\n`)
+    assert.ok(replaced.controlMs >= 100, `longtask 对照：忙等 120ms 只记录到 ${replaced.controlMs}ms，监听不可信`)
+    process.stdout.write(`P3 book-replace 1000 chapters: replace-all ${replaced.doneMs}ms (limit ${batchLimitMs}ms), max long task ${replaced.maxLongTask}ms over ${replaced.longTasks}; ${replaced.text}\n`)
+    const replaceCodeMs = codeMs(replacePhases)
+    process.stdout.write(`P3 book-replace read+body+commit ${replaceCodeMs}ms (limit ${codeLimitMs}ms), total ${replaced.doneMs}ms (limit ${batchLimitMs}ms)\n`)
+    assert.ok(replaceCodeMs <= codeLimitMs, `全部替换 读取+事务体+COMMIT ${replaceCodeMs}ms 应 ≤${codeLimitMs}ms；分阶段（读/事务体/提交）${replacePhases}`)
+    assert.ok(replaced.doneMs <= batchLimitMs, `全部替换 ${replaced.doneMs}ms 应 ≤${batchLimitMs}ms；分阶段（读/事务体/提交）${replacePhases}`)
+    assert.equal(await page.getByTestId('book-replace-error').count(), 0, '连点两次不出现第二次替换的冲突错误')
+    assert.equal((await snapshotKinds('第1章')).bookReplace, 1, '连点两次只发一次 replaceBatch（每章只一份全书替换快照）')
+    assert.match(replaced.text, /已替换 999 章 9,990 处/)
+    assert.equal(await page.getByTestId('book-replace-error').count(), 0)
+    // 后台检查点进行期间：IPC 往返、普通保存（第2章，未参与替换）、切章读取（第500章）各 ≤300ms；然后等检查点结束记录耗时
+    const probeCheckpoint = (label) => page.evaluate(async ({ projectId, label }) => {
+      const d = window.workspace.diagnostics
+      const before = await d.walCheckpoint()
+      let t = performance.now(); await window.workspace.projects.list(true); const ipcMs = performance.now() - t
+      const tree = await window.workspace.documents.tree(projectId)
+      const ch2 = tree.find((item) => item.title === '第2章'); const ch500 = tree.find((item) => item.title === '第500章')
+      const current = await window.workspace.documents.get(projectId, ch2.id)
+      const text = `${current.plainText}·${label}检查点期间保存`
+      t = performance.now()
+      await window.workspace.documents.save({ projectId, documentId: ch2.id, editorJson: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text }] }] }, plainText: text, expectedRevision: current.revision })
+      const saveMs = performance.now() - t
+      t = performance.now(); await window.workspace.documents.get(projectId, ch500.id); const switchMs = performance.now() - t
+      const during = await d.walCheckpoint()
+      const started = performance.now(); let after = during
+      while (after.busy && performance.now() - started < 60_000) { await new Promise((resolve) => setTimeout(resolve, 20)); after = await d.walCheckpoint() }
+      return { busyBefore: before.busy, busyAfterProbe: during.busy, walMB: +(before.walBytes / 1048576).toFixed(1), autoCheckpointDuring: before.autoCheckpoint, ipcMs: Math.round(ipcMs), saveMs: Math.round(saveMs), switchMs: Math.round(switchMs), checkpoint: after.last, autoCheckpointAfter: after.autoCheckpoint, waitedMs: Math.round(performance.now() - started), dbPath: before.dbPath }
+    }, { projectId: book.id, label })
+    const assertProbe = (label, probe) => {
+      process.stdout.write(`P3 book-${label} background checkpoint: ${JSON.stringify(probe)}\n`)
+      for (const [name, ms] of [['IPC 往返', probe.ipcMs], ['普通保存', probe.saveMs], ['切章读取', probe.switchMs]]) assert.ok(ms <= 300, `${label} 后台检查点期间 ${name} ${ms}ms 应 ≤300ms；${JSON.stringify(probe)}`)
+      assert.equal(probe.checkpoint?.ok, true, `${label} 后台检查点应成功：${JSON.stringify(probe)}`)
+      assert.ok(probe.autoCheckpointAfter > 0, '检查点结束后自动检查点恢复原值')
+    }
+    assertProbe('replace', await probeCheckpoint('替换'))
+    const ch1 = await chapterText('第1章'); let ch2 = await chapterText('第2章'); const ch997 = await chapterText('第997章')
+    assert.ok(ch1.includes('远处月') && !ch1.includes('远处星'), '勾选的章已替换')
+    assert.ok(ch2.includes('远处星') && !ch2.includes('远处月') && ch2.includes('替换检查点期间保存'), '取消勾选的章不被替换；检查点期间的保存已落库')
+    assert.ok(ch997.includes('Q未存') && ch997.includes('远处月') && !ch997.includes('远处星'), '打开章：未保存输入不丢，替换生效')
+    // 替换后打开章刷新 ≤1s（从库里重载新内容和新 revision）
+    const refreshStarted = Date.now()
+    await nav.getByRole('button', { name: '正文' }).click()
+    await page.waitForFunction(() => { const text = document.querySelector('.manuscript-editor')?.textContent ?? ''; return text.includes('Q未存') && text.includes('远处月') && !text.includes('远处星') }, undefined, { polling: 'raf', timeout: 10_000 })
+    const refreshMs = Date.now() - refreshStarted
+    // 撤销栈已清空：Ctrl+Z 不会退回替换前
+    await page.locator('.manuscript-editor').click()
+    for (let i = 0; i < 3; i += 1) await page.keyboard.press('Control+z')
+    await page.waitForTimeout(1_000)
+    const afterUndo = await editorText()
+    assert.ok(afterUndo.includes('远处月') && !afterUndo.includes('远处星') && afterUndo.includes('Q未存'), '替换后 Ctrl+Z 不回退替换')
+    assert.ok(!(await chapterText('第997章')).includes('远处星'), '撤销键不会把替换前文本写回库')
+    // 替换后在打开章继续写：保存 ≤2s 发出并落库（revision 已跟上，不会 REVISION_CONFLICT）
+    await page.keyboard.press('Control+End')
+    const saveStarted = Date.now()
+    await page.keyboard.type('后来加的')
+    const saveMs = await page.evaluate(async ({ projectId, started }) => {
+      const node = (await window.workspace.documents.tree(projectId)).find((item) => item.title === '第997章')
+      while (!(await window.workspace.documents.get(projectId, node.id)).plainText.includes('后来加的')) {
+        if (Date.now() - started > 10_000) throw new Error('save after replace not persisted')
+        await new Promise((resolve) => setTimeout(resolve, 25))
+      }
+      return Date.now() - started
+    }, { projectId: book.id, started: saveStarted })
+    process.stdout.write(`P3 book-replace open chapter: refresh ${refreshMs}ms (limit 1000ms), save after undo/edit ${saveMs}ms (limit 2000ms)\n`)
+    assert.ok(refreshMs <= 1000, `替换后打开章刷新 ${refreshMs}ms 应 ≤1s`)
+    assert.ok(saveMs <= 2000, `替换后撤销/继续写的保存 ${saveMs}ms 应 ≤2s`)
+    // 整批恢复：第 997 章替换后又改过 → 跳过并列出；其余 998 章恢复
+    await nav.getByRole('button', { name: '全书查找' }).click()
+    await page.getByTestId('book-replace-done').waitFor()
+    const restored = await timeAction('[data-testid="book-restore"]', '[data-testid="book-restore-summary"]')
+    process.stdout.write(`P3 book-replace longtask control (restore): ${restored.controlMs}ms (need >=100ms)\n`)
+    assert.ok(restored.controlMs >= 100, `longtask 对照：忙等 120ms 只记录到 ${restored.controlMs}ms，监听不可信`)
+    const restorePhases = JSON.stringify(await page.evaluate(() => window.__bookRestoreTiming))
+    assertProbe('restore', await probeCheckpoint('恢复'))
+    ch2 = await chapterText('第2章')
+    process.stdout.write(`P3 book-restore phases: ${restorePhases}\n`)
+    process.stdout.write(`P3 book-replace 1000 chapters: restore-batch ${restored.doneMs}ms (limit ${batchLimitMs}ms), max long task ${restored.maxLongTask}ms over ${restored.longTasks}; ${restored.text}\n`)
+    const restoreCodeMs = codeMs(restorePhases)
+    process.stdout.write(`P3 book-restore read+body+commit ${restoreCodeMs}ms (limit ${codeLimitMs}ms), total ${restored.doneMs}ms (limit ${batchLimitMs}ms)\n`)
+    assert.ok(restoreCodeMs <= codeLimitMs, `整批恢复 读取+事务体+COMMIT ${restoreCodeMs}ms 应 ≤${codeLimitMs}ms；分阶段（读/事务体/提交）${restorePhases}`)
+    assert.ok(restored.doneMs <= batchLimitMs, `整批恢复 ${restored.doneMs}ms 应 ≤${batchLimitMs}ms；分阶段（读/事务体/提交）${restorePhases}`)
+    assert.equal(await page.getByTestId('book-replace-error').count(), 0, '连点两次不出现恢复错误')
+    assert.equal((await snapshotKinds('第1章')).preRestore, 1, '连点两次只发一次 restoreBatch（每章只一份 pre_restore 快照）')
+    assert.equal(restored.text, '已恢复 998 章。')
+    const skippedText = await page.getByTestId('book-restore-skipped').textContent()
+    assert.ok(skippedText.includes('以下 1 章没有恢复：替换后又改过') && skippedText.includes('第997章'), skippedText)
+    await page.getByRole('button', { name: '知道了' }).click()
+    const r1 = await chapterText('第1章'); const r997 = await chapterText('第997章')
+    assert.ok(r1.includes('远处星') && !r1.includes('远处月'), '已恢复的章回到替换前')
+    assert.ok(r997.includes('后来加的') && r997.includes('远处月'), '跳过的章保留当前内容')
+    assert.equal(await chapterText('第2章'), ch2, '未参与的章不变')
     // 收尾：归档千章书，回到主作品
     await page.evaluate((id) => window.workspace.projects.archive(id, true), book.id)
     await page.reload()

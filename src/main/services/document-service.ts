@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
-import type { ChapterStatus, DocumentContent, DocumentNode, DocumentType, SearchResult, Snapshot, TextOrigin, NodeOutline, SerialProgress, StockpileSummary } from '../../shared/domain'
+import type { BookReplaceResult, BookRestoreResult, ChapterStatus, DocumentContent, DocumentNode, DocumentType, SearchResult, Snapshot, TextOrigin, NodeOutline, SerialProgress, StockpileSummary } from '../../shared/domain'
 import { computeStockpile } from '../../shared/stockpile'
 import type { AppDatabase } from '../database/database'
 import { WritingDailyService } from './writing-daily-service'
@@ -226,34 +226,145 @@ export class DocumentService {
     if (current.revision > 0 && (!latestSnapshot || Date.now() - latestSnapshot.created_at >= 10 * 60 * 1000)) {
       this.createSnapshot(input.projectId, input.documentId, 'interval')
     }
-    const prevWords = countChineseWords(current.plainText)
+    this.db.transaction(() => { this.writeContentInTx(input, current) })
+    return this.getContent(input.projectId, input.documentId)
+  }
+
+  /**
+   * 正文写库（P3 PR-2b 从 saveContent 抽出，内容不变）：UPDATE 正文 / 节点 / 作品时间，重建 FTS，标记摘要过期，
+   * 记风格样本和码字。只能在外层 db.transaction 里调用（事务不可嵌套）；revision = current.revision + 1。
+   */
+  private writeContentInTx(input: {
+    projectId: string; documentId: string; editorJson: Record<string, unknown>; plainText: string
+    styleSample?: { origin: TextOrigin; text: string }; writingStats?: 'human' | 'skip'
+    /** 全书替换 / 整批恢复：机械改写不是人的文风样本，跳过（style_samples 按 document_id 查无索引，1000 章会 O(n²)） */
+    styleSamples?: 'skip'
+    /** 已序列化的正文 JSON（整批恢复直接用快照里的字符串，免一次 parse + stringify） */
+    editorJsonText?: string
+  }, current: Pick<DocumentContent, 'revision' | 'plainText'>, ftsRowids?: Map<string, number[]>): number {
     const now = Date.now()
     const revision = current.revision + 1
     const wordCount = countChineseWords(input.plainText)
     const skipHuman = input.writingStats === 'skip' || input.styleSample?.origin === 'ai'
-    this.db.transaction(() => {
-      this.db.raw.prepare(`UPDATE document_contents SET editor_json = ?, plain_text = ?, word_count = ?, revision = ?, updated_at = ?
-        WHERE document_id = ? AND project_id = ?`)
-        .run(JSON.stringify(input.editorJson), input.plainText, wordCount, revision, now, input.documentId, input.projectId)
-      this.db.raw.prepare('UPDATE document_nodes SET updated_at = ? WHERE id = ? AND project_id = ?')
-        .run(now, input.documentId, input.projectId)
-      this.db.raw.prepare('UPDATE projects SET updated_at = ? WHERE id = ?').run(now, input.projectId)
-      this.db.raw.prepare('DELETE FROM document_fts WHERE document_id = ? AND project_id = ?').run(input.documentId, input.projectId)
-      const node = this.assertNode(input.projectId, input.documentId)
-      this.db.raw.prepare('INSERT INTO document_fts(project_id, document_id, title, plain_text) VALUES (?, ?, ?, ?)')
-        .run(input.projectId, input.documentId, node.title, input.plainText)
-      this.db.raw.prepare('UPDATE chapter_digests SET stale = 1 WHERE chapter_id = ? AND project_id = ? AND chapter_revision < ?')
-        .run(input.documentId, input.projectId, revision)
-      if (input.styleSample) this.styleSamples.record({ projectId: input.projectId, documentId: input.documentId,
-        origin: input.styleSample.origin, text: input.styleSample.text, sourceRevision: revision })
-      else this.styleSamples.recordHumanIfSafe(input.projectId, input.documentId, input.plainText, revision)
-      if (!skipHuman) {
-        const delta = wordCount - prevWords
-        if (delta > 0) this.writingDaily.addHumanWords(input.projectId, { added: delta })
-        else if (delta < 0) this.writingDaily.addHumanWords(input.projectId, { deleted: -delta })
-      }
+    this.db.raw.prepare(`UPDATE document_contents SET editor_json = ?, plain_text = ?, word_count = ?, revision = ?, updated_at = ?
+      WHERE document_id = ? AND project_id = ?`)
+      .run(input.editorJsonText ?? JSON.stringify(input.editorJson), input.plainText, wordCount, revision, now, input.documentId, input.projectId)
+    this.db.raw.prepare('UPDATE document_nodes SET updated_at = ? WHERE id = ? AND project_id = ?')
+      .run(now, input.documentId, input.projectId)
+    this.db.raw.prepare('UPDATE projects SET updated_at = ? WHERE id = ?').run(now, input.projectId)
+    if (ftsRowids) {
+      // 批量路径：按事先一次扫描得到的 rowid 删除（FTS5 按 document_id 删除会全表扫描，1000 章即 O(n²)）
+      const del = this.db.raw.prepare('DELETE FROM document_fts WHERE rowid = ?')
+      for (const rowid of ftsRowids.get(input.documentId) ?? []) del.run(rowid)
+    } else this.db.raw.prepare('DELETE FROM document_fts WHERE document_id = ? AND project_id = ?').run(input.documentId, input.projectId)
+    const node = this.assertNode(input.projectId, input.documentId)
+    this.db.raw.prepare('INSERT INTO document_fts(project_id, document_id, title, plain_text) VALUES (?, ?, ?, ?)')
+      .run(input.projectId, input.documentId, node.title, input.plainText)
+    this.db.raw.prepare('UPDATE chapter_digests SET stale = 1 WHERE chapter_id = ? AND project_id = ? AND chapter_revision < ?')
+      .run(input.documentId, input.projectId, revision)
+    if (input.styleSample) this.styleSamples.record({ projectId: input.projectId, documentId: input.documentId,
+      origin: input.styleSample.origin, text: input.styleSample.text, sourceRevision: revision })
+    else if (input.styleSamples !== 'skip') this.styleSamples.recordHumanIfSafe(input.projectId, input.documentId, input.plainText, revision)
+    if (!skipHuman) {
+      const delta = wordCount - countChineseWords(current.plainText)
+      if (delta > 0) this.writingDaily.addHumanWords(input.projectId, { added: delta })
+      else if (delta < 0) this.writingDaily.addHumanWords(input.projectId, { deleted: -delta })
+    }
+    return revision
+  }
+
+  /** 测试钩子（失败注入）：批量替换 / 恢复每章各阶段之后调用；生产里为空操作。 */
+  /** 批量路径读当前正文：不解析 JSON（快照直接存原字符串）。 */
+  private rawContent(projectId: string, documentId: string): { editorJsonText: string; plainText: string; revision: number } {
+    const row = this.db.raw.prepare('SELECT editor_json, plain_text, revision FROM document_contents WHERE document_id = ? AND project_id = ?')
+      .get(documentId, projectId) as { editor_json: string; plain_text: string; revision: number } | undefined
+    if (!row) throw new Error('DOCUMENT_HAS_NO_CONTENT')
+    return { editorJsonText: row.editor_json, plainText: row.plain_text, revision: row.revision }
+  }
+
+  /** 批量路径拍快照：与 createSnapshot 写同样的行，但用已读出的原字符串。 */
+  private insertSnapshotRaw(projectId: string, documentId: string, reason: Snapshot['reason'], current: { editorJsonText: string; plainText: string; revision: number }, metadata: Record<string, unknown>): void {
+    this.db.raw.prepare(`INSERT INTO snapshots
+      (id, project_id, document_id, reason, revision, content, plain_text, metadata_json, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(randomUUID(), projectId, documentId, reason, current.revision, current.editorJsonText, current.plainText, JSON.stringify(metadata), Date.now())
+  }
+
+  /** 一次扫描本作品 FTS 行：document_id → rowid[]（只读 UNINDEXED 列，事务内调用）。 */
+  private ftsRowidMap(projectId: string): Map<string, number[]> {
+    const map = new Map<string, number[]>()
+    const rows = this.db.raw.prepare('SELECT rowid AS rowid, document_id FROM document_fts WHERE project_id = ?').all(projectId) as Array<{ rowid: number; document_id: string }>
+    for (const row of rows) { const list = map.get(row.document_id); if (list) list.push(row.rowid); else map.set(row.document_id, [row.rowid]) }
+    return map
+  }
+
+  protected onBatchStep(stage: 'snapshot' | 'write', index: number): void { void stage; void index }
+
+  /**
+   * 全书替换（P3 PR-2b）：整批只开一个事务。逐章核对 expectedRevision（不符抛 REVISION_CONFLICT:{id}），
+   * 先拍 manual 快照（metadata.kind = book_replace + batchId），再写正文；任何一章出错整批 ROLLBACK，一个字都不写。
+   * 不做 large_delete / interval 快照判断（已有全书替换快照）；不计入码字（writingStats: skip）。
+   */
+  replaceBatch(input: {
+    projectId: string
+    items: Array<{ documentId: string; expectedRevision: number; editorJson: Record<string, unknown>; plainText: string; hits: number }>
+    query: string; replacement: string; regex: boolean; caseSensitive: boolean
+  }): BookReplaceResult {
+    if (!input.items.length) throw new Error('BOOK_REPLACE_EMPTY')
+    if (new Set(input.items.map((item) => item.documentId)).size !== input.items.length) throw new Error('BOOK_REPLACE_DUPLICATE_DOCUMENT')
+    const batchId = randomUUID()
+    const hits = input.items.reduce((sum, item) => sum + item.hits, 0)
+    const t0 = performance.now(); let t1 = t0; let t2 = t0
+    const contents = this.db.bulkTransaction(() => { const fts = this.ftsRowidMap(input.projectId); t1 = performance.now(); const out = input.items.map((item, index) => {
+      const node = this.assertNode(input.projectId, item.documentId)
+      if (node.type !== 'chapter' && node.type !== 'scene') throw new Error('BOOK_REPLACE_NOT_CHAPTER')
+      const current = this.rawContent(input.projectId, item.documentId)
+      if (current.revision !== item.expectedRevision) throw new Error(`REVISION_CONFLICT:${item.documentId}`)
+      this.insertSnapshotRaw(input.projectId, item.documentId, 'manual', current, {
+        kind: 'book_replace', batchId, query: input.query, replacement: input.replacement,
+        regex: input.regex, caseSensitive: input.caseSensitive, hits: item.hits, batchHits: hits
+      })
+      this.onBatchStep('snapshot', index)
+      const revision = this.writeContentInTx({ projectId: input.projectId, documentId: item.documentId, editorJson: item.editorJson, plainText: item.plainText, writingStats: 'skip', styleSamples: 'skip' }, current, fts)
+      this.onBatchStep('write', index)
+      return { documentId: item.documentId, revision }
+    }); t2 = performance.now(); return out })
+    const timing = { readMs: Math.round(t1 - t0), bodyMs: Math.round(t2 - t1), commitMs: Math.round(performance.now() - t2) }
+    return { batchId, chapters: contents.length, hits, contents, timing }
+  }
+
+  /**
+   * 整批恢复一次全书替换（P3 PR-2b）：找出本作品 kind=book_replace 且 batchId 匹配的快照（json_extract 全扫本书快照），
+   * 一个事务内逐章：替换后又改过（当前 revision ≠ 快照 revision + 1）或章已删除 → 跳过并列出；否则先拍 pre_restore 再写回。
+   */
+  restoreBatch(projectId: string, batchId: string): BookRestoreResult {
+    const t0 = performance.now()
+    const rows = this.db.raw.prepare(`SELECT s.id, s.document_id, s.revision, s.content, s.plain_text FROM snapshots s
+      WHERE s.project_id = ? AND s.reason = 'manual'
+        AND json_extract(s.metadata_json, '$.kind') = 'book_replace' AND json_extract(s.metadata_json, '$.batchId') = ?
+      ORDER BY s.created_at, s.rowid`).all(projectId, batchId) as Array<{ id: string; document_id: string; revision: number; content: string; plain_text: string }>
+    if (!rows.length) throw new Error('BOOK_REPLACE_BATCH_NOT_FOUND')
+    const t1 = performance.now(); let t2 = t1
+    const result = this.db.bulkTransaction(() => {
+      const fts = this.ftsRowidMap(projectId)
+      const restored: Array<{ documentId: string; revision: number }> = []
+      const skipped: Array<{ documentId: string; title: string; reason: 'changed' | 'deleted' }> = []
+      rows.forEach((row, index) => {
+        const node = this.db.raw.prepare('SELECT title FROM document_nodes WHERE id = ? AND project_id = ?').get(row.document_id, projectId) as { title: string } | undefined
+        if (!node) { skipped.push({ documentId: row.document_id, title: '', reason: 'deleted' }); return }
+        const current = this.rawContent(projectId, row.document_id)
+        if (current.revision !== row.revision + 1) { skipped.push({ documentId: row.document_id, title: node.title, reason: 'changed' }); return }
+        this.insertSnapshotRaw(projectId, row.document_id, 'pre_restore', current, { restoredFrom: row.id, batchId })
+        this.onBatchStep('snapshot', index)
+        const revision = this.writeContentInTx({ projectId, documentId: row.document_id,
+          editorJson: {}, editorJsonText: row.content, plainText: row.plain_text, writingStats: 'skip', styleSamples: 'skip' }, current, fts)
+        this.onBatchStep('write', index)
+        restored.push({ documentId: row.document_id, revision })
+      })
+      t2 = performance.now()
+      return { batchId, restored, skipped }
     })
-    return this.getContent(input.projectId, input.documentId)
+    return { ...result, timing: { readMs: Math.round(t1 - t0), bodyMs: Math.round(t2 - t1), commitMs: Math.round(performance.now() - t2) } }
   }
 
   createSnapshot(projectId: string, documentId: string, reason: Snapshot['reason'], metadata: Record<string, unknown> = {}): Snapshot {

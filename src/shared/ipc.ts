@@ -2,7 +2,7 @@ import type { PromptTemplateEntry } from './prompt-templates'
 import type { AIMode, ProviderType } from './domain'
 import type { ExportChapterRange } from './export-range'
 import type {
-  ContextBundle,
+  ContextBundle, BookReplaceResult, BookRestoreResult,
   AITaskEnvelope, Character, ChatCursor, ChatMessage, ChatThread, DigestStatus, DocumentContent, DocumentNode, Idea,
   MemoryItem, MemoryProposal, ModelConfig, NodeOutline, Project, ProjectNote, ProjectType, ProofreadIssue, ProviderConfig,
   ProviderInput, RoutedTask, SearchResult, Snapshot, TaskModelRoute, TextOrigin, TextPatch, WritingDailyRow, WritingGoals, ChapterWordRange, ChapterStatus, SerialProgress, StockpileSummary, ForeshadowEntry, ForeshadowState, TimelineEvent, TimelineSortMode, FocusLockInput, FocusLockStatus, FocusLastSession, FocusLockedProject, CharacterHoverPrefs
@@ -30,6 +30,8 @@ export interface WorkspaceApi {
     delete(projectId: string, documentId: string): Promise<void>
     save(input: { projectId: string; documentId: string; editorJson: Record<string, unknown>; plainText: string; expectedRevision?: number; styleSample?: { origin: TextOrigin; text: string } }): Promise<DocumentContent>
     search(projectId: string, query: string): Promise<SearchResult[]>
+    /** P3 PR-2b 全书替换：整批一个事务，任一章失败整批回滚 */
+    replaceBatch(input: { projectId: string; items: Array<{ documentId: string; expectedRevision: number; editorJson: Record<string, unknown>; plainText: string; hits: number }>; query: string; replacement: string; regex: boolean; caseSensitive: boolean }): Promise<BookReplaceResult>
     /** S4：按细纲行批量建空章（构思） */
     batchCreateChapters(input: { projectId: string; volumeId: string; lines: string[] }): Promise<DocumentNode[]>
     setStatus(projectId: string, documentId: string, status: ChapterStatus): Promise<DocumentNode>
@@ -41,6 +43,7 @@ export interface WorkspaceApi {
     create(projectId: string, documentId: string, reason: Snapshot['reason']): Promise<Snapshot>
     list(projectId: string, documentId: string): Promise<Snapshot[]>
     restore(projectId: string, snapshotId: string): Promise<DocumentContent>
+    restoreBatch(projectId: string, batchId: string): Promise<BookRestoreResult>
   }
   ideas: { list(projectId: string): Promise<Idea[]>; create(projectId: string, content: string, tags?: string[]): Promise<Idea> }
   outlines: {
@@ -148,6 +151,10 @@ export interface WorkspaceApi {
   }
   /** S2 e2e：读取 webRequest 拦截日志 */
   network: { blockedLog(): Promise<Array<{ url: string; reason: string; at: number }>> }
+  /** P3 PR-2b e2e：后台 WAL 检查点状态（界面不展示） */
+  diagnostics: {
+    walCheckpoint(): Promise<{ busy: boolean; runs: number; last: { ok: boolean; ms: number; attempts: number; error?: string; walBytes?: number } | null; walBytes: number; autoCheckpoint: number; dbPath: string }>
+  }
   /** S9：日更统计与可选目标（数据层无默认目标；UI 在 S10）。 */
   writing: {
     getDay(projectId: string, date?: string): Promise<WritingDailyRow>
