@@ -2,7 +2,8 @@
  * P3 PR-42：will-quit 的 closeForQuit 5s 上限。
  * - 进程内：worker 关闭永不完成 → 上限到点 terminate worker、关主连接，重开库完整（确定性覆盖超时分支）。
  * - 子进程（不打包，node 直接运行产品 TS 源码，同 wal-checkpoint-p3 F 组）：worker 卡在检查点里不回消息 / worker 线程已死，
- *   都在上限内退出（READY→进程退出 ≤ 5s + 1s 余量），重开后 integrity_check ok、正文与快照逐章哈希一致。
+ *   WAL ≤ WAL_QUIT_BOUND_BYTES 时总时长 < QUIT_CLOSE_LIMIT_MS（P3 PR-53：worker 段硬上限 limit − reserve + 退出前检查点 + close），
+ *   重开后 integrity_check ok、正文与快照逐章哈希一致。WAL 超过 N 的用例只断言数据不丢、只记录耗时。
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { spawn } from 'node:child_process'
@@ -10,12 +11,15 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { AppDatabase, QUIT_CLOSE_LIMIT_MS } from '../src/main/database/database'
+import { AppDatabase, QUIT_CLOSE_LIMIT_MS, QUIT_FINAL_RESERVE_MS, QUIT_WORKER_LIMIT_MS, WAL_QUIT_BOUND_BYTES } from '../src/main/database/database'
 import { ProjectService } from '../src/main/services/project-service'
 import { DocumentService } from '../src/main/services/document-service'
 import { chapterHashes } from './fixtures/wal-hash'
 
 vi.setConfig({ testTimeout: 120_000 })
+// P3 PR-53：WAL 约 47KB/章（#48 记录 200 章 ≈ 9.4MB）
+const CHAPTERS_WITHIN = 120
+const CHAPTERS_OVER = 400
 const dirs: string[] = []
 const dbs: AppDatabase[] = []
 afterEach(() => {
@@ -28,7 +32,11 @@ const doc = (text: string): Record<string, unknown> => ({ type: 'doc', content: 
 const integrity = (db: AppDatabase): string => (db.raw.prepare('PRAGMA integrity_check').get() as { integrity_check: string }).integrity_check
 
 describe('closeForQuit 上限（进程内）', () => {
-  it('上限常量为 5000ms', () => { expect(QUIT_CLOSE_LIMIT_MS).toBe(5_000) })
+  it('上限常量为 5000ms；worker 段硬上限 = 5000 − 预留', () => {
+    expect(QUIT_CLOSE_LIMIT_MS).toBe(5_000)
+    expect(QUIT_WORKER_LIMIT_MS).toBe(QUIT_CLOSE_LIMIT_MS - QUIT_FINAL_RESERVE_MS)
+    expect(QUIT_FINAL_RESERVE_MS).toBeGreaterThan(0)
+  })
 
   it('worker 关闭永不完成：到上限即 terminate worker、关闭主连接，重开 integrity_check ok、数据完整', async () => {
     const path = join(tempDir(), 'inkstone.sqlite')
@@ -46,10 +54,13 @@ describe('closeForQuit 上限（进程内）', () => {
     const expected = chapterHashes(db.raw, project.id)
     const terminate = vi.spyOn(cp, 'terminate')
     cp.close = () => new Promise<void>(() => { /* 模拟 worker 永不回 closed */ })
-    const result = await db.closeForQuit(300)
+    // limit 1800 − reserve 1500 = worker 段 300ms
+    const result = await db.closeForQuit(1_800, 1_500)
     expect(result.timedOut).toBe(true)
-    expect(result.ms).toBeGreaterThanOrEqual(290)
-    expect(result.ms).toBeLessThan(300 + 1_000)
+    expect(result.segments!.workerLimitMs).toBe(300)
+    expect(result.segments!.workerMs).toBeGreaterThanOrEqual(290)
+    expect(result.segments!.workerMs).toBeLessThan(300 + 1_000)
+    expect(result.ms).toBeLessThan(1_800)
     expect(terminate).toHaveBeenCalledTimes(1)
     expect(db.closed).toBe(true)
     expect((cp as unknown as { worker?: unknown }).worker).toBeUndefined()
@@ -71,9 +82,9 @@ describe('closeForQuit 上限（子进程，产品源码不打包）', () => {
   const child = resolve('tests/fixtures/wal-crash-child.ts')
   const nodeArgs = ['--experimental-transform-types', '--no-warnings', '--import', pathToFileURL(resolve('tests/fixtures/ts-resolve-hook.mjs')).href]
   type Ready = { status: Record<string, unknown>; projectId: string; hashes: ReturnType<typeof chapterHashes> }
-  type Closed = { timedOut: boolean; ms: number; limitMs: number; mainClosed: boolean; segments: { workerMs: number; mainCloseMs: number; walBytesBeforeClose: number } }
-  const run = (dbPath: string, mode: string) => new Promise<{ ready: Ready; closed: Closed; exitAfterReadyMs: number; code: number | null }>((done, fail) => {
-    const proc = spawn(process.execPath, [...nodeArgs, child, dbPath, mode, '200'], { stdio: ['ignore', 'pipe', 'pipe'] })
+  type Closed = { timedOut: boolean; ms: number; limitMs: number; mainClosed: boolean; segments: { workerMs: number; checkpointMs: number; mainCloseMs: number; walBytesBeforeCheckpoint: number; walBytesBeforeClose: number; checkpointOk: boolean; workerLimitMs: number; walBytesAtQuit: number } }
+  const run = (dbPath: string, mode: string, chapters: number) => new Promise<{ ready: Ready; closed: Closed; exitAfterReadyMs: number; code: number | null }>((done, fail) => {
+    const proc = spawn(process.execPath, [...nodeArgs, child, dbPath, mode, String(chapters)], { stdio: ['ignore', 'pipe', 'pipe'] })
     let out = ''; let err = ''; let readyAt = 0
     const timer = setTimeout(() => { proc.kill('SIGKILL'); fail(new Error(`child ${mode} timeout; stdout ${out.slice(-500)}; stderr ${err}`)) }, 100_000)
     proc.stderr.on('data', (c) => { err += c })
@@ -90,33 +101,39 @@ describe('closeForQuit 上限（子进程，产品源码不打包）', () => {
       done({ ready: JSON.parse(readyLine.slice(6)), closed: JSON.parse(closedLine.slice(7)), exitAfterReadyMs: Math.round(exitedAt - readyAt), code })
     })
   })
-  for (const mode of ['quit-stuck', 'quit-dead']) it(`退出时 ${mode === 'quit-stuck' ? 'worker 卡在检查点里不回消息' : 'worker 线程已死'}：上限内退出，重开 integrity_check ok、逐章数据完整`, async () => {
+  // 章数 → WAL 大小（每章约 47KB WAL）：within = ≤ N（断言总时长 < 上限）；over = 超过 N（只断言数据不丢、只记录耗时）
+  const cases: Array<{ mode: 'quit-stuck' | 'quit-dead'; chapters: number; bound: 'within' | 'over' }> = [
+    { mode: 'quit-stuck', chapters: CHAPTERS_WITHIN, bound: 'within' },
+    { mode: 'quit-dead', chapters: CHAPTERS_WITHIN, bound: 'within' },
+    { mode: 'quit-stuck', chapters: CHAPTERS_OVER, bound: 'over' }
+  ]
+  for (const { mode, chapters, bound } of cases) it(`退出时 ${mode === 'quit-stuck' ? 'worker 卡在检查点里不回消息' : 'worker 线程已死'}（${chapters} 章，WAL ${bound === 'within' ? '≤' : '>'} N）：${bound === 'within' ? '总时长 < 上限' : '只断言数据不丢'}，重开 integrity_check ok、逐章数据完整`, async () => {
     const dbPath = join(tempDir(), 'quit.sqlite')
-    const r = await run(dbPath, mode)
-    log(`${mode}: ${JSON.stringify({ closed: r.closed, exitAfterReadyMs: r.exitAfterReadyMs, code: r.code, status: { ...r.ready.status, attempts: undefined } })}`)
+    const r = await run(dbPath, mode, chapters)
+    log(`${mode} ${bound} ${chapters}ch: ${JSON.stringify({ closed: r.closed, exitAfterReadyMs: r.exitAfterReadyMs, code: r.code, status: { ...r.ready.status, attempts: undefined } })}`)
     expect(r.code).toBe(0)
     expect(r.closed.limitMs).toBe(5_000)
     expect(r.closed.mainClosed).toBe(true)
-    log(`${mode} segments: ${JSON.stringify(r.closed.segments)}`)
-    if (mode === 'quit-stuck') {
-      // 分三段。1) worker 段（硬条件）：worker 在上限内结束（内部 2s terminate），不走 5s 超时。
-      expect(r.closed.timedOut).toBe(false)
-      expect(r.closed.segments.workerMs).toBeLessThan(QUIT_CLOSE_LIMIT_MS)
-      // 2) 主连接 close 段：单独计时，只打日志（上一行）。
-      // 3) 总耗时：当前设计下 close 不在 5s 预算内，见 hygiene H-W2，待 A 修复后收紧。
-      expect(r.closed.ms).toBeLessThan(QUIT_CLOSE_LIMIT_MS + 3_000)
-      expect(r.exitAfterReadyMs).toBeLessThan(QUIT_CLOSE_LIMIT_MS + 3_000)
+    log(`${mode} ${bound} segments: ${JSON.stringify(r.closed.segments)}`)
+    // worker 段硬上限（设计保证）：limit − reserve；stuck 走内部 2s terminate，dead 立即完成，都不走超时
+    expect(r.closed.timedOut).toBe(false)
+    expect(r.closed.segments.workerLimitMs).toBe(QUIT_WORKER_LIMIT_MS)
+    expect(r.closed.segments.workerMs).toBeLessThan(QUIT_WORKER_LIMIT_MS)
+    if (bound === 'within') {
+      // 前提：退出时 WAL 在 N 以内
+      expect(r.closed.segments.walBytesBeforeCheckpoint).toBeLessThanOrEqual(WAL_QUIT_BOUND_BYTES)
+      // 总时长（含退出前检查点 + 主连接 close）< 上限
+      expect(r.closed.ms).toBeLessThan(QUIT_CLOSE_LIMIT_MS)
+      expect(r.exitAfterReadyMs).toBeLessThan(QUIT_CLOSE_LIMIT_MS)
     } else {
-      expect(r.closed.ms).toBeLessThanOrEqual(5_000 + 200)
-      expect(r.exitAfterReadyMs).toBeLessThanOrEqual(5_000 + 1_000)
+      expect(r.closed.segments.walBytesBeforeCheckpoint).toBeGreaterThan(WAL_QUIT_BOUND_BYTES)
+      log(`over-N timing (not asserted): ms=${r.closed.ms} exitAfterReadyMs=${r.exitAfterReadyMs}`)
     }
-    // worker 已死：不得走到 5s 上限（timedOut=false）。ms 含主连接 close + Windows CI 抖动（曾见 ~1–3s），上限取产品限值本身。
-    if (mode === 'quit-dead') { expect(r.closed.timedOut).toBe(false); expect(r.closed.ms).toBeLessThan(QUIT_CLOSE_LIMIT_MS) }
     if (mode === 'quit-stuck') expect(r.ready.status.busy).toBe(true)
     const reopened = new AppDatabase(dbPath, { checkpointer: false }); dbs.push(reopened)
     expect(integrity(reopened)).toBe('ok')
     const hashes = chapterHashes(reopened.raw, r.ready.projectId)
-    expect(Object.keys(hashes)).toHaveLength(200)
+    expect(Object.keys(hashes)).toHaveLength(chapters)
     expect(hashes).toEqual(r.ready.hashes)
   })
 })

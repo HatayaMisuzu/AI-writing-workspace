@@ -2,7 +2,7 @@
 // 用法：node --experimental-transform-types --import ./tests/fixtures/ts-resolve-hook.mjs tests/fixtures/wal-crash-child.ts <dbPath> <before|during|after> <chapters>
 // 输出一行 `READY {json}` 后保持存活等待被杀。
 // P3 PR-42 退出上限：mode = quit-stuck（worker 卡在检查点里不回消息）/ quit-dead（worker 线程已死）时，
-// READY 之后直接走 will-quit 同一个 AppDatabase.closeForQuit(QUIT_CLOSE_LIMIT_MS)，输出 `CLOSED {json}` 后 process.exit(0)（同 app.quit）。
+// READY 之后直接走 will-quit 同一个 AppDatabase.closeForQuit(QUIT_CLOSE_LIMIT_MS)（P3 PR-53：worker 段硬上限 + 退出前检查点 + close），输出 `CLOSED {json}` 后 process.exit(0)（同 app.quit）。
 import { DatabaseSync } from 'node:sqlite'
 import { AppDatabase, QUIT_CLOSE_LIMIT_MS } from '../../src/main/database/database'
 import { ProjectService } from '../../src/main/services/project-service'
@@ -64,16 +64,13 @@ const main = async (): Promise<void> => {
   const status = { mode, attempts, autoCheckpoint: db.autoCheckpoint, busy: db.checkpointer?.busy ?? false, last: db.checkpointer?.last ?? null, walBytes: db.checkpointer?.walBytes() ?? 0 }
   process.stdout.write(`READY ${JSON.stringify({ status, projectId: project.id, hashes: chapterHashes(db.raw, project.id) })}\n`)
   if (mode === 'quit-stuck' || mode === 'quit-dead') {
-    // 测试侧分段计时（不改行为）：包一层实例 close，记 closeForQuit 内主连接 close 的起止；workerMs = 进入 closeForQuit → 主连接 close 开始
-    const origClose = db.close.bind(db)
-    const quitStarted = performance.now()
-    let mainCloseStart = 0; let mainCloseEnd = 0
-    db.close = () => { if (!mainCloseStart) mainCloseStart = performance.now(); origClose(); if (!mainCloseEnd) mainCloseEnd = performance.now() }
+    // 分段计时由 closeForQuit 自己返回（P3 PR-53：worker 段 / 退出前检查点 / 主连接 close）
     const walBefore = db.checkpointer?.walBytes() ?? 0
+    const quitStarted = performance.now()
     const result = await db.closeForQuit(QUIT_CLOSE_LIMIT_MS)
-    const segments = { workerMs: Math.round(mainCloseStart - quitStarted), mainCloseMs: Math.round(mainCloseEnd - mainCloseStart), walBytesBeforeClose: walBefore }
-    if (process.env.INKSTONE_QUIT_TEST_DIAG === '1') process.stderr.write(`QDIAG ${JSON.stringify({ quitStarted: Math.round(quitStarted), mainCloseStart: Math.round(mainCloseStart), mainCloseEnd: Math.round(mainCloseEnd), resolved: Math.round(performance.now()) })}\n`)
-    process.stdout.write(`CLOSED ${JSON.stringify({ ...result, limitMs: QUIT_CLOSE_LIMIT_MS, mainClosed: db.closed, segments })}\n`)
+    const segments = { ...result.segments, walBytesAtQuit: walBefore }
+    if (process.env.INKSTONE_QUIT_TEST_DIAG === '1') process.stderr.write(`QDIAG ${JSON.stringify({ quitStarted: Math.round(quitStarted), resolved: Math.round(performance.now()), segments })}\n`)
+    process.stdout.write(`CLOSED ${JSON.stringify({ timedOut: result.timedOut, ms: result.ms, limitMs: QUIT_CLOSE_LIMIT_MS, mainClosed: db.closed, segments })}\n`)
     process.exit(0)
   }
   setInterval(() => { void reader }, 1_000)

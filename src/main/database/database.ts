@@ -1,5 +1,5 @@
 import { DatabaseSync } from 'node:sqlite'
-import { mkdirSync } from 'node:fs'
+import { mkdirSync, statSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { schema } from './schema'
 import { WalCheckpointer, type WalCheckpointerOptions } from './wal-checkpointer'
@@ -7,12 +7,44 @@ import { WalCheckpointer, type WalCheckpointerOptions } from './wal-checkpointer
 export const CURRENT_SCHEMA_VERSION = 10
 /** 退出时等后台检查点 worker 关闭的上限（ms）；超时则 terminate worker、直接关主连接后退出（P3 PR-42）。 */
 export const QUIT_CLOSE_LIMIT_MS = 5_000
+/**
+ * P3 PR-53（A）：退出预算按「限制退出时的工作量」做。
+ * - worker 段硬上限 = QUIT_CLOSE_LIMIT_MS − QUIT_FINAL_RESERVE_MS（到点 terminate worker）。
+ * - 预留段：主连接在预算内主动做一次 wal_checkpoint(TRUNCATE)，再 close（照常回写，此时 WAL 已空，close 很快）。
+ * - 预留段耗时与 WAL 大小成正比，db.close() / 检查点是同步调用、无法中途超时：只有 WAL ≤ WAL_QUIT_BOUND_BYTES（CI 两平台实测取慢者再留余量）
+ *   时保证总时长 < QUIT_CLOSE_LIMIT_MS；超过则不保证 5s，但照常回写、已提交数据安全。
+ * - 平时把 WAL 控制得很小：定期后台写回（WAL_MAINTENANCE_*）+ PRAGMA journal_size_limit。
+ */
+export const QUIT_FINAL_RESERVE_MS = 1_500
+export const QUIT_WORKER_LIMIT_MS = QUIT_CLOSE_LIMIT_MS - QUIT_FINAL_RESERVE_MS
+export const WAL_QUIT_BOUND_BYTES = 8 * 1024 * 1024
+export const JOURNAL_SIZE_LIMIT_BYTES = 4 * 1024 * 1024
+export const WAL_MAINTENANCE_INTERVAL_MS = 10_000
+export const WAL_MAINTENANCE_THRESHOLD_BYTES = 1024 * 1024
+
+export interface QuitSegments {
+  /** 进入 closeForQuit → worker 段结束（≤ limit − reserve） */
+  workerMs: number
+  /** 主连接退出前检查点耗时 */
+  checkpointMs: number
+  /** 主连接 close 耗时 */
+  mainCloseMs: number
+  walBytesBeforeCheckpoint: number
+  walBytesBeforeClose: number
+  checkpointOk: boolean
+  workerLimitMs: number
+}
+export interface QuitResult { timedOut: boolean; ms: number; segments?: QuitSegments }
 
 export interface AppDatabaseOptions {
   /** 后台 WAL 检查点参数；false = 不用后台检查点（批量提交后立即恢复自动检查点）。:memory: 库总是不用。 */
   checkpointer?: WalCheckpointerOptions | false
   /** P3 PR-44：批量提交后等「安静的完整检查点」释放暂停的上限；超过则降级（恢复 autocheckpoint）并告警 */
   release?: { maxRounds?: number; maxMs?: number }
+  /** P3 PR-53：定期后台写回（WAL 超过 thresholdBytes 且无批量暂停时请求一轮 PASSIVE）；false = 关闭（基准对照用） */
+  walMaintenance?: { intervalMs?: number; thresholdBytes?: number } | false
+  /** P3 PR-53：PRAGMA journal_size_limit（字节）；false = 不设（SQLite 默认 -1，基准对照用） */
+  journalSizeLimitBytes?: number | false
 }
 
 /** P3 PR-44：一次暂停释放过程的结果（诊断与测试用） */
@@ -45,6 +77,9 @@ export class AppDatabase {
   readonly releases: ReleaseRecord[] = []
   /** 最近的写事务提交记录（最多 50 条） */
   readonly commits: CommitRecord[] = []
+  private maintenanceTimer?: ReturnType<typeof setInterval>
+  /** P3 PR-53：定期写回请求次数（诊断用） */
+  maintenanceRequests = 0
 
   constructor(path: string, options: AppDatabaseOptions = {}) {
     this.path = path
@@ -63,6 +98,33 @@ export class AppDatabase {
     if (path !== ':memory:' && options.checkpointer !== false) {
       this.checkpointer = new WalCheckpointer(path, { ...(options.checkpointer ?? {}), generation: () => this.writeGeneration() })
     }
+    if (path !== ':memory:' && options.journalSizeLimitBytes !== false) {
+      this.raw.exec(`PRAGMA journal_size_limit = ${Math.trunc(options.journalSizeLimitBytes ?? JOURNAL_SIZE_LIMIT_BYTES)}`)
+    }
+    if (this.checkpointer && options.walMaintenance !== false) {
+      const intervalMs = options.walMaintenance?.intervalMs ?? WAL_MAINTENANCE_INTERVAL_MS
+      const thresholdBytes = options.walMaintenance?.thresholdBytes ?? WAL_MAINTENANCE_THRESHOLD_BYTES
+      this.maintenanceTimer = setInterval(() => this.maintainWal(thresholdBytes), intervalMs)
+      this.maintenanceTimer.unref?.()
+    }
+  }
+
+  /** 定期写回：后台 worker PASSIVE，不挡主连接；批量暂停期间交给释放循环，不重复请求。 */
+  private maintainWal(thresholdBytes: number): void {
+    const cp = this.checkpointer
+    if (this.isClosed || !cp || cp.closed || cp.busy || this.autoCheckpointHolds > 0) return
+    if (cp.walBytes() <= thresholdBytes) return
+    this.maintenanceRequests += 1
+    void cp.request()
+  }
+
+  private stopMaintenance(): void {
+    if (this.maintenanceTimer) clearInterval(this.maintenanceTimer)
+    this.maintenanceTimer = undefined
+  }
+
+  private walFileBytes(): number {
+    try { return statSync(`${this.path}-wal`).size } catch { return 0 }
   }
 
   get closed(): boolean { return this.isClosed }
@@ -71,6 +133,7 @@ export class AppDatabase {
   close(): void {
     if (this.isClosed) return
     this.isClosed = true
+    this.stopMaintenance()
     void this.checkpointer?.close()
     this.raw.close()
   }
@@ -83,21 +146,41 @@ export class AppDatabase {
   }
 
   /**
-   * 应用退出用（will-quit）：closeAsync 加上限。limitMs 内 worker 没关完（卡住不回消息）就 terminate worker，
-   * 直接关主连接后返回；worker 已死时 closeAsync 立即完成。已提交的数据都在主库或 WAL 里，下次打开由 SQLite 恢复。
+   * 应用退出用（will-quit，在所有窗口关窗握手——渲染进程 flush 最后一次保存并提交——之后）。P3 PR-53：
+   * 1) worker 段：等后台检查点 worker 关闭，硬上限 limitMs − reserveMs，到点 terminate（未完成的回写留在 WAL）。
+   * 2) 预留段：主连接主动 wal_checkpoint(TRUNCATE)（失败/BUSY 只记录），再 close（照常回写剩余部分）。
+   * WAL ≤ WAL_QUIT_BOUND_BYTES 时总时长 < limitMs；更大的 WAL 不保证时限，但不跳过回写、不丢已提交数据。
    */
-  async closeForQuit(limitMs = QUIT_CLOSE_LIMIT_MS): Promise<{ timedOut: boolean; ms: number }> {
+  async closeForQuit(limitMs = QUIT_CLOSE_LIMIT_MS, reserveMs = QUIT_FINAL_RESERVE_MS): Promise<QuitResult> {
     const started = performance.now()
     if (this.isClosed) return { timedOut: false, ms: 0 }
+    this.stopMaintenance()
+    const workerLimitMs = Math.max(0, limitMs - reserveMs)
     let timer: ReturnType<typeof setTimeout> | undefined
     const timedOut = await Promise.race([
       (this.checkpointer?.close() ?? Promise.resolve()).then(() => false, () => false),
-      new Promise<boolean>((resolve) => { timer = setTimeout(() => resolve(true), limitMs) })
+      new Promise<boolean>((resolve) => { timer = setTimeout(() => resolve(true), workerLimitMs) })
     ])
     if (timer) clearTimeout(timer)
     if (timedOut) this.checkpointer?.terminate()
+    const workerEnd = performance.now()
+    const walBytesBeforeCheckpoint = this.walFileBytes()
+    let checkpointOk = false
+    try {
+      const row = this.raw.prepare('PRAGMA wal_checkpoint(TRUNCATE)').get() as { busy: number; log: number; checkpointed: number } | undefined
+      checkpointOk = Boolean(row && row.busy === 0)
+    } catch (error) {
+      console.warn(`[wal-checkpoint] quit checkpoint failed: ${(error as Error).message}`)
+    }
+    const checkpointEnd = performance.now()
+    const walBytesBeforeClose = this.walFileBytes()
     this.close()
-    return { timedOut, ms: Math.round(performance.now() - started) }
+    const closeEnd = performance.now()
+    const segments: QuitSegments = {
+      workerMs: Math.round(workerEnd - started), checkpointMs: Math.round(checkpointEnd - workerEnd), mainCloseMs: Math.round(closeEnd - checkpointEnd),
+      walBytesBeforeCheckpoint, walBytesBeforeClose, checkpointOk, workerLimitMs
+    }
+    return { timedOut, ms: Math.round(closeEnd - started), segments }
   }
 
   /** 主连接当前的 wal_autocheckpoint（页数；0 = 关闭）。 */
