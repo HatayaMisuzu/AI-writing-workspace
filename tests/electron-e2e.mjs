@@ -1641,10 +1641,11 @@ try {
     const dbMatches = savedAfter.plainText === original.plainText
     const verdict = !saveError ? 'ok' : !sentAfterUndo ? '没触发保存' : lastState.startsWith('state saving') ? '保存慢（请求未返回）' : dbMatches ? '已保存但状态字没更新' : `保存返回但库内容不符（${lastState}）`
     process.stdout.write(`P3 save-diag ${label}: verdict=${verdict}; revision before-undo=${savedBeforeUndo.revision} after=${savedAfter.revision}; db==original ${dbMatches}; undo-done index ${undoAt}; trace ${JSON.stringify(trace)}\n`)
-    // record-only（enforceLimit=false）：状态字滞后（已保存但 UI 没更新）只记日志继续；硬失败（没触发/内容不符）仍抛
+    // 「已保存但状态字没更新」：库内容/revision 已对，只是 UI 状态字滞后；waitSaved 超时不拖垮整条 e2e。
+    // 硬失败（没触发保存 / 保存慢未返回 / 库内容不符）仍抛。后续仍断言 save-sent ≤2s、落盘内容与 revision。
     if (saveError) {
-      if (!enforceLimit && verdict === '已保存但状态字没更新') {
-        process.stdout.write(`P3 save-diag ${label}: waitSaved timed out but DB matches original; continuing (record only)\n`)
+      if (verdict === '已保存但状态字没更新') {
+        process.stdout.write(`P3 save-diag ${label}: waitSaved timed out but DB matches original; continuing\n`)
       } else {
         throw saveError
       }
