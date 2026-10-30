@@ -100,7 +100,9 @@ button.danger-button { color: #fff; background: var(--danger); border-color: var
 .manuscript-tree { flex: 1; overflow: auto; padding: 10px 8px 68px; position: relative; }
 .volume-row { height: 38px; display: grid; grid-template-columns: 18px minmax(0, auto) 1fr repeat(3, 28px); align-items: center; padding: 0 6px; }
 .volume-row strong { font-size: 13px; }
-.chapter-row { width: 100%; height: 36px; padding: 0 5px 0 24px; background: transparent; display: grid; grid-template-columns: minmax(0, 1fr) 26px 26px; align-items: center; font-size: 13px; }
+.chapter-row { width: 100%; height: 36px; padding: 0 5px 0 24px; background: transparent; display: grid; grid-template-columns: minmax(0, 1fr) auto 26px 26px; align-items: center; font-size: 13px; }
+/* 窄侧栏：徽标单行不收缩，删除/重命名按钮列固定，标题列省略号截断 */
+.chapter-row > .tree-node-action { flex-shrink: 0; min-width: 26px; }
 .chapter-row.active { background: var(--accent-soft); color: #126f72; box-shadow: inset 3px 0 var(--accent); }
 .chapter-open { width: 100%; min-width: 0; padding: 0 5px; border: 0; background: transparent; display: grid; grid-template-columns: 17px minmax(0, 1fr) auto; justify-content: flex-start; text-align: left; }
 .chapter-title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -444,6 +446,7 @@ button.danger-button { color: #fff; background: var(--danger); border-color: var
   line-height: 20px;
   cursor: pointer;
   flex-shrink: 0;
+  white-space: nowrap;
 }
 .chapter-status-badge.status-outline { color: #6b6570; }
 .chapter-status-badge.status-draft { color: #3d5a80; background: #e8eef6; border-color: #c5d3e6; }

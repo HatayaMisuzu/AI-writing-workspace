@@ -1206,6 +1206,47 @@ try {
     await waitSaved(page)
   })
 
+  await record('P3 小修⑥ 侧栏重命名当前章节后，编辑器大标题立即显示新名', async () => {
+    const page = running.page
+    await openChapter(page, '词表单条章')
+    await page.locator('.writing-page h1', { hasText: '词表单条章' }).waitFor()
+    const rename = async (from, to) => {
+      const row = page.locator('.chapter-row', { hasText: from }).first()
+      await row.hover()
+      await row.getByRole('button', { name: `重命名${from}` }).click()
+      await page.locator('.node-create-form input').fill(to)
+      await page.getByRole('button', { name: '保存', exact: true }).click()
+      await page.locator('.node-create-form').waitFor({ state: 'detached' })
+    }
+    await rename('词表单条章', '词表单条章·改')
+    await page.waitForFunction(() => document.querySelector('.writing-page h1')?.textContent === '词表单条章·改', undefined, { timeout: 5000 }).catch(() => undefined)
+    assert.equal(await page.locator('.writing-page h1').textContent(), '词表单条章·改', '重命名后大标题应为新名')
+    await rename('词表单条章·改', '词表单条章')
+    await page.waitForFunction(() => document.querySelector('.writing-page h1')?.textContent === '词表单条章', undefined, { timeout: 5000 }).catch(() => undefined)
+    assert.equal(await page.locator('.writing-page h1').textContent(), '词表单条章', '改回原名后大标题同步')
+  })
+
+  await record('P3 小修⑦ 侧栏最小宽度：状态徽标单行，删除按钮可见可点', async () => {
+    const page = running.page
+    const original = page.viewportSize()
+    await page.setViewportSize({ width: 1000, height: 800 })
+    try {
+      const row = page.locator('.chapter-row', { hasText: '词表单条章' }).first()
+      await row.hover()
+      const sidebar = await page.locator('.project-sidebar').boundingBox()
+      const rowBox = await row.boundingBox(); const badge = await row.locator('.chapter-status-badge').boundingBox()
+      const del = row.getByRole('button', { name: '删除词表单条章' }); const delBox = await del.boundingBox()
+      const info = JSON.stringify({ sidebar, rowBox, badge, delBox })
+      assert.ok(sidebar && sidebar.width <= 260, `应处于最小侧栏宽度：${info}`)
+      assert.ok(badge && badge.height <= 24, `徽标应单行：${info}`)
+      assert.ok(delBox && delBox.width >= 20 && delBox.y >= rowBox.y - 1 && delBox.y + delBox.height <= rowBox.y + rowBox.height + 1 && delBox.x + delBox.width <= rowBox.x + rowBox.width + 1, `删除按钮应在行内完整可见：${info}`)
+      await del.click()
+      await page.getByRole('button', { name: '确认删除' }).waitFor()
+      await page.getByRole('button', { name: '取消' }).click()
+      await page.getByRole('button', { name: '确认删除' }).waitFor({ state: 'detached' })
+    } finally { await page.setViewportSize(original ?? { width: 1600, height: 900 }) }
+  })
+
   await record('F13 ⑬ 小黑屋内不自动校对、无校对入口与计数，网络 0；出屋后计数正确', async () => {
     const page = running.page
     await openChapter(page, '黑屋校对章')
