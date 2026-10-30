@@ -1,7 +1,8 @@
 /**
  * Ctrl/Cmd+Home、Ctrl/Cmd+End（含 Shift 扩选）由编辑器自己处理，不交给 Chromium 原生光标移动。
- * 原生路径在分块超长段（long-paragraph-chunks.ts：段内 display:block + content-visibility:auto 的块）
- * 上会卡住渲染进程；这里改成一次 ProseMirror 事务设选区 + revealPos 瞬时滚动（最多两次 coordsAtPos）。
+ * 原因：分块超长段（long-paragraph-chunks.ts：段内 display:block + content-visibility:auto 的块）里，
+ * 屏外块按占位估高，滚动目标会随块真正布局而移动；这里统一成一次 ProseMirror 事务设选区 +
+ * revealPos（逐帧量一次、瞬时滚动、稳定即停，有帧数上限），与查找跳转同一条路径。
  */
 import type { Node as ProseMirrorNode } from '@tiptap/pm/model'
 import { Plugin, PluginKey, Selection, TextSelection } from '@tiptap/pm/state'

@@ -2120,7 +2120,7 @@ try {
     const pressMs = Date.now() - started
     // TEMP DIAG：逐次探测光标/滚动状态（每次 evaluate 限 5s，超时即判渲染进程卡住）
     const deadline = Date.now() + 20_000
-    let last
+    let last; let seen = 0
     while (Date.now() < deadline) {
       const probeStart = Date.now()
       last = await withCap(page.evaluate(() => {
@@ -2132,7 +2132,9 @@ try {
         return { inEditor, active: document.activeElement?.className, restLen, collapsed: sel?.isCollapsed, rect, box: [Math.round(box.top), Math.round(box.bottom)], scrollTop: Math.round(scroller.scrollTop), scrollHeight: scroller.scrollHeight, long: window.__pr45Long }
       }), 5_000, `${label} probe`).catch((error) => ({ hung: error.message }))
       last.probeMs = Date.now() - probeStart
-      if (last.hung || (last.inEditor && last.restLen === 0 && last.collapsed && last.rect && last.rect[1] > last.box[0] && last.rect[0] < last.box[1])) break
+      const atEnd = last.inEditor && last.restLen === 0 && last.collapsed && last.rect && last.rect[1] > last.box[0] && last.rect[0] < last.box[1]
+      seen = atEnd ? seen + 1 : 0
+      if (last.hung || seen >= 2) break
       await new Promise((done) => setTimeout(done, 50))
     }
     const totalMs = Date.now() - started
@@ -2149,8 +2151,9 @@ try {
     const ok = () => { const sel = getSelection(); if (!sel || sel.toString() !== '狠狠' || !sel.rangeCount) return false; const r = sel.getRangeAt(0).getBoundingClientRect(); const b = box(); return r.bottom > b.top && r.top < b.bottom }
     const started = performance.now()
     button.click()
-    while (!ok()) { if (performance.now() - started > 120_000) throw new Error('locate timeout'); await frame() }
-    await frame(); await frame()
+    // 连续两帧都在可视区才算到位（排除滚动中途路过）
+    let seen = 0
+    while (seen < 2) { if (performance.now() - started > 120_000) throw new Error('locate timeout'); seen = ok() ? seen + 1 : 0; if (seen < 2) await frame() }
     return performance.now() - started
   })
   const openEdgeCase = async (page, item) => {
@@ -2186,6 +2189,7 @@ try {
       try {
         await openEdgeCase(page, item)
         ctrlEndMs = await timeCtrlEnd(page, item.title)
+        await openEdgeCase(page, item) // 重新打开：段末块从未渲染过，定位走「首次进入」最坏情况
         await openLocateDrawer(page)
         locateMs = await withCap(timeLocate(page), 30_000, `${item.title} locate`)
         await page.getByRole('button', { name: '关闭校对' }).click()
@@ -2198,12 +2202,13 @@ try {
     for (const item of [...edgeCases].reverse()) {
       try {
         await openEdgeCase(page, item)
+        const ctrlEndMs = await timeCtrlEnd(page, `old ${item.title}`)
+        process.stdout.write(`PR45 DIAG old-path ${process.platform} ${item.title}: Ctrl+End ${ctrlEndMs}ms\n`)
+        await openEdgeCase(page, item)
         await openLocateDrawer(page)
         const locateMs = await withCap(timeLocate(page), 60_000, 'old locate')
         process.stdout.write(`PR45 DIAG old-path ${process.platform} ${item.title}: locate ${locateMs.toFixed(1)}ms\n`)
         await page.getByRole('button', { name: '关闭校对' }).click()
-        const ctrlEndMs = await timeCtrlEnd(page, `old ${item.title}`)
-        process.stdout.write(`PR45 DIAG old-path ${process.platform} ${item.title}: Ctrl+End ${ctrlEndMs}ms\n`)
       } catch (error) { process.stdout.write(`PR45 DIAG old-path ${process.platform} ${item.title}: ${error.message}\n`); break }
     }
     if (viewport) await page.setViewportSize(viewport).catch(() => undefined)

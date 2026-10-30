@@ -45,19 +45,29 @@ export function clearFindHighlights(): void {
 const frame = (): Promise<void> => new Promise((resolve) => requestAnimationFrame(() => resolve()))
 
 /**
- * 把 pos 滚到滚动容器上部 1/3 处：下一帧量一次（单次 coordsAtPos）并瞬时滚动，再下一帧最多校正一次。
- * 不做逐帧收敛：每次 coordsAtPos 都可能强制布局整段（含格式的超长段落不分块），多次校正会把卡顿成倍放大。
+ * 把 pos 滚到滚动容器上部 1/3 处：每帧量一次（单次 coordsAtPos），不在可视区就瞬时滚动；
+ * 连续两帧都在可视区且位置不变才结束，最多 REVEAL_MAX_PASSES 帧。
+ * 为什么要等「稳定」：分块超长段（long-paragraph-chunks.ts）的屏外块是 content-visibility:auto，
+ * 按 contain-intrinsic-size 占位估高；滚过去以后这些块才真正布局、高度变化，目标会被挤出可视区。
+ * 只量一次 / 校正一次时（PR45 前），首次跳到未渲染过的段末会落在错误位置。
+ * 普通段落、含格式长段第一次滚动就准，只多一次（布局已干净的）coordsAtPos 用于确认。
  * .writing-scroll 设了 scroll-behavior:smooth，所以用 behavior:'instant'。
  */
-export const REVEAL_CORRECTIONS = 1
+export const REVEAL_MAX_PASSES = 8
 export async function revealPos(view: EditorView, scroller: HTMLElement | null | undefined, pos: number): Promise<void> {
   if (!scroller) return
-  for (let attempt = 0; attempt <= REVEAL_CORRECTIONS; attempt += 1) {
+  let lastTop: number | undefined
+  for (let pass = 0; pass < REVEAL_MAX_PASSES; pass += 1) {
     await frame()
     if (view.isDestroyed || pos > view.state.doc.content.size) return
     const coords = view.coordsAtPos(pos)
     const box = scroller.getBoundingClientRect()
-    if (coords.top >= box.top && coords.bottom <= box.bottom) return
+    if (coords.top >= box.top && coords.bottom <= box.bottom) {
+      if (lastTop !== undefined && Math.abs(coords.top - lastTop) < 1) return
+      lastTop = coords.top
+      continue
+    }
+    lastTop = undefined
     scroller.scrollTo({ top: scroller.scrollTop + coords.top - (box.top + box.height / 3), behavior: 'instant' })
   }
 }
