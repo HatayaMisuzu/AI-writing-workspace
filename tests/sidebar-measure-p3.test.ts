@@ -77,10 +77,10 @@ describe('createFrameCoalescer', () => {
     c.invalidate(); c.flush(); expect(run).toHaveBeenCalledTimes(4)
   })
   it('key 为 undefined（DOM 未就绪）不测；cancel 取消挂起的帧；flush 同步', () => {
-    const { host, frames } = makeHost(); let key: number | undefined; const run = vi.fn()
-    const c = createFrameCoalescer(() => key, run, Object.is, host)
+    const { host, frames } = makeHost(); const state: { key?: number } = {}; const run = vi.fn()
+    const c = createFrameCoalescer(() => state.key, run, Object.is, host)
     c.flush(); expect(run).not.toHaveBeenCalled()
-    key = 1; c.schedule(); c.cancel(); expect(frames.size).toBe(0)
+    state.key = 1; c.schedule(); c.cancel(); expect(frames.size).toBe(0)
     c.flush(); expect(run).toHaveBeenCalledTimes(1)
   })
 })
