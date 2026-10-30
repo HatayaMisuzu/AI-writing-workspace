@@ -171,6 +171,52 @@ const timeApplyFirst = (page, expectCount) => page.evaluate(async (expectCount) 
   await frame(); await frame()
   return performance.now() - started
 }, expectCount)
+// 诊断：围绕一段操作抓渲染进程 CPU profile，把自身耗时 top 函数和调用栈打印到 CI 日志
+const cpuProfile = async (page, label, run) => {
+  let session
+  try { session = await page.context().newCDPSession(page); await session.send('Profiler.enable'); await session.send('Profiler.setSamplingInterval', { interval: 500 }); await session.send('Profiler.start') } catch (error) { process.stdout.write(`P3 cpu-profile ${label}: unavailable (${error.message})\n`); return run() }
+  try { return await run() } finally {
+    const { profile } = await session.send('Profiler.stop')
+    const byId = new Map(profile.nodes.map((node) => [node.id, node]))
+    const parent = new Map(); for (const node of profile.nodes) for (const child of node.children ?? []) parent.set(child, node.id)
+    const self = new Map(); profile.samples.forEach((id, i) => self.set(id, (self.get(id) ?? 0) + (profile.timeDeltas[i] ?? 0) / 1000))
+    const name = (node) => { const f = node.callFrame; return `${f.functionName || '(anon)'} ${(f.url || '').split('/').pop()}:${f.lineNumber + 1}` }
+    const total = [...self.values()].reduce((a, b) => a + b, 0)
+    const byFn = new Map(); for (const [id, ms] of self) { const key = name(byId.get(id)); byFn.set(key, (byFn.get(key) ?? 0) + ms) }
+    const top = [...byFn].sort((a, b) => b[1] - a[1]).slice(0, 15).map(([fn, ms]) => `${ms.toFixed(0)}ms ${fn}`)
+    const stacks = [...self].sort((a, b) => b[1] - a[1]).slice(0, 5).map(([id, ms]) => { const chain = []; let cur = id; while (cur !== undefined && chain.length < 14) { chain.push(name(byId.get(cur))); cur = parent.get(cur) } return `${ms.toFixed(0)}ms ${chain.join(' < ')}` })
+    process.stdout.write(`P3 cpu-profile ${label}: total ${total.toFixed(0)}ms\n  top self: ${top.join(' | ')}\n  stacks:\n    ${stacks.join('\n    ')}\n`)
+    await session.detach().catch(() => undefined)
+  }
+}
+// 对照：不开查找面板，普通编辑（全选输入一个字替换整段）后 Ctrl+Z，测「撤销键 → 保存请求发出」
+const undoSaveControl = async (page, label, restoredText) => {
+  await page.locator('.manuscript-editor').click()
+  await page.keyboard.press('Control+a')
+  await page.keyboard.type('换')
+  await waitSaved(page)
+  await page.evaluate(() => {
+    const t0 = performance.now(); const trace = [{ t: 0, event: 'undo-key' }]
+    const stateOf = () => { const el = document.querySelector('.save-indicator'); return el ? `${[...el.classList].filter((c) => c !== 'save-indicator').join('.')}:${el.textContent}` : 'missing' }
+    let last = stateOf(); trace.push({ t: 0, event: `state ${last}` })
+    const observer = new MutationObserver(() => { const now = stateOf(); if (now !== last) { last = now; trace.push({ t: Math.round(performance.now() - t0), event: `state ${now}` }) } })
+    observer.observe(document.querySelector('.editor-toolbar'), { subtree: true, attributes: true, childList: true, characterData: true })
+    const longTasks = new PerformanceObserver((list) => { for (const e of list.getEntries()) trace.push({ t: Math.round(e.startTime - t0), event: `longtask ${Math.round(e.duration)}ms` }) })
+    try { longTasks.observe({ type: 'longtask' }) } catch { trace.push({ t: 0, event: 'longtask-unsupported' }) }
+    window.__p3SaveTrace = { t0, trace, observer, longTasks }
+  })
+  await cpuProfile(page, `undo-control ${label}`, async () => {
+    await page.keyboard.press('Control+z')
+    await page.waitForFunction((text) => document.querySelector('.manuscript-editor').textContent.includes(text), restoredText, { timeout: 30_000 })
+    await page.evaluate(() => { const d = window.__p3SaveTrace; d.trace.push({ t: Math.round(performance.now() - d.t0), event: 'undo-done' }) })
+    await page.waitForFunction(() => window.__p3SaveTrace.trace.some((item) => item.event.startsWith('state saving')), undefined, { timeout: 30_000 })
+    await waitSaved(page)
+  })
+  const trace = await page.evaluate(() => { const d = window.__p3SaveTrace; d.observer.disconnect(); d.longTasks.disconnect(); d.trace.sort((x, y) => x.t - y.t); return d.trace })
+  const sentMs = trace.find((item) => item.event.startsWith('state saving'))?.t
+  process.stdout.write(`P3 undo-save-control ${label}: undo-key→save-sent ${sentMs}ms; trace ${JSON.stringify(trace)}\n`)
+  return sentMs
+}
 const openChapter = (page, title) => page.locator('.chapter-row', { hasText: title }).locator('.chapter-open').click()
 
 let running
@@ -1340,6 +1386,272 @@ try {
     await waitSaved(page)
     await openChapter(page, '词表批量章')
     await page.locator('.manuscript-editor', { hasText: '他在坐一' }).waitFor()
+    if (viewport) await page.setViewportSize(viewport)
+  })
+
+  const seg34 = '林舟在会上说，他狠狠地看，又狠狠地走了。夜色很深，风也很大，远处灯。'
+  // ───── P3 PR-1 章内查找替换 / 本章大纲（纯本地）。计时都在页面内 performance.now，含 150ms 输入去抖 ─────
+  const findCount = (page) => page.getByTestId('find-count').innerText()
+  // 在页面内执行一步操作，等条件成立再过两帧，返回毫秒（渲染进程 CSP 禁 eval，所以步骤写死在这里）
+  const timeFindStep = (page, step, arg) => page.evaluate(async ({ step, arg }) => {
+    const frame = () => new Promise((resolve) => requestAnimationFrame(() => resolve()))
+    const panel = () => document.querySelector('[data-testid="find-panel"]')
+    const count = () => document.querySelector('[data-testid="find-count"]')?.textContent ?? ''
+    const actions = {
+      open: () => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'h', ctrlKey: true, bubbles: true })),
+      input: () => { const input = panel().querySelector('input[aria-label="查找"]'); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, arg.query); input.dispatchEvent(new Event('input', { bubbles: true })) },
+      prev: () => panel().querySelector('button[aria-label="上一处"]').click(),
+      next: () => panel().querySelector('button[aria-label="下一处"]').click(),
+      replaceAll: () => [...panel().querySelectorAll('button')].find((button) => button.textContent === '全部替换').click(),
+    }
+    const done = {
+      open: () => Boolean(panel()?.querySelector('input[aria-label="替换为"]')),
+      input: () => count().includes(`共 ${arg?.expect ?? 1000} 处`),
+      next: () => { const box = document.querySelector('.writing-scroll').getBoundingClientRect(); const range = [...(CSS.highlights.get('find-current') ?? [])][0]; const rect = range?.getBoundingClientRect(); return Boolean(rect && rect.height > 0 && rect.top >= box.top && rect.bottom <= box.bottom) },
+      prev: () => count() === '第 1000 / 共 1000 处',
+      replaceAll: () => /已替换 1000 处/.test(document.querySelector('[data-testid="find-notice"]')?.textContent ?? ''),
+    }
+    const started = performance.now()
+    actions[step]()
+    while (!done[step]()) { if (performance.now() - started > 30_000) throw new Error(`timeout: ${step} (${count()})`); await frame() }
+    await frame(); await frame()
+    return performance.now() - started
+  }, { step, arg })
+  const createChapter = (page, title, blocks) => page.evaluate(async ({ projectId, title, blocks }) => {
+    const tree = await window.workspace.documents.tree(projectId)
+    const volume = tree.find((item) => item.type === 'volume')
+    const node = await window.workspace.documents.create({ projectId, parentId: volume.id, type: 'chapter', title })
+    const content = blocks.map((block) => block.heading ? { type: 'heading', attrs: { level: block.heading }, content: [{ type: 'text', text: block.text }] } : { type: 'paragraph', content: block.text ? [{ type: 'text', text: block.text }] : [] })
+    await window.workspace.documents.save({ projectId, documentId: node.id, editorJson: { type: 'doc', content }, plainText: blocks.map((block) => block.text).join('\n\n'), expectedRevision: 0 })
+    return node.id
+  }, { projectId: ids.projectId, title, blocks })
+  const openFresh = async (page, title, hasText) => {
+    await page.reload()
+    await page.getByRole('button', { name: '继续写作' }).click()
+    await page.locator('.manuscript-editor').waitFor()
+    await openChapter(page, title)
+    await page.locator('.manuscript-editor', { hasText }).waitFor({ timeout: 30_000 })
+  }
+
+  await record('P3 查找：Ctrl+F 计数「第 i / 共 n 处」、Enter / Shift+Enter 循环、正则错误提示不崩、Esc 关闭', async () => {
+    const page = running.page
+    await createChapter(page, '查找短章', [{ text: '林舟推门进来。Lin 说：林舟，你来了。' }, { text: '***' }, { text: '林舟没有回答。' }])
+    await openFresh(page, '查找短章', '林舟没有回答')
+    await page.locator('.manuscript-editor').click()
+    await page.keyboard.press('Control+Home')
+    await page.keyboard.press('Control+f')
+    const input = page.getByLabel('查找', { exact: true })
+    await input.waitFor()
+    await input.fill('林舟')
+    await page.getByTestId('find-count').filter({ hasText: '第 1 / 共 3 处' }).waitFor()
+    await input.press('Enter')
+    assert.equal(await findCount(page), '第 2 / 共 3 处')
+    await input.press('Shift+Enter'); await input.press('Shift+Enter')
+    assert.equal(await findCount(page), '第 3 / 共 3 处', 'Shift+Enter 从第 1 处回绕到最后')
+    assert.equal(await page.evaluate(() => CSS.highlights.get('find-hit')?.size), 2, '其余命中高亮')
+    await input.fill('lin')
+    await page.getByTestId('find-count').filter({ hasText: '共 1 处' }).waitFor()
+    await page.getByLabel('正则').check()
+    await input.fill('(林')
+    await page.getByRole('alert').filter({ hasText: '正则有误' }).waitFor()
+    await input.fill('林.')
+    await page.getByTestId('find-count').filter({ hasText: '共 3 处' }).waitFor()
+    await input.press('Escape')
+    await page.getByTestId('find-panel').waitFor({ state: 'detached' })
+    assert.equal(await page.evaluate(() => CSS.highlights.has('find-hit')), false, '关闭后清除高亮')
+  })
+
+  await record('P3 替换：替换当前一处、全部替换后一次 Ctrl+Z 恢复，并经现有保存路径落盘', async () => {
+    const page = running.page
+    const chapterId = await createChapter(page, '替换短章', [{ text: '林舟推门。林舟坐下。' }, { text: '林舟没有回答。' }])
+    await openFresh(page, '替换短章', '林舟没有回答')
+    const original = await editorText(page)
+    await page.locator('.manuscript-editor').click()
+    await page.keyboard.press('Control+Home')
+    await page.keyboard.press('Control+h')
+    await page.getByLabel('查找', { exact: true }).fill('林舟')
+    await page.getByTestId('find-count').filter({ hasText: '第 1 / 共 3 处' }).waitFor()
+    await page.getByLabel('替换为').fill('沈砚')
+    await page.getByRole('button', { name: '替换当前' }).click()
+    await page.getByTestId('find-count').filter({ hasText: '第 1 / 共 2 处' }).waitFor()
+    assert.equal(await editorText(page), '沈砚推门。林舟坐下。\n林舟没有回答。')
+    await page.getByRole('button', { name: '全部替换' }).click()
+    await page.getByTestId('find-notice').filter({ hasText: '已替换 2 处' }).waitFor()
+    await page.getByTestId('find-count').filter({ hasText: '无匹配' }).waitFor()
+    assert.equal(await editorText(page), '沈砚推门。沈砚坐下。\n沈砚没有回答。')
+    await waitSaved(page)
+    const saved = await page.evaluate(async ({ projectId, chapterId }) => (await window.workspace.documents.get(projectId, chapterId)).plainText, { projectId: ids.projectId, chapterId })
+    assert.ok(!saved.includes('林舟'), '全部替换经保存路径落盘')
+    await page.getByLabel('查找', { exact: true }).press('Escape')
+    await page.keyboard.press('Control+z')
+    assert.equal(await editorText(page), '沈砚推门。林舟坐下。\n林舟没有回答。', '一次撤销恢复全部替换')
+    await page.keyboard.press('Control+z')
+    assert.equal(await editorText(page), original, '再一次撤销恢复「替换当前」')
+    await waitSaved(page)
+  })
+
+  await record('P3 本章大纲：列出标题与场景分隔（带预览），点击跳转并放置光标', async () => {
+    const page = running.page
+    const filler = '风从山口吹下来，雨点打在窗上。'.repeat(40)
+    const blocks = [{ heading: 2, text: '一、夜行' }, ...Array.from({ length: 60 }, () => ({ text: filler })), { text: '◇' }, { text: '天亮时他回到旧宅。' }, ...Array.from({ length: 60 }, () => ({ text: filler })), { text: '* * *' }, { text: '尾声的第一句话。' }]
+    await createChapter(page, '大纲长章', blocks)
+    await openFresh(page, '大纲长章', '一、夜行')
+    await page.getByRole('button', { name: '章内大纲', exact: true }).click()
+    const panel = page.getByTestId('chapter-headings')
+    await panel.waitFor()
+    const entries = await panel.locator('li button').allInnerTexts()
+    assert.equal(entries.length, 3)
+    assert.match(entries[1], /场景 ◇[\s\S]*天亮时他回到旧宅/)
+    await panel.locator('li button', { hasText: '尾声的第一句话' }).click()
+    // revealPos 是逐帧校正的异步滚动（最多 4 帧），等它稳定后再读位置
+    const target = await page.waitForFunction(() => {
+      const selection = window.getSelection()
+      const block = selection.anchorNode?.parentElement?.closest('.manuscript-editor > *')
+      const scroller = document.querySelector('.writing-scroll').getBoundingClientRect()
+      const rect = block?.getBoundingClientRect()
+      const visible = Boolean(rect && rect.top >= scroller.top && rect.bottom <= scroller.bottom)
+      return visible ? { text: block.textContent, visible } : false
+    }, undefined, { timeout: 5_000 }).then((handle) => handle.jsonValue()).catch(async () => page.evaluate(() => {
+      const block = window.getSelection().anchorNode?.parentElement?.closest('.manuscript-editor > *')
+      return { text: block?.textContent, visible: false, rect: JSON.stringify(block?.getBoundingClientRect()), scroller: JSON.stringify(document.querySelector('.writing-scroll').getBoundingClientRect()), scrollTop: document.querySelector('.writing-scroll').scrollTop }
+    }))
+    assert.equal(target.text, '尾声的第一句话。', '光标放在分隔后的正文')
+    assert.ok(target.visible, `跳转后目标段在可视区：${JSON.stringify(target)}`)
+    await page.keyboard.type('Z')
+    await page.locator('.manuscript-editor p', { hasText: 'Z尾声的第一句话' }).waitFor()
+    await waitSaved(page)
+    await page.getByRole('button', { name: '关闭本章大纲' }).click()
+  })
+
+  await record('P3 小黑屋内查找 / 大纲可用，网络 0', async () => {
+    const page = running.page
+    await openFresh(page, '大纲长章', '一、夜行')
+    await enterBlackroom(page, async (d) => { await d.getByLabel('写满字数').check(); await d.getByLabel('目标字数').fill('1000') })
+    const before = await snapshotNetwork(page)
+    await page.locator('.manuscript-editor').click()
+    await page.keyboard.press('Control+f')
+    await page.getByLabel('查找', { exact: true }).fill('天亮时')
+    await page.getByTestId('find-count').filter({ hasText: '共 1 处' }).waitFor()
+    await page.getByLabel('查找', { exact: true }).press('Escape')
+    await page.getByRole('button', { name: '章内大纲', exact: true }).click()
+    await page.getByTestId('chapter-headings').locator('li button', { hasText: '一、夜行' }).click()
+    await page.getByRole('button', { name: '关闭本章大纲' }).click()
+    await page.waitForTimeout(500)
+    const after = await snapshotNetwork(page)
+    for (const key of Object.keys(before)) assert.equal(after[key] - before[key], 0, `小黑屋内查找/大纲 ${key} 网络应为 0`)
+    await page.getByRole('button', { name: '紧急出口' }).click()
+    await page.getByLabel('紧急出屋确认').fill('我要出屋')
+    await page.getByRole('button', { name: '确认出屋' }).click()
+    await page.getByTestId('blackroom-bar').waitFor({ state: 'detached' })
+  })
+
+  const findPerf = async (page, label, { enforceLimit = true, title, profile = false } = {}) => {
+    const chapterId = await page.evaluate(async ({ projectId, title }) => (await window.workspace.documents.tree(projectId)).find((item) => item.title === title).id, { projectId: ids.projectId, title })
+    const readSaved = () => page.evaluate(async ({ projectId, chapterId }) => { const doc = await window.workspace.documents.get(projectId, chapterId); return { revision: doc.revision, plainText: doc.plainText } }, { projectId: ids.projectId, chapterId })
+    const original = await readSaved()
+    await page.locator('.manuscript-editor').click()
+    await page.keyboard.press('Control+Home')
+    const openMs = await timeFindStep(page, 'open')
+    // 跳到段末唯一命中（光标在开头，需滚过整章）；再查 1000 处并从第 1 处 Shift+Enter 回绕到第 1000 处
+    await timeFindStep(page, 'input', { query: '砚台石', expect: 1 })
+    const endMs = await timeFindStep(page, 'next')
+    const inputMs = await timeFindStep(page, 'input', { query: '远处星' })
+    const jumpMs = await timeFindStep(page, 'prev')
+    await page.getByLabel('替换为').fill('远处月')
+    const replaceMs = await timeFindStep(page, 'replaceAll')
+    process.stdout.write(`P3 find ${label}: open ${openMs.toFixed(1)}ms, input ${inputMs.toFixed(1)}ms, jump-to-end ${endMs.toFixed(1)}ms, jump-wrap-to-1000 ${jumpMs.toFixed(1)}ms, replace-all 1000 ${replaceMs.toFixed(1)}ms (limit 1000ms${enforceLimit ? '' : '; replace-all record only'})\n`)
+    // 跳转（段末、回绕）在所有长章里都 ≤1s；含格式长段落的全部替换只记录
+    const limited = [['打开', openMs], ['输入后刷新', inputMs], ['跳到段末', endMs], ['Shift+Enter 回绕到第 1000 处', jumpMs], ...(enforceLimit ? [['全部替换 1000 处', replaceMs]] : [])]
+    for (const [name, ms] of limited) assert.ok(ms <= 1000, `${label} ${name} ${ms.toFixed(1)}ms 应 ≤1000ms`)
+    await page.getByTestId('find-count').filter({ hasText: '无匹配' }).waitFor()
+    const replaced = await page.evaluate(() => document.querySelector('.manuscript-editor').textContent)
+    assert.equal((replaced.match(/远处月/g) ?? []).length, 1000, '1000 处全部替换')
+    assert.equal((replaced.match(/远处星/g) ?? []).length, 0)
+    await page.getByLabel('查找', { exact: true }).press('Escape')
+    // 撤销后保存诊断：记录保存状态字每次变化（dirty → saving = 保存请求发出；saving → 其他 = 请求返回）、撤销完成时间、库里 revision
+    await page.evaluate(() => {
+      const t0 = performance.now(); const trace = [{ t: 0, event: 'undo-key' }]
+      const indicator = () => document.querySelector('.save-indicator')
+      const stateOf = () => { const el = indicator(); return el ? `${[...el.classList].filter((c) => c !== 'save-indicator').join('.')}:${el.textContent}` : 'missing' }
+      let last = stateOf(); trace.push({ t: 0, event: `state ${last}` })
+      const observer = new MutationObserver(() => { const now = stateOf(); if (now !== last) { last = now; trace.push({ t: Math.round(performance.now() - t0), event: `state ${now}` }) } })
+      observer.observe(document.querySelector('.editor-toolbar'), { subtree: true, attributes: true, childList: true, characterData: true })
+      // 主线程长任务（>50ms）：区分「保存计时器被阻塞」与保存本身慢
+      const longTasks = new PerformanceObserver((list) => { for (const e of list.getEntries()) trace.push({ t: Math.round(e.startTime - t0), event: `longtask ${Math.round(e.duration)}ms` }) })
+      try { longTasks.observe({ type: 'longtask' }) } catch { trace.push({ t: 0, event: 'longtask-unsupported' }) }
+      window.__p3SaveTrace = { t0, trace, observer, longTasks }
+    })
+    const savedBeforeUndo = await readSaved()
+    let saveError
+    const undoAndSave = async () => {
+      await page.keyboard.press('Control+z')
+      await page.waitForFunction(() => (document.querySelector('.manuscript-editor').textContent.match(/远处星/g) ?? []).length === 1000, undefined, { timeout: 30_000 })
+      await page.evaluate(() => { const d = window.__p3SaveTrace; d.trace.push({ t: Math.round(performance.now() - d.t0), event: 'undo-done' }) })
+      await waitSaved(page).catch((error) => { saveError = error })
+    }
+    if (profile) await cpuProfile(page, `find-undo ${label}`, undoAndSave); else await undoAndSave()
+    assert.equal(await page.evaluate(() => (document.querySelector('.manuscript-editor').textContent.match(/远处月/g) ?? []).length), 0, '一次撤销完全恢复')
+    const trace = await page.evaluate(() => { const d = window.__p3SaveTrace; d.observer.disconnect(); d.longTasks.disconnect(); d.trace.sort((x, y) => x.t - y.t); d.trace.push({ t: Math.round(performance.now() - d.t0), event: 'diag-end' }); return d.trace })
+    const savedAfter = await readSaved()
+    const events = trace.map((item) => item.event)
+    const undoAt = trace.findIndex((item) => item.event === 'undo-done')
+    const sentAfterUndo = trace.slice(1).some((item) => item.event.startsWith('state saving'))
+    const lastState = [...events].reverse().find((event) => event.startsWith('state ')) ?? ''
+    const dbMatches = savedAfter.plainText === original.plainText
+    const verdict = !saveError ? 'ok' : !sentAfterUndo ? '没触发保存' : lastState.startsWith('state saving') ? '保存慢（请求未返回）' : dbMatches ? '已保存但状态字没更新' : `保存返回但库内容不符（${lastState}）`
+    process.stdout.write(`P3 save-diag ${label}: verdict=${verdict}; revision before-undo=${savedBeforeUndo.revision} after=${savedAfter.revision}; db==original ${dbMatches}; undo-done index ${undoAt}; trace ${JSON.stringify(trace)}\n`)
+    if (saveError) throw saveError
+    const saveSentMs = trace.find((item) => item.event.startsWith('state saving'))?.t ?? Infinity
+    process.stdout.write(`P3 undo→save-sent ${label}: ${saveSentMs}ms (limit 2000ms)\n`)
+    assert.ok(saveSentMs <= 2000, `${label} 撤销到保存请求发出 ${saveSentMs}ms，应 ≤2s（不被渲染长任务推迟）`)
+    assert.equal(savedAfter.plainText, original.plainText, `${label} 撤销后落盘内容与替换前一致`)
+    assert.ok(savedAfter.revision > savedBeforeUndo.revision, '撤销经保存路径落盘（revision 前进）')
+    return { openMs, inputMs, jumpMs, replaceMs }
+  }
+  // 5852 句里恰好 1000 句的「远处灯」换成「远处星」
+  const perfSentences = Array.from({ length: 5852 }, (_, i) => Math.floor((i + 1) * 1000 / 5852) > Math.floor(i * 1000 / 5852) ? seg34.replace('远处灯', '远处星') : seg34)
+
+  await record('P3 性能：19.9 万字单段（分块）查找打开 / 输入刷新 / 跳转 / 全部替换 1000 处各 ≤1s，撤销一步恢复', async () => {
+    const page = running.page
+    const viewport = page.viewportSize()
+    await page.setViewportSize({ width: 1600, height: 900 })
+    await createChapter(page, '查找单段长章', [{ text: perfSentences.join('') + '末尾砚台石。' }])
+    await openFresh(page, '查找单段长章', '林舟在会上说')
+    await findPerf(page, 'single paragraph 198968 chars', { title: '查找单段长章' })
+    if (viewport) await page.setViewportSize(viewport)
+  })
+
+  await record('P3 性能：多段长章（5852 段）查找打开 / 输入刷新 / 跳转 / 全部替换 1000 处各 ≤1s，撤销一步恢复', async () => {
+    const page = running.page
+    const viewport = page.viewportSize()
+    await page.setViewportSize({ width: 1600, height: 900 })
+    await createChapter(page, '查找多段长章', [...perfSentences.map((text) => ({ text })), { text: '末尾砚台石。' }])
+    await openFresh(page, '查找多段长章', '林舟在会上说')
+    await findPerf(page, 'multi paragraph 5852 blocks', { title: '查找多段长章' })
+    if (viewport) await page.setViewportSize(viewport)
+  })
+
+  await record('P3 性能：含粗体的 19.9 万字长段落查找打开 / 刷新 / 跳到段末 / Shift+Enter 回绕到第 1000 处各 ≤1s；全部替换 1000 处（逐处慢路径）只记录耗时，断言正确与一次撤销恢复', async () => {
+    const page = running.page
+    const viewport = page.viewportSize()
+    await page.setViewportSize({ width: 1600, height: 900 })
+    // 每 100 句插一处粗体：段落含多个带格式文本节点，不走单文本节点批量路径，也不分块
+    const content = perfSentences.map((text, i) => i % 100 === 0 ? { type: 'text', text, marks: [{ type: 'bold' }] } : { type: 'text', text })
+    const merged = []
+    for (const item of content) { const last = merged.at(-1); if (last && !last.marks && !item.marks) last.text += item.text; else merged.push({ ...item }) }
+    merged.at(-1).text += '末尾砚台石。'
+    await page.evaluate(async ({ projectId, merged }) => {
+      const tree = await window.workspace.documents.tree(projectId)
+      const volume = tree.find((item) => item.type === 'volume')
+      const node = await window.workspace.documents.create({ projectId, parentId: volume.id, type: 'chapter', title: '查找粗体长段' })
+      await window.workspace.documents.save({ projectId, documentId: node.id, editorJson: { type: 'doc', content: [{ type: 'paragraph', content: merged }] }, plainText: merged.map((item) => item.text).join(''), expectedRevision: 0 })
+    }, { projectId: ids.projectId, merged })
+    await openFresh(page, '查找粗体长段', '林舟在会上说')
+    assert.ok(await page.locator('.manuscript-editor strong').count() > 0, '段内确有粗体')
+    await findPerf(page, 'bold long paragraph (record only)', { enforceLimit: false, title: '查找粗体长段', profile: true })
+    // 对照：同一粗体长段，不开查找面板，普通编辑后撤销
+    await openFresh(page, '查找粗体长段', '林舟在会上说')
+    await undoSaveControl(page, 'bold long paragraph pr39', '末尾砚台石。')
     if (viewport) await page.setViewportSize(viewport)
   })
 

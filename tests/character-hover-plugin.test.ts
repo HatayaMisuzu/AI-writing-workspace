@@ -3,7 +3,7 @@ import { getSchema } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
 import { EditorState } from '@tiptap/pm/state'
 import { NameMatcher, termsFromCharacters } from '../src/shared/name-matcher'
-import { applyHover, blockMatchText, characterHoverKey, characterHoverPlugin, hitAt, hitsInRange, shouldDegrade, type CharacterHoverMeta } from '../src/renderer/src/services/character-hover'
+import { applyHover, mergeRanges, blockMatchText, characterHoverKey, characterHoverPlugin, hitAt, hitsInRange, shouldDegrade, type CharacterHoverMeta } from '../src/renderer/src/services/character-hover'
 
 const schema = getSchema([StarterKit])
 const docOf = (paragraphs: string[]) => schema.node('doc', null, paragraphs.map((text) => schema.node('paragraph', null, text ? [schema.text(text)] : [])))
@@ -69,6 +69,19 @@ describe('F14 悬停插件（只加 Decoration，不改文档）', () => {
     let state = stateWith(['林栀'])
     state = state.apply(state.tr.setMeta(characterHoverKey, { type: 'setMatcher', matcher: null }))
     expect(decos(state)).toEqual([])
+  })
+
+  it('同一段内上千处改动：区间合并后只扫一遍，结果与全章重算一致', () => {
+    expect(mergeRanges([{ from: 10, to: 20 }, { from: 0, to: 5 }, { from: 5, to: 12 }, { from: 30, to: 40 }])).toEqual([{ from: 0, to: 20 }, { from: 30, to: 40 }])
+    let state = stateWith(['空'.repeat(2000), '顾言'])
+    let tr = state.tr
+    for (let i = 1000; i >= 1; i -= 1) tr = tr.insertText('林栀', i * 2, i * 2 + 1)
+    state = state.apply(tr)
+    expect(characterHoverKey.getState(state)!.dirty.length).toBe(1000)
+    state = state.apply(state.tr.setMeta(characterHoverKey, { type: 'recompute' }))
+    const expected = hitsInRange(state.doc, matcher).map((hit) => state.doc.textBetween(hit.pmFrom, hit.pmTo))
+    expect(decos(state)).toEqual(expected)
+    expect(expected.filter((term) => term === '林栀').length).toBe(1000)
   })
 
   it('applyHover 对无关事务不改状态', () => {

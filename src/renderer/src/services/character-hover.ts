@@ -91,12 +91,23 @@ function viewportCompute(doc: ProseMirrorNode, state: CharacterHoverState): Char
   return { ...state, dirty: [], decorations: DecorationSet.create(doc, toDecorations(hitsInRange(doc, state.matcher, range.from, range.to), state.ignored)) }
 }
 
+/** 展开到段落后合并重叠/相邻区间：同一长段里上千处改动（全部替换 / 撤销）只扫一遍，避免 O(改动数 × 段长)。 */
+export function mergeRanges(ranges: HoverRange[]): HoverRange[] {
+  const sorted = [...ranges].sort((a, b) => a.from - b.from)
+  const merged: HoverRange[] = []
+  for (const range of sorted) {
+    const last = merged.at(-1)
+    if (last && range.from <= last.to) last.to = Math.max(last.to, range.to)
+    else merged.push({ ...range })
+  }
+  return merged
+}
+
 function incrementalCompute(doc: ProseMirrorNode, state: CharacterHoverState): CharacterHoverState {
   if (!state.matcher || !state.dirty.length) return { ...state, dirty: [] }
   if (state.degraded) return viewportCompute(doc, state)
   let decorations = state.decorations
-  for (const dirty of state.dirty) {
-    const range = expandToBlocks(doc, dirty)
+  for (const range of mergeRanges(state.dirty.map((dirty) => expandToBlocks(doc, dirty)))) {
     decorations = decorations.remove(decorations.find(range.from, range.to))
     decorations = decorations.add(doc, toDecorations(hitsInRange(doc, state.matcher, range.from, range.to), state.ignored))
   }
