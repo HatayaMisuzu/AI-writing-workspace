@@ -60,7 +60,12 @@ export type NetworkHooks = {
   getBlockedLog(): readonly { url: string; reason: string; at: number }[]
 }
 
-export function registerIpc(db: AppDatabase, codec: SecretCodec, network?: NetworkHooks): void {
+export type IpcOptions = {
+  /** 注册诊断通道（diagnostics:*）。只在未打包构建（开发 / vitest / e2e）为 true；生产（app.isPackaged）为 false。默认 false。 */
+  diagnostics?: boolean
+}
+
+export function registerIpc(db: AppDatabase, codec: SecretCodec, network?: NetworkHooks, options: IpcOptions = {}): void {
   const projects = new ProjectService(db)
   const documents = new DocumentService(db)
   const ideas = new IdeaService(db)
@@ -330,11 +335,13 @@ export function registerIpc(db: AppDatabase, codec: SecretCodec, network?: Netwo
     } catch (error) { return { ok: false, message: error instanceof Error ? error.message : '服务配置不可用' } }
   })
   handle('network:blocked-log', () => network?.getBlockedLog() ?? [])
-  // P3 PR-2b：后台 WAL 检查点状态（e2e 计时用；界面不展示）
-  handle('diagnostics:wal-checkpoint', () => {
-    const cp = db.checkpointer
-    return { busy: cp?.busy ?? false, runs: cp?.runs ?? 0, last: cp?.last ?? null, walBytes: cp?.walBytes() ?? 0, autoCheckpoint: db.autoCheckpoint, dbPath: db.path, commits: db.commits.slice(-20), releases: db.releases.slice(-10) }
-  })
+  // P3 PR-2b：后台 WAL 检查点状态（e2e 计时用；界面不展示）。仅 options.diagnostics 时注册，且不返回库路径（commits/releases 可保留）。
+  if (options.diagnostics === true) {
+    handle('diagnostics:wal-checkpoint', () => {
+      const cp = db.checkpointer
+      return { busy: cp?.busy ?? false, runs: cp?.runs ?? 0, last: cp?.last ?? null, walBytes: cp?.walBytes() ?? 0, autoCheckpoint: db.autoCheckpoint, commits: db.commits.slice(-20), releases: db.releases.slice(-10) }
+    })
+  }
 
   handle('backup:export-project', async (projectId: string) => {
     projectId = parse(idSchema, projectId)
