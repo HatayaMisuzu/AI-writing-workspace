@@ -2111,22 +2111,34 @@ try {
     ]
   })()
   const withCap = (promise, ms, label) => Promise.race([promise, new Promise((_, fail) => setTimeout(() => fail(new Error(`${label} 超过 ${ms}ms 未返回`)), ms))])
-  const caretAtEndVisible = () => {
-    const editor = document.querySelector('.manuscript-editor'); const sel = getSelection()
-    if (!sel || !sel.focusNode || !editor.contains(sel.focusNode)) return false
-    const rest = document.createRange(); rest.setStart(sel.focusNode, sel.focusOffset); rest.setEnd(editor, editor.childNodes.length)
-    if (rest.toString() !== '' || !sel.isCollapsed) return false
-    const range = sel.getRangeAt(0); const rects = range.getClientRects(); const rect = rects.length ? rects[rects.length - 1] : (sel.focusNode.nodeType === 1 ? sel.focusNode : sel.focusNode.parentElement).getBoundingClientRect()
-    const box = document.querySelector('.writing-scroll').getBoundingClientRect()
-    return rect.bottom > box.top && rect.top < box.bottom
-  }
   const timeCtrlEnd = async (page, label) => {
     await page.evaluate(() => { document.querySelector('.writing-scroll').scrollTop = 0; document.querySelector('.manuscript-editor').focus() })
     await page.keyboard.press('Control+Home')
+    await page.evaluate(() => { window.__pr45Long = []; try { const o = new PerformanceObserver((list) => { for (const e of list.getEntries()) window.__pr45Long.push(Math.round(e.duration)) }); o.observe({ type: 'longtask' }) } catch { /* unsupported */ } })
     const started = Date.now()
     await withCap(page.keyboard.press('Control+End'), 120_000, `${label} Ctrl+End`)
-    await page.waitForFunction(caretAtEndVisible, undefined, { timeout: 120_000, polling: 'raf' })
-    return Date.now() - started
+    const pressMs = Date.now() - started
+    // TEMP DIAG：逐次探测光标/滚动状态（每次 evaluate 限 5s，超时即判渲染进程卡住）
+    const deadline = Date.now() + 20_000
+    let last
+    while (Date.now() < deadline) {
+      const probeStart = Date.now()
+      last = await withCap(page.evaluate(() => {
+        const editor = document.querySelector('.manuscript-editor'); const sel = getSelection(); const scroller = document.querySelector('.writing-scroll')
+        const inEditor = Boolean(sel?.focusNode && editor.contains(sel.focusNode))
+        let restLen = -1; let rect
+        if (inEditor) { const rest = document.createRange(); rest.setStart(sel.focusNode, sel.focusOffset); rest.setEnd(editor, editor.childNodes.length); restLen = rest.toString().length; const rs = sel.getRangeAt(0).getClientRects(); const r = rs.length ? rs[rs.length - 1] : (sel.focusNode.nodeType === 1 ? sel.focusNode : sel.focusNode.parentElement).getBoundingClientRect(); rect = [Math.round(r.top), Math.round(r.bottom)] }
+        const box = scroller.getBoundingClientRect()
+        return { inEditor, active: document.activeElement?.className, restLen, collapsed: sel?.isCollapsed, rect, box: [Math.round(box.top), Math.round(box.bottom)], scrollTop: Math.round(scroller.scrollTop), scrollHeight: scroller.scrollHeight, long: window.__pr45Long }
+      }), 5_000, `${label} probe`).catch((error) => ({ hung: error.message }))
+      last.probeMs = Date.now() - probeStart
+      if (last.hung || (last.inEditor && last.restLen === 0 && last.collapsed && last.rect && last.rect[1] > last.box[0] && last.rect[0] < last.box[1])) break
+      await new Promise((done) => setTimeout(done, 50))
+    }
+    const totalMs = Date.now() - started
+    process.stdout.write(`PR45 DIAG ${process.platform} ${label}: press ${pressMs}ms, total ${totalMs}ms, state ${JSON.stringify(last)}\n`)
+    if (last.hung) throw new Error(`${label}: renderer unresponsive after Ctrl+End`)
+    return totalMs
   }
   const timeLocate = (page) => page.evaluate(async () => {
     const frame = () => new Promise((resolve) => requestAnimationFrame(() => resolve()))
@@ -2170,17 +2182,16 @@ try {
     }
     const timings = []
     for (const item of edgeCases) {
-      await openEdgeCase(page, item)
-      const ctrlEndMs = await timeCtrlEnd(page, item.title)
-      await openLocateDrawer(page)
-      const locateMs = await timeLocate(page)
-      await page.getByRole('button', { name: '关闭校对' }).click()
+      let ctrlEndMs = Infinity; let locateMs = Infinity
+      try {
+        await openEdgeCase(page, item)
+        ctrlEndMs = await timeCtrlEnd(page, item.title)
+        await openLocateDrawer(page)
+        locateMs = await withCap(timeLocate(page), 30_000, `${item.title} locate`)
+        await page.getByRole('button', { name: '关闭校对' }).click()
+      } catch (error) { process.stdout.write(`PR45 DIAG ${process.platform} ${item.title} failed: ${error.message}\n`) }
       timings.push({ title: item.title, ctrlEndMs, locateMs })
       process.stdout.write(`PR45 doc-end ${process.platform} ${item.title}: Ctrl+End ${ctrlEndMs}ms, locate ${locateMs.toFixed(1)}ms (limit 1000ms)\n`)
-    }
-    for (const t of timings) {
-      assert.ok(t.ctrlEndMs < 1000, `${t.title} Ctrl+End ${t.ctrlEndMs}ms 应 <1000ms`)
-      assert.ok(t.locateMs < 1000, `${t.title} 定位 ${t.locateMs.toFixed(1)}ms 应 <1000ms`)
     }
     // TEMP DIAG（合并前删除）：旧路径（原生 Ctrl+End / scrollIntoView 定位）对照计时 + CPU profile，只记录不断言
     await page.evaluate(() => window.localStorage.setItem('inkstone.diag.nativeDocEdge', '1'))
@@ -2188,14 +2199,18 @@ try {
       try {
         await openEdgeCase(page, item)
         await openLocateDrawer(page)
-        const locateMs = await cpuProfile(page, `pr45-old-locate ${item.title}`, () => withCap(timeLocate(page), 130_000, 'old locate'), join(process.cwd(), 'e2e-artifacts', `pr45-old-locate-${item.chunked ? 'plain' : 'bold'}-${process.platform}.cpuprofile`))
+        const locateMs = await withCap(timeLocate(page), 60_000, 'old locate')
         process.stdout.write(`PR45 DIAG old-path ${process.platform} ${item.title}: locate ${locateMs.toFixed(1)}ms\n`)
         await page.getByRole('button', { name: '关闭校对' }).click()
-        const ctrlEndMs = await cpuProfile(page, `pr45-old-ctrlend ${item.title}`, () => timeCtrlEnd(page, `old ${item.title}`), join(process.cwd(), 'e2e-artifacts', `pr45-old-ctrlend-${item.chunked ? 'plain' : 'bold'}-${process.platform}.cpuprofile`))
+        const ctrlEndMs = await timeCtrlEnd(page, `old ${item.title}`)
         process.stdout.write(`PR45 DIAG old-path ${process.platform} ${item.title}: Ctrl+End ${ctrlEndMs}ms\n`)
       } catch (error) { process.stdout.write(`PR45 DIAG old-path ${process.platform} ${item.title}: ${error.message}\n`); break }
     }
     if (viewport) await page.setViewportSize(viewport).catch(() => undefined)
+    for (const t of timings) {
+      assert.ok(t.ctrlEndMs < 1000, `${t.title} Ctrl+End ${t.ctrlEndMs}ms 应 <1000ms`)
+      assert.ok(t.locateMs < 1000, `${t.title} 定位 ${t.locateMs.toFixed(1)}ms 应 <1000ms`)
+    }
   })
 
   process.stdout.write(`Electron E2E: ${results.length} passed\n`)
