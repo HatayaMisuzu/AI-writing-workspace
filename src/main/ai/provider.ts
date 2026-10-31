@@ -75,6 +75,17 @@ export class ProviderService {
    * A·M1：测试连接用。返回已保存的原始地址（未脱敏，只在 main 内使用）与 Key（无 Key 时为空串，不抛错）。
    * 地址无效（存量坏地址）时 baseUrl 为 undefined，调用方按「无已保存地址」处理。
    */
+  /**
+   * A·M1（保存）：已保存服务的归一化地址与是否有 Key；不解密、不抛错，服务不存在时返回 undefined。
+   * 地址无效（存量坏地址）时 baseUrl 为 undefined。
+   */
+  savedEndpoint(providerId: string): { baseUrl?: string; hasApiKey: boolean } | undefined {
+    const row = this.db.raw.prepare('SELECT base_url, encrypted_api_key FROM provider_configs WHERE id = ?').get(providerId) as Pick<ProviderRow, 'base_url' | 'encrypted_api_key'> | undefined
+    if (!row) return undefined
+    const checked = checkBaseUrl(row.base_url)
+    return { baseUrl: checked.ok ? checked.url : undefined, hasApiKey: Boolean(row.encrypted_api_key) }
+  }
+
   getRawBaseUrlAndSecret(providerId: string): { baseUrl?: string; apiKey: string } {
     const row = this.db.raw.prepare('SELECT base_url, encrypted_api_key FROM provider_configs WHERE id = ?').get(providerId) as Pick<ProviderRow, 'base_url' | 'encrypted_api_key'> | undefined
     if (!row) throw new Error('PROVIDER_NOT_FOUND')
@@ -99,7 +110,7 @@ export class ProviderService {
       if (isLocalBaseUrl(baseUrl)) return { config, apiKey: '' }
       throw new Error('PROVIDER_KEY_MISSING')
     }
-    return { config, apiKey: this.codec.decrypt(row.encrypted_api_key) }
+    return { config, apiKey: this.codec.decrypt(Buffer.from(row.encrypted_api_key)) }
   }
 
   /** 解析某服务的超时：显式配置优先，否则按本地/远端默认。 */

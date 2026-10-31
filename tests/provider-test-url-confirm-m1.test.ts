@@ -51,6 +51,7 @@ const setup = () => {
   providers.save({ id: 'p', providerType: 'openai-compatible', displayName: '已存服务', baseUrl: SAVED, apiKey: SECRET })
   registerIpc(db, testCodec, { refreshNetworkAllowlist: () => {}, allowOriginTemporarily: () => () => {}, getBlockedLog: () => [] })
   installEgressGate({ decide: () => ({ allow: true }) })
+  return providers
 }
 beforeEach(() => {
   setRawFetchForTests((async (input: string | URL | Request, init?: RequestInit) => {
@@ -173,5 +174,97 @@ describe('A·M1 providers:test-url 确认闸门（main 侧）', () => {
     await invoke('providers:test', 'p', 'm')
     expect(ipc.dialogCalls).toHaveLength(0)
     expect(requests.every((r) => r.url.startsWith(SAVED))).toBe(true)
+  })
+})
+
+describe('A·M1 providers:save 确认闸门（同主机改路径、沿用已保存 Key）', () => {
+  const EVIL = 'https://api.saved.example/evil-path'
+  const save = (input: Record<string, unknown>) => invoke('providers:save', { id: 'p', providerType: 'openai-compatible', displayName: '已存服务', ...input })
+  const rawRow = (providers: ProviderService) => providers.getRawBaseUrlAndSecret('p')
+
+  it('同主机改路径、Key 栏留空、保存时取消：配置一字不动，对外请求为零', async () => {
+    const providers = setup()
+    const before = providers.list()
+    ipc.dialogResponse = 0
+    await expect(save({ baseUrl: EVIL })).rejects.toThrow('已取消保存')
+    expect(ipc.dialogCalls).toHaveLength(1)
+    const box = ipc.dialogCalls[0]
+    expect(box.buttons).toEqual(['取消', '确认发送'])
+    expect(box.cancelId).toBe(0); expect(box.defaultId).toBe(0)
+    expect(box.detail).toContain(`上次保存的地址：${SAVED}`)
+    expect(box.detail).toContain(`本次保存的地址：${EVIL}`)
+    expect(rawRow(providers)).toEqual({ baseUrl: SAVED, apiKey: SECRET })
+    expect(providers.list()).toEqual(before)
+    expect(requests).toHaveLength(0)
+  })
+
+  it('同样操作但确认：保存成功并沿用 Key；之后测试连接不再弹框，Key 只发往已确认的新地址', async () => {
+    const providers = setup()
+    ipc.dialogResponse = 1
+    await save({ baseUrl: EVIL })
+    expect(ipc.dialogCalls).toHaveLength(1)
+    expect(rawRow(providers)).toEqual({ baseUrl: EVIL, apiKey: SECRET })
+    expect(requests).toHaveLength(0)
+    ipc.dialogResponse = 0
+    expect(await invoke('providers:test', 'p', 'm')).toEqual({ ok: true })
+    expect((await testUrl({ baseUrl: EVIL, providerId: 'p' })).ok).toBe(true)
+    expect(ipc.dialogCalls).toHaveLength(1)
+    expect(requests.map((r) => r.url)).toEqual([`${EVIL}/chat/completions`, `${EVIL}/chat/completions`])
+    expect(requests.every((r) => r.authorization === `Bearer ${SECRET}`)).toBe(true)
+  })
+
+  it('绕过界面直接调保存 IPC 并伪造确认字段：依然弹框，取消即不保存', async () => {
+    const providers = setup()
+    ipc.dialogResponse = 0
+    await expect(save({ baseUrl: EVIL, confirmed: true, confirm: true, token: 'x', skipConfirm: true })).rejects.toThrow('已取消保存')
+    expect(ipc.dialogCalls).toHaveLength(1)
+    expect(rawRow(providers)).toEqual({ baseUrl: SAVED, apiKey: SECRET })
+    // 只改查询串也算改地址
+    await expect(save({ baseUrl: `${SAVED}?x=1` })).rejects.toThrow('已取消保存')
+    expect(ipc.dialogCalls).toHaveLength(2)
+    expect(rawRow(providers)).toEqual({ baseUrl: SAVED, apiKey: SECRET })
+    expect(requests).toHaveLength(0)
+  })
+
+  it('地址不变（含大小写、末尾斜杠、默认端口差异）时保存：不弹框', async () => {
+    const providers = setup()
+    await save({ baseUrl: 'HTTPS://API.Saved.Example:443/v1/', displayName: '改个名' })
+    expect(ipc.dialogCalls).toHaveLength(0)
+    expect(rawRow(providers)).toEqual({ baseUrl: SAVED, apiKey: SECRET })
+    expect(providers.list()[0].displayName).toBe('改个名')
+  })
+
+  it('新填 Key 的一次操作最多弹一次框：保存不弹，测试连接再按规则弹一次', async () => {
+    const providers = setup()
+    await save({ baseUrl: EVIL, apiKey: 'sk-new' })
+    expect(ipc.dialogCalls).toHaveLength(0)
+    expect(rawRow(providers)).toEqual({ baseUrl: EVIL, apiKey: 'sk-new' })
+    // 首次保存（无旧地址）也是保存时不弹
+    await invoke('providers:save', { id: 'q', providerType: 'openai-compatible', displayName: '新服务', baseUrl: OTHER, apiKey: 'sk-q' })
+    expect(ipc.dialogCalls).toHaveLength(0)
+    // 未保存地址带 Key 测试：弹一次
+    ipc.dialogResponse = 0
+    await testUrl({ baseUrl: 'https://api.saved.example/unsaved', apiKey: 'sk-typed', providerId: 'p' })
+    expect(ipc.dialogCalls).toHaveLength(1)
+    expect(requests).toHaveLength(0)
+  })
+
+  it('换了主机且 Key 栏留空：仍按原规则拒绝保存，不弹框', async () => {
+    const providers = setup()
+    await expect(save({ baseUrl: OTHER })).rejects.toThrow()
+    expect(ipc.dialogCalls).toHaveLength(0)
+    expect(rawRow(providers)).toEqual({ baseUrl: SAVED, apiKey: SECRET })
+  })
+})
+
+describe('A·M1 getWithSecret 解密（L 项）', () => {
+  it('数据库驱动返回 Uint8Array 时也能正确解密', () => {
+    const row = { id: 'p', provider_type: 'openai-compatible', display_name: 'x', base_url: SAVED,
+      encrypted_api_key: new Uint8Array(Buffer.from(`encrypted:${SECRET}`, 'utf8')), created_at: 1, updated_at: 1,
+      first_token_timeout_ms: null, total_timeout_ms: null }
+    const fakeDb = { raw: { prepare: () => ({ get: () => row, all: () => [row] }) } } as unknown as ConstructorParameters<typeof ProviderService>[0]
+    const providers = new ProviderService(fakeDb, testCodec)
+    expect(providers.getWithSecret('p').apiKey).toBe(SECRET)
+    expect(providers.getRawBaseUrlAndSecret('p').apiKey).toBe(SECRET)
   })
 })

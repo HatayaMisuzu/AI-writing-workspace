@@ -140,6 +140,10 @@ export interface WorkspaceApi {
   proofreading: { run(projectId: string, documentId: string): Promise<ProofreadIssue[]> }
   providers: {
     list(): Promise<ProviderConfig[]>
+    /**
+     * A·M1：Key 留空要沿用已保存 Key、且归一化地址与已保存的不同（同主机改路径/查询串）时，main 先弹原生确认框；
+     * 作者取消则 reject（code PROVIDER_SAVE_CANCELLED，消息含「已取消保存」），已保存配置不变。参数与成功返回值不变。
+     */
     save(input: ProviderInput): Promise<ProviderConfig>
     models(): Promise<ModelConfig[]>
     saveModel(model: ModelConfig): Promise<ModelConfig>

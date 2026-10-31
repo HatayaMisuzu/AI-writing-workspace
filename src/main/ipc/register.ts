@@ -46,7 +46,7 @@ const trustedSender = (event: IpcMainInvokeEvent | IpcMainEvent): void => {
  * A·M1：带 API Key 发往新地址前的 main 侧原生确认框。默认按钮与取消按钮都是「取消」；只有点「确认发送」才返回 true。
  * 地址经 redactBaseUrl 脱敏（query 密钥参数、账号密码不显示）。
  */
-const confirmKeyToNewBaseUrl = async (event: IpcMainInvokeEvent, nextUrl: string, previousUrl: string | undefined): Promise<boolean> => {
+const confirmKeyToNewBaseUrl = async (event: IpcMainInvokeEvent, nextUrl: string, previousUrl: string | undefined, mode: 'test' | 'save' = 'test'): Promise<boolean> => {
   const win = BrowserWindow.fromWebContents(event.sender)
   const options = {
     type: 'warning' as const,
@@ -55,8 +55,12 @@ const confirmKeyToNewBaseUrl = async (event: IpcMainInvokeEvent, nextUrl: string
     cancelId: 0,
     noLink: true,
     title: '确认发送 API Key',
-    message: previousUrl ? '服务地址与上次保存的不同，API Key 将发往新地址。' : '这个服务地址还没有保存过，API Key 将发往该地址。',
-    detail: `${previousUrl ? `上次保存的地址：${redactBaseUrl(previousUrl)}\n` : ''}本次测试的地址：${redactBaseUrl(nextUrl)}\n\n请确认这是你信任的服务地址。地址填错或被替换时，Key 可能被他人获取。点「取消」则不发送任何请求。`
+    message: mode === 'save'
+      ? '服务地址与上次保存的不同，保存后已保存的 API Key 将发往新地址。'
+      : previousUrl ? '服务地址与上次保存的不同，API Key 将发往新地址。' : '这个服务地址还没有保存过，API Key 将发往该地址。',
+    detail: mode === 'save'
+      ? `上次保存的地址：${redactBaseUrl(previousUrl ?? '')}\n本次保存的地址：${redactBaseUrl(nextUrl)}\n\n请确认这是你信任的服务地址。地址填错或被替换时，Key 可能被他人获取。点「取消」则不保存，配置保持原样。`
+      : `${previousUrl ? `上次保存的地址：${redactBaseUrl(previousUrl)}\n` : ''}本次测试的地址：${redactBaseUrl(nextUrl)}\n\n请确认这是你信任的服务地址。地址填错或被替换时，Key 可能被他人获取。点「取消」则不发送任何请求。`
   }
   const result = win ? await dialog.showMessageBox(win, options) : await dialog.showMessageBox(options)
   return result.response === 1
@@ -315,10 +319,27 @@ export function registerIpc(db: AppDatabase, codec: SecretCodec, network?: Netwo
   handle('proofreading:run', (projectId: string, documentId: string) => { assertNotFocusLocked(focus, parse(idSchema, projectId)); return proofreading.run(parse(idSchema, projectId), parse(idSchema, documentId)) })
 
   handle('providers:list', () => providers.list())
-  handle('providers:save', (input: ProviderInput) => {
-    const saved = providers.save(parse(providerInputSchema, input))
-    network?.refreshNetworkAllowlist()
-    return saved
+  // A·M1（保存）：Key 栏留空、要沿用已保存 Key，且归一化后的地址与已保存的不同（同一 scheme/host/port 下改了路径或查询串）时，
+  // 先由 main 弹同一套原生确认框；取消则抛 PROVIDER_SAVE_CANCELLED，已保存配置一字不动。
+  // 新填了 Key 按「第一次保存」规则：保存时不弹（测试连接时再按 providers:test-url 的规则确认）。换主机仍由 save() 拒绝沿用旧 Key。
+  ipcMain.handle('providers:save', async (event, input: unknown) => {
+    trustedSender(event)
+    try {
+      const body = parse(providerInputSchema, input as ProviderInput)
+      const saved = body.id ? providers.savedEndpoint(body.id) : undefined
+      if (!body.apiKey && saved?.hasApiKey && saved.baseUrl) {
+        const restored = restoreRedactedSecrets(body.baseUrl, saved.baseUrl)
+        const checked = restored === undefined ? undefined : checkBaseUrl(restored)
+        // 还原失败、地址无效、换了主机：交给 save() 按原规则报错，不弹框
+        if (checked?.ok && sameEndpoint(checked.url, saved.baseUrl) && baseUrlKeyDecision(checked.url, saved.baseUrl).needsConfirm) {
+          const confirmed = await confirmKeyToNewBaseUrl(event, checked.url, saved.baseUrl, 'save')
+          if (!confirmed) throw Object.assign(new Error('已取消保存，服务配置未改动，API Key 不会发往新地址。'), { code: 'PROVIDER_SAVE_CANCELLED' })
+        }
+      }
+      const result = providers.save(body)
+      network?.refreshNetworkAllowlist()
+      return result
+    } catch (error) { throw toUserFacingIpcError(error) }
   })
   handle('providers:models', () => providers.listModels())
   handle('providers:save-model', (model: ModelConfig) => providers.saveModel(parse(modelSchema, model)))

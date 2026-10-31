@@ -82,10 +82,16 @@ export function SettingsScreen(): React.JSX.Element {
     const totalTimeoutMs = form.totalTimeoutMs.trim() ? Number(form.totalTimeoutMs) : undefined
     if (firstTokenTimeoutMs !== undefined && (!Number.isFinite(firstTokenTimeoutMs) || firstTokenTimeoutMs <= 0)) throw new Error('首 token 超时须为正整数毫秒。')
     if (totalTimeoutMs !== undefined && (!Number.isFinite(totalTimeoutMs) || totalTimeoutMs <= 0)) throw new Error('总超时须为正整数毫秒。')
-    await window.workspace.providers.save({
-      id, providerType: form.providerType, displayName: form.displayName, baseUrl: form.baseUrl,
-      apiKey: form.apiKey || undefined, firstTokenTimeoutMs, totalTimeoutMs
-    })
+    try {
+      await window.workspace.providers.save({
+        id, providerType: form.providerType, displayName: form.displayName, baseUrl: form.baseUrl,
+        apiKey: form.apiKey || undefined, firstTokenTimeoutMs, totalTimeoutMs
+      })
+    } catch (error) {
+      // A·M1：作者在确认框里点了「取消」——不是故障，配置保持原样
+      if (userErrorMessage(error).includes('已取消保存')) { setNotice({ ok: false, text: '已取消保存，服务配置未改动。' }); return }
+      throw error
+    }
     setSelectedId(id)
     setNotice({ ok: true, text: hasSecretQuery(form.baseUrl) ? `服务配置已安全保存到本机。${BASE_URL_QUERY_SECRET_HINT}` : '服务配置已安全保存到本机。' })
     await reload()
