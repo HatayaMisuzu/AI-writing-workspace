@@ -841,6 +841,38 @@ try {
   await running.page.getByRole('button', { name: '继续写作' }).click()
   await running.page.locator('.manuscript-editor').waitFor()
   const hitLocator = (page, text) => page.locator('.manuscript-editor .character-hit', { hasText: text })
+  // 同一个 .character-hit（含 text）节点在 stableMs 内未被替换、仍 isConnected 才返回
+  // [F14DIAG9] 只记录：每次计时重置（节点出现/被替换/断开）的时刻记入 window.__f14StableResets，不改判定
+  const waitHitStable = (page, text, stableMs = 700) => page.waitForFunction(({ text, stableMs }) => {
+    const el = [...document.querySelectorAll('.manuscript-editor .character-hit')].find((node) => node.textContent.includes(text))
+    const seen = window.__f14Stable
+    if (!el) { window.__f14Stable = undefined; return false }
+    if (!seen || seen.el !== el || !el.isConnected) { (window.__f14StableResets ??= []).push({ t: performance.now(), why: !seen ? 'first' : seen.el !== el ? 'replaced' : 'disconnected' }); window.__f14Stable = { el, since: performance.now() }; return false }
+    return performance.now() - seen.since >= stableMs
+  }, { text, stableMs }, { timeout: 10_000, polling: 50 })
+  // [F14DIAG9] 诊断探针：只记录、不断言，失败一律吞掉不影响用例
+  const installDiag9 = (page) => page.evaluate(() => {
+    const d = { t0: performance.now(), mouseovers: [], hitReplacements: [], card: [] }
+    window.__f14Diag9 = d
+    const firstHit = () => [...document.querySelectorAll('.manuscript-editor .character-hit')].find((node) => node.textContent.includes('林栀'))
+    let hit = firstHit(); let cardOn = Boolean(document.querySelector('[data-testid="character-hover-card"]'))
+    const onOver = (event) => { const t = event.target; d.mouseovers.push({ t: performance.now(), tag: t?.tagName, cls: t?.className ?? null, text: (t?.textContent ?? '').slice(0, 8) }) }
+    document.addEventListener('mouseover', onOver, true)
+    const observer = new MutationObserver(() => {
+      const now = performance.now(); const next = firstHit()
+      if (next !== hit) { d.hitReplacements.push({ t: now, oldConnected: hit ? hit.isConnected : null, hasNew: Boolean(next) }); hit = next }
+      const on = Boolean(document.querySelector('[data-testid="character-hover-card"]'))
+      if (on !== cardOn) { d.card.push({ t: now, shown: on }); cardOn = on }
+    })
+    observer.observe(document.body, { childList: true, subtree: true })
+    // 记录完即卸载，避免影响后续用例（如 ⑫ 性能）
+    window.__f14Diag9Stop = () => { observer.disconnect(); document.removeEventListener('mouseover', onOver, true) }
+  }).catch(() => undefined)
+  const logDiag9 = (page, label, point) => page.evaluate((point) => {
+    const at = point ? document.elementFromPoint(point.x, point.y) : null
+    window.__f14Diag9Stop?.(); window.__f14Diag9Stop = undefined
+    return { ...window.__f14Diag9, stableResets: window.__f14StableResets ?? [], elementFromPoint: at ? { tag: at.tagName, cls: at.className, text: (at.textContent ?? '').slice(0, 8) } : null, now: performance.now() }
+  }, point).then((d) => process.stdout.write(`[F14DIAG9] ${process.platform} ${label} ${JSON.stringify(d)}\n`), (e) => process.stdout.write(`[F14DIAG9] ${process.platform} ${label} error ${e.message}\n`))
   const docState = (page, documentId) => page.evaluate(async ({ projectId, documentId }) => { const doc = await window.workspace.documents.get(projectId, documentId); return { json: JSON.stringify(doc.editorJson), revision: doc.revision } }, { projectId: ids.projectId, documentId })
 
   await record('F14 ⑨ 悬停「林栀」弹出只读卡片；Esc 关闭；Ctrl+Shift+K 打开；editor_json 与 revision 不变', async () => {
@@ -851,15 +883,23 @@ try {
     // 单字别名「栀」默认不参与：全文只有「林栀」「阿栀」两处下划线
     assert.deepEqual(await page.locator('.manuscript-editor .character-hit').allInnerTexts(), ['林栀', '阿栀'])
     const before = await docState(page, f14.hover)
+    await installDiag9(page)
+    // NR-1：临时绕开悬停与防抖重建的竞态，等产品修复（F14 产品 B+：cardAt 用 isConnected/posAtCoords 重取命中，带复现用例；见团队 hygiene.md NR-1）。
+    // 用例前提：下划线节点稳定后再悬停。匹配器重设 / 500ms 防抖 recompute 会重建 .character-hit；
+    // 同一节点连续 700ms（> HOVER_DEBOUNCE_MS）未被替换且 isConnected 才 hover。卡片 2000ms 上限不变。
+    await waitHitStable(page, '林栀')
     const tracing = page.context().tracing
     const traced = await tracing.start({ screenshots: true, snapshots: true }).then(() => true, (error) => { process.stdout.write(`F14 trace unavailable (${error.message})\n`); return false })
     const hit = hitLocator(page, '林栀').first()
     const box = await hit.boundingBox()
     await hit.hover()
     const card = page.getByTestId('character-hover-card')
+    const diagPoint = box ? { x: box.x + box.width / 2, y: box.y + box.height / 2 } : undefined
     try {
       await card.waitFor({ timeout: 2_000 })
+      await logDiag9(page, 'card-opened', diagPoint)
     } catch (error) {
+      await logDiag9(page, 'card-not-opened', diagPoint)
       const point = box ? { x: box.x + box.width / 2, y: box.y + box.height / 2 } : undefined
       const diag = await page.evaluate((point) => {
         const at = point ? document.elementFromPoint(point.x, point.y) : null
