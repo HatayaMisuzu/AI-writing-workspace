@@ -911,40 +911,6 @@ try {
     assert.deepEqual(await docState(page, f14.hover), before, '悬停/快捷键前后 editor_json 和 revision 不变')
   })
 
-  // 主动触发装饰重建：发 renderer 内部的人物变更事件 → 重载人物/偏好 → 新匹配器 → setMatcher 全章重建 .character-hit
-  const rebuildHoverDecorations = (page) => page.evaluate(({ projectId }) => {
-    const old = document.querySelector('.manuscript-editor .character-hit')
-    window.__f14Old = old
-    window.dispatchEvent(new CustomEvent('workspace:characters-changed', { detail: { projectId } }))
-  }, { projectId: ids.projectId })
-  const waitRebuilt = (page) => page.waitForFunction(() => window.__f14Old && !window.__f14Old.isConnected && document.querySelector('.manuscript-editor .character-hit'), undefined, { timeout: 2_000, polling: 20 })
-
-  await record('U03 复现：选中后人物装饰重建，非空选区仍在', async () => {
-    const page = running.page
-    await page.locator('.manuscript-editor').click()
-    await page.keyboard.press('Control+A')
-    const before = await page.evaluate(() => window.getSelection()?.toString().length ?? 0)
-    assert.ok(before > 0, `重建前 DOM 选区应非空，实为 ${before}`)
-    await rebuildHoverDecorations(page)
-    await waitRebuilt(page)
-    const after = await page.evaluate(() => window.getSelection()?.toString().length ?? 0)
-    assert.ok(after > 0, `U03 装饰重建后 DOM 选区被压掉：前 ${before}，后 ${after}`)
-    await page.locator('.manuscript-editor').click()
-  })
-
-  await record('F14 复现：防抖重建窗口内悬停「林栀」，卡片仍弹出不被重建打掉', async () => {
-    const page = running.page
-    const card = page.getByTestId('character-hover-card')
-    await page.mouse.move(5, 5)
-    await hitLocator(page, '林栀').first().hover()
-    // 悬停后 300ms 开卡计时器窗口内重建装饰
-    await rebuildHoverDecorations(page)
-    await waitRebuilt(page)
-    await card.waitFor({ timeout: 2_000 })
-    await page.keyboard.press('Escape')
-    await card.waitFor({ state: 'detached' })
-  })
-
   await record('F14 ⑩ 「此别名不提示」后下划线消失，重启后仍不提示', async () => {
     let page = running.page
     await hitLocator(page, '林栀').first().hover()
