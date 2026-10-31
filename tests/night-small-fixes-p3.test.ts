@@ -61,6 +61,9 @@ describe('小修⑦ 窄侧栏样式', () => {
   it('行网格给徽标留 auto 列，徽标不折行不收缩，标题省略号', () => {
     const css = read('src/renderer/src/styles.css')
     expect(css).toContain('grid-template-columns: minmax(0, 1fr) auto 26px 26px')
+    // 250px 侧栏：操作按钮平时不占列，悬停 / 焦点进入行时才展开（键盘可达）
+    expect(css).toMatch(/\.chapter-row \{[^}]*grid-template-columns: minmax\(0, 1fr\) auto 0 0;/)
+    expect(css).toMatch(/\.chapter-row:hover, \.chapter-row:focus-within \{ grid-template-columns: minmax\(0, 1fr\) auto 26px 26px; \}/)
     expect(css).toMatch(/\.chapter-status-badge \{[^}]*flex-shrink: 0;[^}]*white-space: nowrap;/)
     expect(css).toMatch(/\.chapter-title \{[^}]*text-overflow: ellipsis/)
     expect(css).toMatch(/\.chapter-open \{[^}]*min-width: 0/)

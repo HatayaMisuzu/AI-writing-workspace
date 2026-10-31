@@ -1247,6 +1247,58 @@ try {
     } finally { await page.setViewportSize(original ?? { width: 1600, height: 900 }) }
   })
 
+  await record('P3 小修⑦ 250px 侧栏：第491章 / 第499章 章号完整可见（不被省略号截成「第49…」），1024 / 1000 实测', async () => {
+    const page = running.page
+    const original = page.viewportSize()
+    const titles = Array.from({ length: 9 }, (_, i) => `第${491 + i}章 雾港夜行`)
+    const created = await page.evaluate(async ({ projectId, titles }) => {
+      const tree = await window.workspace.documents.tree(projectId)
+      const volume = tree.find((item) => item.type === 'volume')
+      const out = []
+      for (const title of titles) out.push((await window.workspace.documents.create({ projectId, parentId: volume.id, type: 'chapter', title })).id)
+      return out
+    }, { projectId: ids.projectId, titles })
+    try {
+      await page.reload()
+      await page.getByRole('button', { name: '继续写作' }).click()
+      await page.locator('.manuscript-editor').waitFor()
+      for (const width of [1024, 1000]) {
+        await page.setViewportSize({ width, height: 800 })
+        await page.mouse.move(width - 5, 790) // 鼠标离开侧栏，按非悬停状态量
+        const m = await page.evaluate((titles) => {
+          const sidebar = document.querySelector('.project-sidebar').getBoundingClientRect().width
+          const rows = titles.map((t) => {
+            const open = document.querySelector(`.chapter-open[title=${JSON.stringify(t)}]`)
+            const span = open.querySelector('.chapter-title')
+            const prefix = t.slice(0, t.indexOf('章') + 1)
+            const node = span.firstChild; const range = document.createRange(); range.setStart(node, 0); range.setEnd(node, prefix.length)
+            return { t, prefix, prefixW: range.getBoundingClientRect().width, titleW: span.clientWidth, scrollW: span.scrollWidth }
+          })
+          return { sidebar, rows }
+        }, titles)
+        process.stdout.write(`P3 sidebar ${width}px: ${JSON.stringify(m)}\n`)
+        assert.ok(m.sidebar <= 260, `${width} 应为最小侧栏：${m.sidebar}`)
+        for (const r of m.rows) assert.ok(r.prefixW + 1 <= r.titleW, `${width}px ${r.prefix} 章号应完整可见（章号宽 ${r.prefixW}，标题可见宽 ${r.titleW}）`)
+        const a = m.rows[0]; const b = m.rows[8]
+        assert.notEqual(a.prefix, b.prefix)
+        assert.ok(a.prefixW <= a.titleW && b.prefixW <= b.titleW, `${width}px 第491章与第499章可见文本应不同`)
+      }
+      // 键盘可达：Tab 聚焦到行内重命名按钮时按钮展开可见
+      const row = page.locator('.chapter-row').filter({ has: page.locator(`.chapter-open[title=${JSON.stringify(titles[0])}]`) })
+      await row.locator('.chapter-open').focus()
+      await page.keyboard.press('Tab'); await page.keyboard.press('Tab')
+      const focused = await page.evaluate(() => { const el = document.activeElement; return { label: el?.getAttribute('aria-label'), width: el?.getBoundingClientRect().width } })
+      assert.equal(focused.label, `重命名${titles[0]}`)
+      assert.ok(focused.width >= 20, `焦点进入后按钮应展开：${JSON.stringify(focused)}`)
+    } finally {
+      await page.evaluate(async ({ projectId, created }) => { for (const id of created) await window.workspace.documents.delete(projectId, id) }, { projectId: ids.projectId, created })
+      await page.setViewportSize(original ?? { width: 1600, height: 900 })
+      await page.reload()
+      await page.getByRole('button', { name: '继续写作' }).click()
+      await page.locator('.manuscript-editor').waitFor()
+    }
+  })
+
   await record('F13 ⑬ 小黑屋内不自动校对、无校对入口与计数，网络 0；出屋后计数正确', async () => {
     const page = running.page
     await openChapter(page, '黑屋校对章')
