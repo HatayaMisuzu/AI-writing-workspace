@@ -78,7 +78,7 @@ describe('P3 发布包：开发用诊断接口 __devWalCheckpoint', () => {
 
   it('源码守卫：参数只由 main 在 !app.isPackaged 时经 additionalArguments 追加；没有环境变量开关', () => {
     const index = readFileSync(resolve('src/main/index.ts'), 'utf8')
-    expect(index).toMatch(/const devDiagnosticsEnabled = \(\): boolean => !app\.isPackaged\n/)
+    expect(index).toMatch(/const devDiagnosticsEnabled = \(\): boolean => !app\.isPackaged\r?\n/)
     expect(index).toMatch(/additionalArguments: devDiagnosticsEnabled\(\) \? \[DEV_DIAGNOSTICS_ARG\] : \[\]/)
     const preload = readFileSync(resolve('src/preload/index.ts'), 'utf8')
     expect(preload).toMatch(/if \(process\.argv\.includes\(DEV_DIAGNOSTICS_ARG\)\) api\.__devWalCheckpoint = /)
