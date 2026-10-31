@@ -1251,6 +1251,51 @@ try {
     await page.keyboard.press('Control+Home')
   })
 
+  // F14 间隙红证（不修）：卡片定位在命中 rect.bottom + 6px，真实用户从命中慢慢移向卡片会经过约 6px 间隙。
+  // 逐像素（每步 1px）从林栀 span 中心竖直移到卡片内部一点，期望到达卡片时卡仍开着。每步记录鼠标下元素与卡开关（[GAPDIAG]，只记录）。
+  // 放在 U03 之后、⑩ 之前：需要林栀仍有提示（⑩ 之后不提示），且不遮挡 ⑨～改名等 F14 用例。
+  await record('F14 鼠标逐像素从命中移入悬停卡，途经间隙卡片不关闭', async () => {
+    const page = running.page
+    const card = page.getByTestId('character-hover-card')
+    await page.mouse.move(5, 5)
+    await card.waitFor({ state: 'detached', timeout: 2_000 })
+    assert.equal(await card.count(), 0, '开始前无残留卡片')
+    const hit = hitLocator(page, '林栀').first()
+    await waitHitStable(page, '林栀')
+    const hitBox = await hit.boundingBox()
+    assert.ok(hitBox, '林栀命中有 boundingBox')
+    await hit.hover()
+    await page.waitForFunction(() => document.querySelector('[data-testid="character-hover-card"]')?.getAttribute('aria-label') === '人物卡 · 林栀', undefined, { timeout: 2_000 })
+    const cardBox = await card.boundingBox()
+    assert.ok(cardBox, '卡片有 boundingBox')
+    const x = Math.round(Math.min(Math.max(hitBox.x + hitBox.width / 2, cardBox.x + 4), cardBox.x + cardBox.width - 4))
+    const startY = Math.round(hitBox.y + hitBox.height / 2)
+    const endY = Math.round(cardBox.y + Math.min(12, cardBox.height / 2))
+    const gap = { hitBottom: hitBox.y + hitBox.height, cardTop: cardBox.y, width: cardBox.y - (hitBox.y + hitBox.height) }
+    const steps = []
+    let closedAt
+    await page.mouse.move(x, startY)
+    for (let y = startY + 1; y <= endY; y += 1) {
+      await page.mouse.move(x, y)
+      const at = await page.evaluate(({ x, y }) => {
+        const el = document.elementFromPoint(x, y)
+        return { tag: el?.tagName ?? null, cls: typeof el?.className === 'string' ? el.className.slice(0, 40) : null, inHit: Boolean(el?.closest?.('.character-hit')), inCard: Boolean(el?.closest?.('.character-hover-card')),
+          cardOpen: Boolean(document.querySelector('[data-testid="character-hover-card"]')) }
+      }, { x, y })
+      steps.push({ y, ...at })
+      if (!at.cardOpen && closedAt === undefined) closedAt = { y, ...at }
+    }
+    process.stdout.write(`[GAPDIAG] ${process.platform} ${JSON.stringify({ x, startY, endY, gap, closedAt: closedAt ?? null, steps })}\n`)
+    const final = steps[steps.length - 1]
+    try {
+      assert.equal(await card.count(), 1, `逐像素移入卡片途中卡片被关闭：首次关闭于 y=${closedAt?.y}（间隙 ${gap.hitBottom.toFixed(1)}→${gap.cardTop.toFixed(1)}，宽 ${gap.width.toFixed(1)}px），鼠标下 ${JSON.stringify(closedAt)}`)
+      assert.ok(final?.inCard, `终点应在卡片内部：${JSON.stringify(final)}`)
+    } finally {
+      await page.mouse.move(5, 5)
+      await card.waitFor({ state: 'detached', timeout: 2_000 })
+    }
+  })
+
   await record('F14 ⑩ 「此别名不提示」后下划线消失，重启后仍不提示', async () => {
     let page = running.page
     const card = page.getByTestId('character-hover-card')
