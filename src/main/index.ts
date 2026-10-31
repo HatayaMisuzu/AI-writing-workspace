@@ -89,7 +89,9 @@ if (!app.requestSingleInstanceLock()) {
 
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit() })
 // P3 PR-2b：退出时先让后台 WAL 检查点 worker 跑完当前检查点并关闭自己的连接，再关主连接，然后真正退出。
-// 上限 QUIT_CLOSE_LIMIT_MS（5s）：worker 卡住不回消息就 terminate，直接关主连接退出；worker 已死则立即完成。
+// 上限 QUIT_CLOSE_LIMIT_MS（5s）：worker 段硬上限 5s − 预留（卡住就 terminate），预留段主连接退出前检查点 + close（P3 PR-53）。
+// will-quit 在所有窗口关窗握手（渲染进程 flush 最后一次保存并提交）之后触发，所以退出前检查点排在最后一次保存提交之后。
+// WAL ≤ WAL_QUIT_BOUND_BYTES 时总时长 < 5s；更大的 WAL 不保证 5s，但照常回写，已提交数据安全。
 app.on('will-quit', (event) => {
   const db = database
   if (!db || db.closed) return

@@ -261,6 +261,21 @@ try {
     assert.match(await running.page.locator('.manuscript-editor').textContent(), /最后一次输入会保存/)
   })
 
+  // P3 PR-53：关窗前刚打的字（不等「已保存」）——关窗握手 flush 提交在前，will-quit 的退出前检查点 + close 在后；重开后仍在
+  await record('关窗前刚打的字（不等已保存）重启后仍在（退出前检查点在最后一次保存提交之后）', async () => {
+    const editor = running.page.locator('.manuscript-editor')
+    await editor.click()
+    await running.page.keyboard.press('End')
+    await running.page.keyboard.type('刚打的字不丢')
+    const closed = running.app.waitForEvent('close')
+    await running.page.getByRole('button', { name: '关闭', exact: true }).click()
+    await closed
+    running = await launch()
+    await running.page.getByRole('button', { name: '继续写作' }).click()
+    await running.page.locator('.manuscript-editor').waitFor()
+    assert.match(await running.page.locator('.manuscript-editor').textContent(), /刚打的字不丢/)
+  })
+
   // S2 / §6 ②：未配置 Provider 时完整写作旅程 — 拦截日志被拒=0，fixture 收 0 请求
   await record('S2 未配置 Provider 时无出网', async () => {
     const editor = running.page.locator('.manuscript-editor')

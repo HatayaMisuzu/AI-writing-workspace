@@ -1,5 +1,5 @@
 import { DatabaseSync } from 'node:sqlite'
-import { mkdirSync } from 'node:fs'
+import { mkdirSync, statSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { schema } from './schema'
 import { WalCheckpointer, type WalCheckpointerOptions } from './wal-checkpointer'
@@ -7,6 +7,34 @@ import { WalCheckpointer, type WalCheckpointerOptions } from './wal-checkpointer
 export const CURRENT_SCHEMA_VERSION = 10
 /** 退出时等后台检查点 worker 关闭的上限（ms）；超时则 terminate worker、直接关主连接后退出（P3 PR-42）。 */
 export const QUIT_CLOSE_LIMIT_MS = 5_000
+/**
+ * P3 PR-53（A）：退出预算按「限制退出时的工作量」做。
+ * - worker 段硬上限 = QUIT_CLOSE_LIMIT_MS − QUIT_FINAL_RESERVE_MS（到点 terminate worker）。
+ * - 预留段：主连接在预算内主动做一次 wal_checkpoint(TRUNCATE)，再 close（照常回写，此时 WAL 已空，close 很快）。
+ * - 预留段耗时与「待回写量」成正比（(mxFrame − nBackfill) × 帧大小，即 WAL 里还没回写进主库的帧；已回写完的大 -wal 文件
+ *   退出时只截断、不回写）。db.close() / 检查点是同步调用、无法中途超时：只有待回写量 ≤ WAL_QUIT_BOUND_BYTES（CI 两平台实测取慢者
+ *   再留余量）时保证总时长 < QUIT_CLOSE_LIMIT_MS；超过则不保证 5s，但照常回写、已提交数据安全。
+ * - 平时的待回写量沿用 main 的维护方式：普通保存由 SQLite 自身 wal_autocheckpoint（1000 页）在 COMMIT 后做 PASSIVE，
+ *   批量写由 WalCheckpointer 后台 PASSIVE（暂停 / 释放）。PR-51 不另加定期写回（与 autocheckpoint 功能重复，且与保存重叠时
+ *   Windows 保存变慢）。不设 journal_size_limit（实测拖慢释放后首存）；-wal 靠复用不再增长，退出时 TRUNCATE 截断到 0。
+ */
+export const QUIT_FINAL_RESERVE_MS = 1_500
+export const QUIT_WORKER_LIMIT_MS = QUIT_CLOSE_LIMIT_MS - QUIT_FINAL_RESERVE_MS
+export const WAL_QUIT_BOUND_BYTES = 8 * 1024 * 1024
+
+export interface QuitSegments {
+  /** 进入 closeForQuit → worker 段结束（≤ limit − reserve） */
+  workerMs: number
+  /** 主连接退出前检查点耗时 */
+  checkpointMs: number
+  /** 主连接 close 耗时 */
+  mainCloseMs: number
+  walBytesBeforeCheckpoint: number
+  walBytesBeforeClose: number
+  checkpointOk: boolean
+  workerLimitMs: number
+}
+export interface QuitResult { timedOut: boolean; ms: number; segments?: QuitSegments }
 
 export interface AppDatabaseOptions {
   /** 后台 WAL 检查点参数；false = 不用后台检查点（批量提交后立即恢复自动检查点）。:memory: 库总是不用。 */
@@ -65,6 +93,10 @@ export class AppDatabase {
     }
   }
 
+  private walFileBytes(): number {
+    try { return statSync(`${this.path}-wal`).size } catch { return 0 }
+  }
+
   get closed(): boolean { return this.isClosed }
 
   /** 同步关闭（兼容旧调用）：通知后台检查点 worker 关闭（不等待），再关主连接。 */
@@ -83,21 +115,40 @@ export class AppDatabase {
   }
 
   /**
-   * 应用退出用（will-quit）：closeAsync 加上限。limitMs 内 worker 没关完（卡住不回消息）就 terminate worker，
-   * 直接关主连接后返回；worker 已死时 closeAsync 立即完成。已提交的数据都在主库或 WAL 里，下次打开由 SQLite 恢复。
+   * 应用退出用（will-quit，在所有窗口关窗握手——渲染进程 flush 最后一次保存并提交——之后）。P3 PR-53：
+   * 1) worker 段：等后台检查点 worker 关闭，硬上限 limitMs − reserveMs，到点 terminate（未完成的回写留在 WAL）。
+   * 2) 预留段：主连接主动 wal_checkpoint(TRUNCATE)（失败/BUSY 只记录），再 close（照常回写剩余部分）。
+   * 待回写量 ≤ WAL_QUIT_BOUND_BYTES 时总时长 < limitMs；更多不保证时限，但不跳过回写、不丢已提交数据。
    */
-  async closeForQuit(limitMs = QUIT_CLOSE_LIMIT_MS): Promise<{ timedOut: boolean; ms: number }> {
+  async closeForQuit(limitMs = QUIT_CLOSE_LIMIT_MS, reserveMs = QUIT_FINAL_RESERVE_MS): Promise<QuitResult> {
     const started = performance.now()
     if (this.isClosed) return { timedOut: false, ms: 0 }
+    const workerLimitMs = Math.max(0, limitMs - reserveMs)
     let timer: ReturnType<typeof setTimeout> | undefined
     const timedOut = await Promise.race([
       (this.checkpointer?.close() ?? Promise.resolve()).then(() => false, () => false),
-      new Promise<boolean>((resolve) => { timer = setTimeout(() => resolve(true), limitMs) })
+      new Promise<boolean>((resolve) => { timer = setTimeout(() => resolve(true), workerLimitMs) })
     ])
     if (timer) clearTimeout(timer)
     if (timedOut) this.checkpointer?.terminate()
+    const workerEnd = performance.now()
+    const walBytesBeforeCheckpoint = this.walFileBytes()
+    let checkpointOk = false
+    try {
+      const row = this.raw.prepare('PRAGMA wal_checkpoint(TRUNCATE)').get() as { busy: number; log: number; checkpointed: number } | undefined
+      checkpointOk = Boolean(row && row.busy === 0)
+    } catch (error) {
+      console.warn(`[wal-checkpoint] quit checkpoint failed: ${(error as Error).message}`)
+    }
+    const checkpointEnd = performance.now()
+    const walBytesBeforeClose = this.walFileBytes()
     this.close()
-    return { timedOut, ms: Math.round(performance.now() - started) }
+    const closeEnd = performance.now()
+    const segments: QuitSegments = {
+      workerMs: Math.round(workerEnd - started), checkpointMs: Math.round(checkpointEnd - workerEnd), mainCloseMs: Math.round(closeEnd - checkpointEnd),
+      walBytesBeforeCheckpoint, walBytesBeforeClose, checkpointOk, workerLimitMs
+    }
+    return { timedOut, ms: Math.round(closeEnd - started), segments }
   }
 
   /** 主连接当前的 wal_autocheckpoint（页数；0 = 关闭）。 */
