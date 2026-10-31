@@ -12,12 +12,13 @@ import { LintService, readWordlistFile, type WordlistScope } from '../services/l
 import { atomicWriteFile, BackupService } from '../services/backup-service'
 import { createProviderAdapter, ProviderService, type SecretCodec } from '../ai/provider'
 import { originFromBaseUrl } from '../network-policy'
-import { checkBaseUrl } from '../../shared/base-url'
+import { checkBaseUrl, redactBaseUrl, restoreRedactedSecrets, sameEndpoint } from '../../shared/base-url'
+import { baseUrlKeyDecision } from '../ai/base-url-confirm'
 import { AICreativeRuntime } from '../ai/runtime'
 import { ChapterDigestService } from '../ai/chapter-digest-service'
 import { ChapterDigestRunner } from '../ai/digest-runner'
 import { ProjectContentService } from '../services/project-content-service'
-import type { ChatCursor, ModelConfig, ProviderInput, ProviderType, TaskModelRoute } from '../../shared/domain'
+import type { ChatCursor, ModelConfig, ProviderInput, TaskModelRoute } from '../../shared/domain'
 import type { AIPreviewContextRequest, AIStartRequest } from '../../shared/ipc'
 import { cancelClose, confirmClose } from '../window-close'
 import { ChatService } from '../services/chat-service'
@@ -26,7 +27,7 @@ import { ProofreadingRunner } from '../ai/proofreading-runner'
 import { WritingDailyService } from '../services/writing-daily-service'
 import { ForeshadowService } from '../services/foreshadow-service'
 import { TimelineService } from '../services/timeline-service'
-import { FocusLockService, assertNoFocusLockAnywhere, assertNotFocusLocked, focusEgressCheck } from '../services/focus-lock-service'
+import { FocusLockError, FocusLockService, assertNoFocusLockAnywhere, assertNotFocusLocked, focusEgressCheck } from '../services/focus-lock-service'
 import { readHoverPrefs, writeHoverPrefs } from '../services/hover-prefs-service'
 import { installFocusEgressLock } from '../net/egress-guard'
 
@@ -39,6 +40,30 @@ const trustedSender = (event: IpcMainInvokeEvent | IpcMainEvent): void => {
   } else if (!current.startsWith('file:') || !/\/renderer\/index\.html(?:$|[?#])/i.test(current.replace(/\\/g, '/'))) {
     throw new Error('IPC_UNTRUSTED_ORIGIN')
   }
+}
+
+/**
+ * A·M1：带 API Key 发往新地址前的 main 侧原生确认框。默认按钮与取消按钮都是「取消」；只有点「确认发送」才返回 true。
+ * 地址经 redactBaseUrl 脱敏（query 密钥参数、账号密码不显示）。
+ */
+const confirmKeyToNewBaseUrl = async (event: IpcMainInvokeEvent, nextUrl: string, previousUrl: string | undefined, mode: 'test' | 'save' = 'test'): Promise<boolean> => {
+  const win = BrowserWindow.fromWebContents(event.sender)
+  const options = {
+    type: 'warning' as const,
+    buttons: ['取消', '确认发送'],
+    defaultId: 0,
+    cancelId: 0,
+    noLink: true,
+    title: '确认发送 API Key',
+    message: mode === 'save'
+      ? '服务地址与上次保存的不同，保存后已保存的 API Key 将发往新地址。'
+      : previousUrl ? '服务地址与上次保存的不同，API Key 将发往新地址。' : '这个服务地址还没有保存过，API Key 将发往该地址。',
+    detail: mode === 'save'
+      ? `上次保存的地址：${redactBaseUrl(previousUrl ?? '')}\n本次保存的地址：${redactBaseUrl(nextUrl)}\n\n请确认这是你信任的服务地址。地址填错或被替换时，Key 可能被他人获取。点「取消」则不保存，配置保持原样。`
+      : `${previousUrl ? `上次保存的地址：${redactBaseUrl(previousUrl)}\n` : ''}本次测试的地址：${redactBaseUrl(nextUrl)}\n\n请确认这是你信任的服务地址。地址填错或被替换时，Key 可能被他人获取。点「取消」则不发送任何请求。`
+  }
+  const result = win ? await dialog.showMessageBox(win, options) : await dialog.showMessageBox(options)
+  return result.response === 1
 }
 
 const handle = <T extends unknown[], R>(channel: string, fn: (...args: T) => R | Promise<R>): void => {
@@ -294,10 +319,27 @@ export function registerIpc(db: AppDatabase, codec: SecretCodec, network?: Netwo
   handle('proofreading:run', (projectId: string, documentId: string) => { assertNotFocusLocked(focus, parse(idSchema, projectId)); return proofreading.run(parse(idSchema, projectId), parse(idSchema, documentId)) })
 
   handle('providers:list', () => providers.list())
-  handle('providers:save', (input: ProviderInput) => {
-    const saved = providers.save(parse(providerInputSchema, input))
-    network?.refreshNetworkAllowlist()
-    return saved
+  // A·M1（保存）：Key 栏留空、要沿用已保存 Key，且归一化后的地址与已保存的不同（同一 scheme/host/port 下改了路径或查询串）时，
+  // 先由 main 弹同一套原生确认框；取消则抛 PROVIDER_SAVE_CANCELLED，已保存配置一字不动。
+  // 新填了 Key 按「第一次保存」规则：保存时不弹（测试连接时再按 providers:test-url 的规则确认）。换主机仍由 save() 拒绝沿用旧 Key。
+  ipcMain.handle('providers:save', async (event, input: unknown) => {
+    trustedSender(event)
+    try {
+      const body = parse(providerInputSchema, input as ProviderInput)
+      const saved = body.id ? providers.savedEndpoint(body.id) : undefined
+      if (!body.apiKey && saved?.hasApiKey && saved.baseUrl) {
+        const restored = restoreRedactedSecrets(body.baseUrl, saved.baseUrl)
+        const checked = restored === undefined ? undefined : checkBaseUrl(restored)
+        // 还原失败、地址无效、换了主机：交给 save() 按原规则报错，不弹框
+        if (checked?.ok && sameEndpoint(checked.url, saved.baseUrl) && baseUrlKeyDecision(checked.url, saved.baseUrl).needsConfirm) {
+          const confirmed = await confirmKeyToNewBaseUrl(event, checked.url, saved.baseUrl, 'save')
+          if (!confirmed) throw Object.assign(new Error('已取消保存，服务配置未改动，API Key 不会发往新地址。'), { code: 'PROVIDER_SAVE_CANCELLED' })
+        }
+      }
+      const result = providers.save(body)
+      network?.refreshNetworkAllowlist()
+      return result
+    } catch (error) { throw toUserFacingIpcError(error) }
   })
   handle('providers:models', () => providers.listModels())
   handle('providers:save-model', (model: ModelConfig) => providers.saveModel(parse(modelSchema, model)))
@@ -315,24 +357,44 @@ export function registerIpc(db: AppDatabase, codec: SecretCodec, network?: Netwo
     } catch (error) { return { ok: false, message: error instanceof Error ? error.message : '服务配置不可用' } }
   })
   // S2 / 决策 11：未保存地址仅在测试连接时临时放行（不写入白名单）
-  handle('providers:test-url', async (input: { baseUrl: string; apiKey?: string; modelId: string; providerType?: ProviderType }) => {
-    assertNoFocusLockAnywhere(focus)
+  // A·M1：要带 API Key 发往「与上次保存不同」的地址（或尚无已保存地址）时，先由 main 进程弹原生确认框；
+  // 作者未点「确认发送」则不发任何请求（renderer 无法代为确认，也没有可重放的令牌）。
+  ipcMain.handle('providers:test-url', async (event, input: unknown) => {
+    trustedSender(event)
     try {
+      assertNoFocusLockAnywhere(focus)
       const body = z.object({
         baseUrl: z.string().min(1).max(2000),
         apiKey: z.string().max(4000).optional(),
         modelId: z.string().min(1).max(200),
-        providerType: z.enum(['openai-compatible', 'anthropic']).optional()
+        providerType: z.enum(['openai-compatible', 'anthropic']).optional(),
+        providerId: idSchema.optional()
       }).parse(input)
-      const checked = checkBaseUrl(body.baseUrl)
+      const saved = body.providerId ? providers.getRawBaseUrlAndSecret(body.providerId) : undefined
+      const restored = restoreRedactedSecrets(body.baseUrl, saved?.baseUrl)
+      if (restored === undefined) return { ok: false, message: '地址中的密钥参数显示为 ***，与已保存地址不一致时无法还原，请重新填写完整地址。' }
+      const checked = checkBaseUrl(restored)
       if (!checked.ok) return { ok: false, message: checked.message }
       const origin = originFromBaseUrl(checked.url)
       if (!origin) return { ok: false, message: '无法解析服务地址' }
+      // 作者在 Key 栏填了就用填的；留空且指明了已保存服务时，只在同一 scheme/host/port 上沿用已保存的 Key（同 S1d-A2，
+      // Key 只在 main 内解密，不回传 renderer）；换了主机则不带已保存 Key。
+      const apiKey = body.apiKey ? body.apiKey : (saved?.baseUrl && sameEndpoint(checked.url, saved.baseUrl) ? saved.apiKey : '')
+      if (apiKey) {
+        const decision = baseUrlKeyDecision(checked.url, saved?.baseUrl)
+        if (decision.needsConfirm) {
+          const confirmed = await confirmKeyToNewBaseUrl(event, checked.url, saved?.baseUrl)
+          if (!confirmed) return { ok: false, cancelled: true, message: '已取消测试连接，API Key 未发送。' }
+        }
+      }
       const revoke = network ? network.allowOriginTemporarily(origin) : () => {}
       try {
-        return await createProviderAdapter(body.providerType, checked.url, body.apiKey ?? '').testConnection(body.modelId)
+        return await createProviderAdapter(body.providerType, checked.url, apiKey).testConnection(body.modelId)
       } finally { revoke() }
-    } catch (error) { return { ok: false, message: error instanceof Error ? error.message : '服务配置不可用' } }
+    } catch (error) {
+      if (error instanceof FocusLockError) throw toUserFacingIpcError(error)
+      return { ok: false, message: error instanceof Error ? error.message : '服务配置不可用' }
+    }
   })
   handle('network:blocked-log', () => network?.getBlockedLog() ?? [])
   // P3 PR-2b：后台 WAL 检查点状态（e2e 计时用；界面不展示）。仅 options.diagnostics 时注册，且不返回库路径（commits/releases 可保留）。
