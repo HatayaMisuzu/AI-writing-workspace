@@ -53,6 +53,8 @@ export interface ReleaseRecord {
   ms: number
   writesDuringHold: number
   at: number
+  /** P3（wal-restart）：PASSIVE 已收敛且安静、但 RESTART 拿不到锁（WAL 回不到文件头）而继续等待的轮数 */
+  restartBusyRounds?: number
 }
 
 /**
@@ -62,7 +64,7 @@ export interface ReleaseRecord {
  * - mxFrameBefore / mxFrameAfter：WalIndexHdr.mxFrame（wal.c:328）。
  * - nBackfillBefore / nBackfillAfter：WalCkptInfo.nBackfill（wal.c:395）。
  * - walRestarted：mxFrameAfter < mxFrameBefore，即本次提交的帧从 WAL 文件头写起（walRestartLog 成功，wal.c:3976-3997）。
- * - backfilledInCommit：nBackfillAfter ≠ nBackfillBefore。若提交期间后台 worker 不在跑（checkpointerBusy=false），
+ * - backfilledInCommit：未 restart 时 nBackfillAfter ≠ nBackfillBefore；restart 时 nBackfill 先被清 0，故看 nBackfillAfter > 0。若提交期间后台 worker 不在跑（checkpointerBusy=false），
  *   说明 COMMIT 里同步做了检查点回写（wal_autocheckpoint 的默认 hook）。
  * - checkpointerBusy：COMMIT 前后台检查点是否有运行中/排队的轮次（为 true 时 nBackfill 变化可能来自 worker）。
  * 读不到 -shm 时这些字段缺省。
@@ -109,7 +111,10 @@ export class AppDatabase {
       this.checkpointer = new WalCheckpointer(path, {
         ...(options.checkpointer ?? {}),
         generation: () => this.writeGeneration(),
-        shouldTrigger: () => !this.isClosed && this.autoCheckpointHolds === 0
+        shouldTrigger: () => !this.isClosed && this.autoCheckpointHolds === 0,
+        // P3（wal-restart）：只在批量暂停、等待恢复 wal_autocheckpoint 时，PASSIVE 收敛后在主连接上做一次不等待的 RESTART（busy_timeout 仍为 0）
+        restartNeeded: () => !this.isClosed && this.autoCheckpointHolds > 0,
+        restartLog: () => this.raw.prepare('PRAGMA wal_checkpoint(RESTART)').get() as { busy: number; log: number; checkpointed: number }
       })
       // H-W6：wal_autocheckpoint 只作保底，阈值 ≈ 6MB 帧（上界 = 6MB + 一次提交），按实际 page_size 计算（见 wal-checkpointer.ts 顶部注释）
       if (this.checkpointer.triggerBytes !== undefined) {
@@ -262,6 +267,7 @@ export class AppDatabase {
     const runsAtStart = cp.runs
     this.writesDuringHold = 0
     let reason: ReleaseRecord['reason'] = 'quiet'
+    let restartBusyRounds = 0
     for (;;) {
       if (cp.closed || this.isClosed) { reason = 'closed'; break }
       if (!cp.busy) void cp.request()
@@ -271,11 +277,16 @@ export class AppDatabase {
       if (cp.closed || this.isClosed) { reason = 'closed'; break }
       if (!outcome || !outcome.ok) { reason = 'failed'; break }
       // quiet===true 才释放：quiet===undefined（未提供 generation）不得误当作安静释放
-      if (outcome.quiet === true) { reason = 'quiet'; break }
+      // P3（wal-restart）：还要确认 WAL 已回到文件头（RESTART 成功，restarted !== false）才恢复 autocheckpoint；
+      // 否则恢复后第一次保存的 mxFrame 接在旧帧之后、≥ 阈值，COMMIT 里同步做检查点（run 41186632942）。拿不到锁 → 隔 retryDelayMs 再来一轮。
+      const restartBusy = outcome.quiet === true && outcome.restarted === false
+      if (outcome.quiet === true && !restartBusy) { reason = 'quiet'; break }
+      if (restartBusy) restartBusyRounds += 1
       if (rounds >= this.releaseMaxRounds) { reason = 'limit-rounds'; break }
       if (Date.now() - started >= this.releaseMaxMs) { reason = 'limit-ms'; break }
+      if (restartBusy) await new Promise((resolve) => setTimeout(resolve, cp.retryDelayMs))
     }
-    const record: ReleaseRecord = { reason, rounds: cp.runs - runsAtStart, ms: Date.now() - started, writesDuringHold: this.writesDuringHold, at: Date.now() }
+    const record: ReleaseRecord = { reason, rounds: cp.runs - runsAtStart, ms: Date.now() - started, writesDuringHold: this.writesDuringHold, at: Date.now(), restartBusyRounds }
     this.releases.push(record)
     if (this.releases.length > 50) this.releases.splice(0, this.releases.length - 50)
     if (reason === 'limit-rounds' || reason === 'limit-ms') {
@@ -312,7 +323,10 @@ export class AppDatabase {
       if (before && after) {
         Object.assign(record, {
           mxFrameBefore: before.mxFrame, mxFrameAfter: after.mxFrame, nBackfillBefore: before.nBackfill, nBackfillAfter: after.nBackfill,
-          walRestarted: after.mxFrame < before.mxFrame, backfilledInCommit: after.nBackfill !== before.nBackfill, checkpointerBusy
+          walRestarted: after.mxFrame < before.mxFrame,
+          // restart 时 walRestartHdr 把 nBackfill 清 0（wal.c walRestartHdr），不算回写；此时只有 nBackfill > 0 才说明提交后又做了回写
+          backfilledInCommit: after.mxFrame < before.mxFrame ? after.nBackfill > 0 : after.nBackfill !== before.nBackfill,
+          checkpointerBusy
         })
       }
       this.commits.push(record)

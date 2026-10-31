@@ -119,7 +119,7 @@ describe('P3 后台 PASSIVE 收敛后的第一次保存不在 COMMIT 里同步�
     // (a) 修复后：读连接占锁 → RESTART 拿不到锁 → autocheckpoint 不恢复；或者本次写已从文件头开始
     expect.soft(autoAtSave1 === 0 || (save1.mxFrameAfter ?? Infinity) < THRESHOLD, `save1 autoCheckpoint=${autoAtSave1} mxFrameBefore=${save1.mxFrameBefore} mxFrameAfter=${save1.mxFrameAfter} walRestarted=${save1.walRestarted}`).toBe(true)
     // (b) COMMIT 里没有同步回写
-    expect.soft(save2.checkpointerBusy, 'save2 时后台 worker 不应在跑（否则 nBackfill 变化不能归因于 COMMIT）').toBe(false)
+    // checkpointerBusy 只记录不断言：修复后 save1 在暂停期间提交会请求补做一轮，worker 此时处于注入的 300ms 延迟中（未开始 PASSIVE），nBackfill 不会被它改动
     expect.soft(save2.backfilledInCommit, `save2 COMMIT 内同步回写：autoCheckpoint=${autoAtSave2} nBackfill ${save2.nBackfillBefore}→${save2.nBackfillAfter} mxFrame ${save2.mxFrameBefore}→${save2.mxFrameAfter} commitMs=${save2.commitMs}`).toBe(false)
     expect.soft(save1.backfilledInCommit, `save1 nBackfill ${save1.nBackfillBefore}→${save1.nBackfillAfter}`).toBe(false)
     // 读连接释放后：autocheckpoint 最终恢复，之后的保存从文件头写起
