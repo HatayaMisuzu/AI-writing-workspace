@@ -979,15 +979,38 @@ try {
       await rename('林栀')
       await hitLocator(page, '林栀').first().waitFor({ timeout: 2_000 })
       await page.mouse.move(5, 5)
-      await card.waitFor({ state: 'detached', timeout: 2_000 }).catch(() => undefined)
+      await card.waitFor({ state: 'detached', timeout: 2_000 })
     }
+  })
+
+  // F14：卡片开着时鼠标不离开编辑区，从「阿栀」直接移到「林栀」，卡片应切换为林栀的命中
+  await record('F14 卡片开着时鼠标从阿栀直接移到林栀', async () => {
+    const page = running.page
+    const card = page.getByTestId('character-hover-card')
+    await page.mouse.move(5, 5)
+    await card.waitFor({ state: 'detached', timeout: 2_000 })
+    assert.equal(await card.count(), 0, '开始前无残留卡片')
+    await hitLocator(page, '阿栀').hover()
+    await card.waitFor({ timeout: 2_000 })
+    assert.equal(await card.getAttribute('aria-label'), '人物卡 · 阿栀')
+    assert.match(await card.innerText(), /匹配别名：阿栀/)
+    // 不移到空白处：直接悬停另一处命中
+    await hitLocator(page, '林栀').first().hover()
+    await page.waitForFunction(() => document.querySelector('[data-testid="character-hover-card"]')?.getAttribute('aria-label') === '人物卡 · 林栀', undefined, { timeout: 2_000 })
+    const text = await card.innerText()
+    assert.match(text, /林栀/)
+    assert.ok(!text.includes('匹配别名：阿栀'), `卡片应切换为林栀，实为：${text}`)
+    await page.mouse.move(5, 5)
+    await card.waitFor({ state: 'detached', timeout: 2_000 })
+    assert.equal(await card.count(), 0, '结束后无残留卡片')
   })
 
   await record('F14 ⑩ 「此别名不提示」后下划线消失，重启后仍不提示', async () => {
     let page = running.page
-    await hitLocator(page, '林栀').first().hover()
     const card = page.getByTestId('character-hover-card')
-    await card.waitFor()
+    assert.equal(await card.count(), 0, '悬停前无残留卡片')
+    await hitLocator(page, '林栀').first().hover()
+    await page.waitForFunction(() => document.querySelector('[data-testid="character-hover-card"]')?.getAttribute('aria-label') === '人物卡 · 林栀', undefined, { timeout: 2_000 })
     await card.getByRole('button', { name: '此别名不提示' }).click()
     await card.waitFor({ state: 'detached' })
     await page.waitForFunction(() => document.querySelectorAll('.manuscript-editor .character-hit').length === 1)
