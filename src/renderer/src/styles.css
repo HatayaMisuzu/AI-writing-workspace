@@ -130,8 +130,9 @@ button.danger-button { color: #fff; background: var(--danger); border-color: var
 .workspace-actions button { border: 0; background: transparent; font-size: 12px; color: #555e5a; }
 .workspace-actions kbd { font-size: 10px; color: #999; border: 0; }
 .workspace-actions > span { flex: 1; }
-.editor-pane { min-height: 0; display: grid; grid-template-rows: 43px 1fr 28px; position: relative; }
-.editor-toolbar { display: flex; align-items: center; gap: 4px; padding: 0 13px; border-bottom: 1px solid #ecece7; }
+/* 窄屏（1081–1200）：编辑列只剩约 193px，而工具栏最小内容宽约 593px。编辑区可收缩（min-width:0），工具栏在自身内部横向滚动，不再撑宽 .manuscript-with-outline 把它横向滚走；细纲保持作者的开合状态，不自动收起 */
+.editor-pane { min-width: 0; min-height: 0; display: grid; grid-template-rows: 43px 1fr 28px; position: relative; }
+.editor-toolbar { min-width: 0; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; display: flex; align-items: center; gap: 4px; padding: 0 13px; border-bottom: 1px solid #ecece7; }
 .toolbar-button { border-color: transparent; background: transparent; font-size: 12px; min-height: 30px; }
 .toolbar-button.active { background: var(--accent-soft); color: var(--accent); }
 .toolbar-separator { width: 1px; height: 18px; background: var(--line); margin: 0 5px; }
@@ -579,9 +580,10 @@ button.link { border: 0; background: none; padding: 0; color: var(--accent, #2f6
 /* P3 章内查找替换 / 本章大纲（高亮用 CSS Custom Highlight API，不改 DOM） */
 ::highlight(find-hit) { background-color: rgba(255, 196, 0, 0.35); }
 ::highlight(find-current) { background-color: rgba(255, 140, 0, 0.75); color: #111; }
-.find-panel { position: absolute; top: 50px; right: 18px; z-index: 46; width: 340px; display: grid; gap: 6px; padding: 10px; background: var(--panel, #fff); border: 1px solid var(--line, #ddd); border-radius: 8px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12); }
-.find-row { display: flex; align-items: center; gap: 6px; }
-.find-row input:not([type="checkbox"]) { flex: 1; min-width: 0; }
+/* 窄屏：面板宽 = min(340px, 编辑区宽 − 36px)（.editor-pane 是定位容器，左右各留 18px），不越出编辑区去压章节侧栏；不自动收起细纲。行内放不下时换行 */
+.find-panel { position: absolute; top: 50px; right: 18px; z-index: 46; width: min(340px, calc(100% - 36px)); display: grid; gap: 6px; padding: 10px; background: var(--panel, #fff); border: 1px solid var(--line, #ddd); border-radius: 8px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12); }
+.find-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.find-row input:not([type="checkbox"]) { flex: 1 1 80px; min-width: 0; }
 .find-count { font-size: 12px; color: var(--muted, #666); white-space: nowrap; }
 .find-options { font-size: 12px; gap: 12px; }
 .find-options label { display: flex; align-items: center; gap: 4px; }

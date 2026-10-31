@@ -159,10 +159,11 @@ export interface WorkspaceApi {
   }
   /** S2 e2e：读取 webRequest 拦截日志 */
   network: { blockedLog(): Promise<Array<{ url: string; reason: string; at: number }>> }
-  /** P3 PR-2b e2e：后台 WAL 检查点状态（界面不展示）。只在未打包构建注册，生产构建调用会被拒绝（无 handler）。不返回 dbPath。 */
-  diagnostics: {
-    walCheckpoint(): Promise<{ busy: boolean; runs: number; last: { ok: boolean; ms: number; attempts: number; error?: string; walBytes?: number } | null; walBytes: number; autoCheckpoint: number; commits: Array<{ at: number; commitMs: number; autoCheckpoint: boolean; held: boolean }>; releases: Array<{ reason: string; rounds: number; ms: number; writesDuringHold: number; at: number }> }>
-  }
+  /**
+   * 开发用（P3 PR-2b e2e 计时）：后台 WAL 检查点状态，界面不展示。只在未打包构建由 preload 暴露、main 注册 IPC；
+   * 打包版 window.workspace 上没有这个键，IPC 也不注册。不返回 dbPath。见 src/shared/dev-diagnostics.ts。
+   */
+  __devWalCheckpoint?: () => Promise<{ busy: boolean; runs: number; last: { ok: boolean; ms: number; attempts: number; error?: string; walBytes?: number } | null; walBytes: number; autoCheckpoint: number; commits: Array<{ at: number; commitMs: number; autoCheckpoint: boolean; held: boolean }>; releases: Array<{ reason: string; rounds: number; ms: number; writesDuringHold: number; at: number }> }>
   /** S9：日更统计与可选目标（数据层无默认目标；UI 在 S10）。 */
   writing: {
     getDay(projectId: string, date?: string): Promise<WritingDailyRow>
