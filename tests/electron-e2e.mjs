@@ -135,6 +135,13 @@ const finishLaunch = async (app, page) => {
   page.on('pageerror', (error) => process.stderr.write(`renderer error: ${error.stack ?? error.message}\n`))
   page.on('console', (message) => { if (message.type() === 'error') process.stderr.write(`renderer console: ${message.text()}\n`) })
   await page.waitForLoadState('domcontentloaded')
+  // P3 发布包：minWidth 1100 → 1000 后，CI 小屏（如 Windows runner）上窗口会被压到 ≤1080 的窄屏布局（同行者默认收起）。
+  // 改前 minWidth 1100 让窗口至少 1100 宽；这里把视口补到 1100，保持既有用例的宽屏前提。窄屏布局由各自用例显式 setViewportSize 覆盖。
+  const initial = await page.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }))
+  if (initial.width < 1100) {
+    await page.setViewportSize({ width: 1100, height: initial.height })
+    process.stdout.write(`e2e viewport ${initial.width}x${initial.height} < 1100 wide, emulated 1100x${initial.height}\n`)
+  }
   process.stdout.write(`launched: ${await page.title()} ${page.url()}\n`)
   return { app, page }
 }
