@@ -911,6 +911,58 @@ try {
     assert.deepEqual(await docState(page, f14.hover), before, '悬停/快捷键前后 editor_json 和 revision 不变')
   })
 
+  // U03 选区 B+：全选 → 点编辑区（DOM 选区折叠，chip 可能仍在）→ 再 Ctrl+A，应恢复 DOM 选区 / chip /「修改」可用。
+  // 诊断事实（run-41198233326）：1150 宽下该顺序后 DOM 选区空、chip 消失、「修改」disabled；全程无人名装饰节点替换。
+  // 对照：不点编辑区、直接 Ctrl+A 则选区保持正常。本用例只复现，不修产品。
+  await record('U03 点编辑区后再全选', async () => {
+    const page = running.page
+    const viewport = page.viewportSize()
+    try {
+      await openChapter(page, '悬停章')
+      const editor = page.locator('.manuscript-editor')
+      await editor.waitFor()
+      await page.locator('.manuscript-editor', { hasText: '林栀推门进来' }).waitFor()
+      await page.setViewportSize({ width: 1150, height: viewport?.height ?? 860 })
+      const diag = () => page.evaluate(() => {
+        const sel = window.getSelection()
+        return {
+          domLen: sel?.toString().length ?? 0,
+          collapsed: sel?.isCollapsed ?? null,
+          chip: document.querySelector('.selection-chip')?.textContent ?? null,
+          active: document.activeElement?.className ?? document.activeElement?.tagName ?? null
+        }
+      })
+
+      // 首次全选：确认 chip 与 DOM 选区正常（对照路径的前置）
+      await editor.click()
+      await editor.press('Control+A')
+      await page.locator('.assistant-panel .selection-chip').waitFor({ timeout: 3_000 })
+      const afterFirst = await diag()
+      process.stdout.write(`e2e U03 click-then-select-all ${process.platform} after first Ctrl+A: ${JSON.stringify(afterFirst)}\n`)
+      assert.ok(afterFirst.domLen > 0, `首次全选后 DOM 选区应非空：${JSON.stringify(afterFirst)}`)
+      assert.match(afterFirst.chip ?? '', /已选择 \d+ 字/, `首次全选后应出现选区 chip：${JSON.stringify(afterFirst)}`)
+
+      // 点击编辑区：DOM 选区折叠（chip 可能仍显示——诊断事实如此）
+      await editor.click()
+      const afterClick = await diag()
+      process.stdout.write(`e2e U03 click-then-select-all ${process.platform} after editor.click: ${JSON.stringify(afterClick)}\n`)
+
+      // 再全选：期望恢复 DOM 选区、chip、「修改」可用（未修产品时应红）
+      await editor.press('Control+A')
+      const afterSecond = await diag()
+      const modifyEnabled = await page.getByRole('button', { name: '修改', exact: true }).isEnabled()
+      process.stdout.write(`e2e U03 click-then-select-all ${process.platform} after second Ctrl+A: ${JSON.stringify({ ...afterSecond, modifyEnabled })}\n`)
+      assert.ok(afterSecond.domLen > 0, `点编辑区后再全选：DOM 选区应非空：${JSON.stringify(afterSecond)}`)
+      assert.match(afterSecond.chip ?? '', /已选择 \d+ 字/, `点编辑区后再全选：chip 应仍在：${JSON.stringify(afterSecond)}`)
+      assert.equal(modifyEnabled, true, `点编辑区后再全选：「修改」应可用：${JSON.stringify({ ...afterSecond, modifyEnabled })}`)
+    } finally {
+      if (viewport) await page.setViewportSize(viewport)
+      else await page.setViewportSize({ width: 1400, height: 860 })
+      await page.locator('.assistant-panel').waitFor().catch(() => undefined)
+      await openChapter(page, '悬停章').catch(() => undefined)
+    }
+  })
+
   await record('F14 ⑩ 「此别名不提示」后下划线消失，重启后仍不提示', async () => {
     let page = running.page
     await hitLocator(page, '林栀').first().hover()
