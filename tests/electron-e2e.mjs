@@ -842,13 +842,37 @@ try {
   await running.page.locator('.manuscript-editor').waitFor()
   const hitLocator = (page, text) => page.locator('.manuscript-editor .character-hit', { hasText: text })
   // 同一个 .character-hit（含 text）节点在 stableMs 内未被替换、仍 isConnected 才返回
+  // [F14DIAG9] 只记录：每次计时重置（节点出现/被替换/断开）的时刻记入 window.__f14StableResets，不改判定
   const waitHitStable = (page, text, stableMs = 700) => page.waitForFunction(({ text, stableMs }) => {
     const el = [...document.querySelectorAll('.manuscript-editor .character-hit')].find((node) => node.textContent.includes(text))
     const seen = window.__f14Stable
     if (!el) { window.__f14Stable = undefined; return false }
-    if (!seen || seen.el !== el || !el.isConnected) { window.__f14Stable = { el, since: performance.now() }; return false }
+    if (!seen || seen.el !== el || !el.isConnected) { (window.__f14StableResets ??= []).push({ t: performance.now(), why: !seen ? 'first' : seen.el !== el ? 'replaced' : 'disconnected' }); window.__f14Stable = { el, since: performance.now() }; return false }
     return performance.now() - seen.since >= stableMs
   }, { text, stableMs }, { timeout: 10_000, polling: 50 })
+  // [F14DIAG9] 诊断探针：只记录、不断言，失败一律吞掉不影响用例
+  const installDiag9 = (page) => page.evaluate(() => {
+    const d = { t0: performance.now(), mouseovers: [], hitReplacements: [], card: [] }
+    window.__f14Diag9 = d
+    const firstHit = () => [...document.querySelectorAll('.manuscript-editor .character-hit')].find((node) => node.textContent.includes('林栀'))
+    let hit = firstHit(); let cardOn = Boolean(document.querySelector('[data-testid="character-hover-card"]'))
+    const onOver = (event) => { const t = event.target; d.mouseovers.push({ t: performance.now(), tag: t?.tagName, cls: t?.className ?? null, text: (t?.textContent ?? '').slice(0, 8) }) }
+    document.addEventListener('mouseover', onOver, true)
+    const observer = new MutationObserver(() => {
+      const now = performance.now(); const next = firstHit()
+      if (next !== hit) { d.hitReplacements.push({ t: now, oldConnected: hit ? hit.isConnected : null, hasNew: Boolean(next) }); hit = next }
+      const on = Boolean(document.querySelector('[data-testid="character-hover-card"]'))
+      if (on !== cardOn) { d.card.push({ t: now, shown: on }); cardOn = on }
+    })
+    observer.observe(document.body, { childList: true, subtree: true })
+    // 记录完即卸载，避免影响后续用例（如 ⑫ 性能）
+    window.__f14Diag9Stop = () => { observer.disconnect(); document.removeEventListener('mouseover', onOver, true) }
+  }).catch(() => undefined)
+  const logDiag9 = (page, label, point) => page.evaluate((point) => {
+    const at = point ? document.elementFromPoint(point.x, point.y) : null
+    window.__f14Diag9Stop?.(); window.__f14Diag9Stop = undefined
+    return { ...window.__f14Diag9, stableResets: window.__f14StableResets ?? [], elementFromPoint: at ? { tag: at.tagName, cls: at.className, text: (at.textContent ?? '').slice(0, 8) } : null, now: performance.now() }
+  }, point).then((d) => process.stdout.write(`[F14DIAG9] ${process.platform} ${label} ${JSON.stringify(d)}\n`), (e) => process.stdout.write(`[F14DIAG9] ${process.platform} ${label} error ${e.message}\n`))
   const docState = (page, documentId) => page.evaluate(async ({ projectId, documentId }) => { const doc = await window.workspace.documents.get(projectId, documentId); return { json: JSON.stringify(doc.editorJson), revision: doc.revision } }, { projectId: ids.projectId, documentId })
 
   await record('F14 ⑨ 悬停「林栀」弹出只读卡片；Esc 关闭；Ctrl+Shift+K 打开；editor_json 与 revision 不变', async () => {
@@ -859,6 +883,7 @@ try {
     // 单字别名「栀」默认不参与：全文只有「林栀」「阿栀」两处下划线
     assert.deepEqual(await page.locator('.manuscript-editor .character-hit').allInnerTexts(), ['林栀', '阿栀'])
     const before = await docState(page, f14.hover)
+    await installDiag9(page)
     // NR-1：临时绕开悬停与防抖重建的竞态，等产品修复（F14 产品 B+：cardAt 用 isConnected/posAtCoords 重取命中，带复现用例；见团队 hygiene.md NR-1）。
     // 用例前提：下划线节点稳定后再悬停。匹配器重设 / 500ms 防抖 recompute 会重建 .character-hit；
     // 同一节点连续 700ms（> HOVER_DEBOUNCE_MS）未被替换且 isConnected 才 hover。卡片 2000ms 上限不变。
@@ -869,9 +894,12 @@ try {
     const box = await hit.boundingBox()
     await hit.hover()
     const card = page.getByTestId('character-hover-card')
+    const diagPoint = box ? { x: box.x + box.width / 2, y: box.y + box.height / 2 } : undefined
     try {
       await card.waitFor({ timeout: 2_000 })
+      await logDiag9(page, 'card-opened', diagPoint)
     } catch (error) {
+      await logDiag9(page, 'card-not-opened', diagPoint)
       const point = box ? { x: box.x + box.width / 2, y: box.y + box.height / 2 } : undefined
       const diag = await page.evaluate((point) => {
         const at = point ? document.elementFromPoint(point.x, point.y) : null
@@ -909,6 +937,178 @@ try {
     await page.waitForTimeout(1_500)
     assert.equal(await page.getByText('已保存', { exact: true }).count(), 1)
     assert.deepEqual(await docState(page, f14.hover), before, '悬停/快捷键前后 editor_json 和 revision 不变')
+  })
+
+  // F14：卡片开着时鼠标不离开编辑区，从「阿栀」直接移到「林栀」，卡片应切换为林栀的命中
+  await record('F14 卡片开着时鼠标从阿栀直接移到林栀', async () => {
+    const page = running.page
+    const card = page.getByTestId('character-hover-card')
+    await page.mouse.move(5, 5)
+    await card.waitFor({ state: 'detached', timeout: 2_000 })
+    assert.equal(await card.count(), 0, '开始前无残留卡片')
+    await hitLocator(page, '阿栀').hover()
+    await card.waitFor({ timeout: 2_000 })
+    assert.equal(await card.getAttribute('aria-label'), '人物卡 · 阿栀')
+    assert.match(await card.innerText(), /匹配别名：阿栀/)
+    // 不移到空白处：直接悬停另一处命中
+    await hitLocator(page, '林栀').first().hover()
+    await page.waitForFunction(() => document.querySelector('[data-testid="character-hover-card"]')?.getAttribute('aria-label') === '人物卡 · 林栀', undefined, { timeout: 2_000 })
+    const text = await card.innerText()
+    assert.match(text, /林栀/)
+    assert.ok(!text.includes('匹配别名：阿栀'), `卡片应切换为林栀，实为：${text}`)
+    await page.mouse.move(5, 5)
+    await card.waitFor({ state: 'detached', timeout: 2_000 })
+    assert.equal(await card.count(), 0, '结束后无残留卡片')
+  })
+
+  // F14 产品 B+ 主动复现（悬停掉卡）：卡已打开后触发 matcher 更换，断言卡仍在或短时再现。
+  // 人物设置页会切走 section 卸载 EditorSurface，无法在真 UI 上「边悬停边改人物」；
+  // 故用与 ProjectViews.flush 相同的产物路径：IPC save + 派发 workspace:characters-changed（renderer 内部事件，不改 main/preload/IPC）。
+  await record('F14 悬停卡：characters-changed 更换 matcher 后卡片仍在或短时再现', async () => {
+    const page = running.page
+    await openChapter(page, '悬停章')
+    const hit = hitLocator(page, '林栀').first()
+    await hit.waitFor()
+    await hit.hover()
+    const card = page.getByTestId('character-hover-card')
+    await card.waitFor({ timeout: 2_000 })
+    assert.match(await card.innerText(), /林栀/)
+    // 新增正文已有的「顾言」→ 匹配器项变化且可观测新下划线，证明 hoverMatcher effect / setMatcher 已执行
+    const extraId = await page.evaluate(async ({ projectId }) => {
+      const saved = await window.workspace.characters.save({ projectId, name: '顾言', aliases: [], notes: 'F14b-matcher-bump' })
+      window.dispatchEvent(new CustomEvent('workspace:characters-changed', { detail: { projectId } }))
+      return saved.id
+    }, { projectId: ids.projectId })
+    try {
+      await hitLocator(page, '顾言').waitFor({ timeout: 2_000 })
+      // 未修时 EditorSurface.tsx:347 无条件关卡；鼠标仍在「林栀」上但 mouseover 不重燃 → 期望此处红
+      await card.waitFor({ timeout: 2_000 })
+      assert.match(await card.innerText(), /林栀/)
+    } finally {
+      await page.evaluate(async ({ projectId, extraId }) => {
+        await window.workspace.characters.delete(projectId, extraId)
+        window.dispatchEvent(new CustomEvent('workspace:characters-changed', { detail: { projectId } }))
+      }, { projectId: ids.projectId, extraId })
+      await page.waitForFunction(() => ![...document.querySelectorAll('.manuscript-editor .character-hit')].some((el) => el.textContent.includes('顾言')), undefined, { timeout: 2_000 }).catch(() => undefined)
+    }
+  })
+
+  // F14 B+：人物被删除 → 命中消失 → 期望卡片关闭（不靠旧引用硬撑）
+  await record('F14 悬停卡：删除卡片所示人物后卡片关闭', async () => {
+    const page = running.page
+    const card = page.getByTestId('character-hover-card')
+    await page.mouse.move(5, 5)
+    const tempId = await page.evaluate(async ({ projectId }) => {
+      const saved = await window.workspace.characters.save({ projectId, name: '顾言', aliases: [], notes: 'F14b-delete' })
+      window.dispatchEvent(new CustomEvent('workspace:characters-changed', { detail: { projectId } }))
+      return saved.id
+    }, { projectId: ids.projectId })
+    const hit = hitLocator(page, '顾言')
+    await hit.waitFor({ timeout: 2_000 })
+    await hit.hover()
+    await card.waitFor({ timeout: 2_000 })
+    assert.match(await card.innerText(), /顾言/)
+    await page.evaluate(async ({ projectId, tempId }) => {
+      await window.workspace.characters.delete(projectId, tempId)
+      window.dispatchEvent(new CustomEvent('workspace:characters-changed', { detail: { projectId } }))
+    }, { projectId: ids.projectId, tempId })
+    await hit.waitFor({ state: 'detached', timeout: 2_000 })
+    await card.waitFor({ state: 'detached', timeout: 2_000 })
+    await page.mouse.move(5, 5)
+  })
+
+  // F14 B+：改名（经别名「阿栀」命中仍在）→ 期望卡片保留并刷新为新名字，不再显示旧名
+  await record('F14 悬停卡：改名卡片所示人物后卡片刷新为新名', async () => {
+    const page = running.page
+    const card = page.getByTestId('character-hover-card')
+    await page.mouse.move(5, 5)
+    await card.waitFor({ state: 'detached', timeout: 2_000 })
+    const rename = (name) => page.evaluate(async ({ projectId, characterId, name }) => {
+      const current = (await window.workspace.characters.list(projectId)).find((item) => item.id === characterId)
+      await window.workspace.characters.save({ id: current.id, projectId, name, aliases: current.aliases, notes: current.notes, fields: current.fields })
+      window.dispatchEvent(new CustomEvent('workspace:characters-changed', { detail: { projectId } }))
+    }, { projectId: ids.projectId, characterId: f14.characterId, name })
+    const hit = hitLocator(page, '阿栀')
+    const hitHandle = await hit.elementHandle()
+    const hitBox = await hit.boundingBox()
+    await hit.hover()
+    await card.waitFor({ timeout: 2_000 })
+    assert.match(await card.innerText(), /林栀/)
+    try {
+      await rename('林雪')
+      await hitLocator(page, '林栀').waitFor({ state: 'detached', timeout: 2_000 })
+      await page.waitForFunction(() => { const el = document.querySelector('[data-testid="character-hover-card"]'); return Boolean(el && el.textContent.includes('林雪') && !el.textContent.includes('林栀')) }, undefined, { timeout: 2_000 })
+      assert.match(await card.innerText(), /匹配别名：阿栀/)
+    } finally {
+      await rename('林栀')
+      await hitLocator(page, '林栀').first().waitFor({ timeout: 2_000 })
+      // [F14DIAG2] 只记录不断言：悬停时的 hit 节点是否仍在 DOM、当前鼠标点下的 hit 是否同一节点
+      const diag2 = await page.evaluate(({ old, point }) => {
+        const at = point ? document.elementFromPoint(point.x, point.y) : null
+        const hitNow = at?.closest?.('.character-hit') ?? null
+        return { oldIsConnected: old ? old.isConnected : null, point, hitAtPoint: Boolean(hitNow), sameNode: hitNow ? hitNow === old : null, hitText: hitNow?.textContent ?? null }
+      }, { old: hitHandle, point: hitBox ? { x: hitBox.x + hitBox.width / 2, y: hitBox.y + hitBox.height / 2 } : null }).catch((error) => ({ error: error.message }))
+      process.stdout.write(`[F14DIAG2] ${process.platform} ${JSON.stringify(diag2)}\n`)
+      await page.mouse.move(5, 5)
+      await card.waitFor({ state: 'detached', timeout: 2_000 })
+    }
+  })
+
+  // F14 B+ 红证（cardAt 用 mouseover 时的旧 span 取命中）：悬停「阿栀」，在 300ms 开卡窗口内让装饰重建替换该 span，卡片仍应打开。
+  // 确定性构造：先 IPC 保存改名（林栀→林雪，阿栀仍是别名、命中范围不变；林栀命中消失使段落装饰结构变化，改名用例的 [F14DIAG2] 已证实阿栀 span 会被替换），
+  // 但不广播；由页面内 mouseover 捕获监听在鼠标进入阿栀 span 的同一时刻同步派发 characters-changed，避开 IPC 保存往返。
+  // 前置（mouseover→旧 span isConnected=false 的时间差须落在 (0, 300ms)，300 = EditorSurface onOver 的开卡延时）不满足时报「前置未命中窗口」；满足后才断言卡开，失败报「卡未开」。
+  // 放在改名用例之后、⑩ 之前：需要「林栀」命中仍在（⑩ 之后林栀不再提示），且不遮挡 ⑨～改名这几条 F14 用例。
+  await record('F14 悬停开卡窗口内装饰重建替换命中节点，卡片仍打开', async () => {
+    const page = running.page
+    const card = page.getByTestId('character-hover-card')
+    const OPEN_DELAY_MS = 300
+    await page.mouse.move(5, 5)
+    await card.waitFor({ state: 'detached', timeout: 2_000 })
+    assert.equal(await card.count(), 0, '开始前无残留卡片')
+    const saveName = (name) => page.evaluate(async ({ projectId, characterId, name }) => {
+      const current = (await window.workspace.characters.list(projectId)).find((item) => item.id === characterId)
+      await window.workspace.characters.save({ id: current.id, projectId, name, aliases: current.aliases, notes: current.notes, fields: current.fields })
+    }, { projectId: ids.projectId, characterId: f14.characterId, name })
+    const currentName = () => page.evaluate(async ({ projectId, characterId }) => (await window.workspace.characters.list(projectId)).find((item) => item.id === characterId).name, { projectId: ids.projectId, characterId: f14.characterId })
+    await hitLocator(page, '阿栀').waitFor({ timeout: 2_000 })
+    await hitLocator(page, '林栀').first().waitFor({ timeout: 2_000 })
+    try {
+      await saveName('林雪')
+      assert.equal(await currentName(), '林雪', '改名已保存（尚未广播）')
+      await page.evaluate(({ projectId }) => {
+        const probe = { over: undefined, replaced: undefined }
+        window.__f14Probe = probe
+        const dom = document.querySelector('.manuscript-editor') // editorProps.attributes 的 class 即 ProseMirror 根节点
+        const onOver = (event) => {
+          const span = event.target?.closest?.('.character-hit')
+          if (!span || span.textContent !== '阿栀' || probe.over !== undefined) return
+          probe.over = performance.now()
+          dom.removeEventListener('mouseover', onOver, true)
+          const observer = new MutationObserver(() => { if (!span.isConnected && probe.replaced === undefined) { probe.replaced = performance.now(); observer.disconnect() } })
+          observer.observe(dom, { childList: true, subtree: true })
+          window.dispatchEvent(new CustomEvent('workspace:characters-changed', { detail: { projectId } }))
+        }
+        dom.addEventListener('mouseover', onOver, true)
+      }, { projectId: ids.projectId })
+      await hitLocator(page, '阿栀').hover()
+      await page.waitForFunction(() => window.__f14Probe?.replaced !== undefined, undefined, { timeout: 2_000 })
+        .catch(() => undefined)
+      const probe = await page.evaluate(() => ({ ...window.__f14Probe }))
+      const delta = probe.over !== undefined && probe.replaced !== undefined ? probe.replaced - probe.over : undefined
+      process.stdout.write(`[F14WINDOW] ${process.platform} ${JSON.stringify({ over: probe.over, replaced: probe.replaced, replacedMinusOverMs: delta, openDelayMs: OPEN_DELAY_MS })}\n`)
+      if (!(delta > 0 && delta < OPEN_DELAY_MS)) throw new Error(`前置未命中窗口：mouseover=${probe.over} 旧阿栀 span 断开=${probe.replaced} 差=${delta}ms，要求 (0, ${OPEN_DELAY_MS})ms`)
+      await card.waitFor({ timeout: 2_000 }).catch((error) => { throw new Error(`卡未开：前置已命中窗口（差=${delta.toFixed(1)}ms），2000ms 内卡片未出现：${error.message}`) })
+      assert.equal(await card.getAttribute('aria-label'), '人物卡 · 阿栀')
+    } finally {
+      await page.evaluate(() => { delete window.__f14Probe })
+      await saveName('林栀')
+      await page.evaluate(({ projectId }) => window.dispatchEvent(new CustomEvent('workspace:characters-changed', { detail: { projectId } })), { projectId: ids.projectId })
+      assert.equal(await currentName(), '林栀', 'finally 已恢复原名')
+      await hitLocator(page, '林栀').first().waitFor({ timeout: 2_000 })
+      await page.mouse.move(5, 5)
+      await card.waitFor({ state: 'detached', timeout: 2_000 })
+    }
   })
 
   // U03 选区 B+：全选 → 点编辑区（DOM 选区折叠，chip 可能仍在）→ 再 Ctrl+A，应恢复 DOM 选区 / chip /「修改」可用。
@@ -1053,9 +1253,10 @@ try {
 
   await record('F14 ⑩ 「此别名不提示」后下划线消失，重启后仍不提示', async () => {
     let page = running.page
-    await hitLocator(page, '林栀').first().hover()
     const card = page.getByTestId('character-hover-card')
-    await card.waitFor()
+    assert.equal(await card.count(), 0, '悬停前无残留卡片')
+    await hitLocator(page, '林栀').first().hover()
+    await page.waitForFunction(() => document.querySelector('[data-testid="character-hover-card"]')?.getAttribute('aria-label') === '人物卡 · 林栀', undefined, { timeout: 2_000 })
     await card.getByRole('button', { name: '此别名不提示' }).click()
     await card.waitFor({ state: 'detached' })
     await page.waitForFunction(() => document.querySelectorAll('.manuscript-editor .character-hit').length === 1)
