@@ -12,6 +12,8 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { AppDatabase, QUIT_CLOSE_LIMIT_MS, QUIT_FINAL_RESERVE_MS, QUIT_WORKER_LIMIT_MS, WAL_QUIT_BOUND_BYTES } from '../src/main/database/database'
+import { WalCheckpointer } from '../src/main/database/wal-checkpointer'
+import type { Worker } from 'node:worker_threads'
 import { ProjectService } from '../src/main/services/project-service'
 import { DocumentService } from '../src/main/services/document-service'
 import { chapterHashes } from './fixtures/wal-hash'
@@ -19,14 +21,24 @@ import { pendingBackfillBytes } from './helpers/wal-index'
 import { DatabaseSync } from 'node:sqlite'
 import { statSync } from 'node:fs'
 
-vi.setConfig({ testTimeout: 120_000 })
+vi.setConfig({ testTimeout: 120_000, hookTimeout: 60_000 })
 // P3 PR-53：WAL 约 47KB/章（#48 记录 200 章 ≈ 9.4MB）
 const CHAPTERS_WITHIN = 120
 const CHAPTERS_OVER = 400
 const dirs: string[] = []
 const dbs: AppDatabase[] = []
-afterEach(() => {
-  for (const db of dbs.splice(0)) { try { db.close() } catch { /* 已关闭 */ } }
+/** 测试侧记录检查点 worker（含被 terminate 的）：删临时目录前等它们真正 'exit'（Windows 上 worker 连接未关时 unlink 会 EBUSY） */
+const workers = new Set<Worker>()
+const workerOf = (cp: WalCheckpointer | undefined): Worker | undefined => (cp as unknown as { worker?: Worker } | undefined)?.worker
+const originalTerminate = WalCheckpointer.prototype.terminate
+WalCheckpointer.prototype.terminate = function (this: WalCheckpointer) { const w = workerOf(this); if (w) workers.add(w); originalTerminate.call(this) }
+const exited = (w: Worker): Promise<void> => new Promise((resolve) => { if (w.threadId < 0) resolve(); else { w.once('exit', () => resolve()); if (w.threadId < 0) resolve() } })
+afterEach(async () => {
+  for (const db of dbs.splice(0)) {
+    const w = workerOf(db.checkpointer); if (w) workers.add(w)
+    await db.closeAsync()
+  }
+  for (const w of [...workers]) { await exited(w); workers.delete(w) }
   dirs.splice(0).forEach((dir) => rmSync(dir, { recursive: true, force: true }))
 })
 const tempDir = (): string => { const dir = mkdtempSync(join(tmpdir(), 'inkstone-quit-')); dirs.push(dir); return dir }
@@ -43,7 +55,8 @@ describe('closeForQuit 上限（进程内）', () => {
 
   it('worker 关闭永不完成：到上限即 terminate worker、关闭主连接，重开 integrity_check ok、数据完整', async () => {
     const path = join(tempDir(), 'inkstone.sqlite')
-    const db = new AppDatabase(path, { checkpointer: { inject: { delayMs: 60_000 }, retries: 0 } }); dbs.push(db)
+    // H-W6 方案①后：worker 卡在尝试里会被立即 terminate（见 backfill-bound-hw6 / p42 子进程用例）；本用例改测「worker 空闲但 close 永不完成」的超时分支
+    const db = new AppDatabase(path, { checkpointer: { retries: 0 } }); dbs.push(db)
     const project = new ProjectService(db).create({ title: '退出书', projectType: 'novel', description: '' })
     const docs = new DocumentService(db)
     const chapter = docs.listTree(project.id).find((n) => n.type === 'chapter')!
@@ -53,7 +66,8 @@ describe('closeForQuit 上限（进程内）', () => {
     const replaced = text.replaceAll('正文', '内容')
     docs.replaceBatch({ projectId: project.id, items: [{ documentId: chapter.id, expectedRevision: current.revision, editorJson: doc(replaced), plainText: replaced, hits: 50 }], query: '正文', replacement: '内容', regex: false, caseSensitive: false })
     const cp = db.checkpointer!
-    expect(cp.busy).toBe(true)
+    await db.checkpointIdle()
+    expect(cp.attemptInFlight).toBe(false)
     const expected = chapterHashes(db.raw, project.id)
     const terminate = vi.spyOn(cp, 'terminate')
     cp.close = () => new Promise<void>(() => { /* 模拟 worker 永不回 closed */ })
@@ -118,10 +132,12 @@ describe('closeForQuit 上限（子进程，产品源码不打包）', () => {
     expect(r.closed.limitMs).toBe(5_000)
     expect(r.closed.mainClosed).toBe(true)
     log(`${mode} ${bound} segments: ${JSON.stringify(r.closed.segments)}`)
-    // worker 段硬上限（设计保证）：limit − reserve；stuck 走内部 2s terminate，dead 立即完成，都不走超时
+    // worker 段硬上限（设计保证）：limit − reserve；stuck 立即 terminate（H-W6 方案①），dead 立即完成，都不走超时
     expect(r.closed.timedOut).toBe(false)
     expect(r.closed.segments.workerLimitMs).toBe(QUIT_WORKER_LIMIT_MS)
     expect(r.closed.segments.workerMs).toBeLessThan(QUIT_WORKER_LIMIT_MS)
+    // H-W6 方案①：worker 卡在尝试里时立即 terminate，等 worker 段 < 100ms（不再等 close() 的 2s）
+    expect(r.closed.segments.workerMs).toBeLessThan(100)
     if (bound === 'within') {
       // 前提：退出时待回写量在 N 以内
       expect(r.closed.segments.pendingBytesAtQuit).toBeGreaterThan(0)
