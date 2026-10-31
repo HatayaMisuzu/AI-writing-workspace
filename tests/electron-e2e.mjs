@@ -899,6 +899,28 @@ try {
     assert.deepEqual(await docState(page, f14.hover), before, '悬停/快捷键前后 editor_json 和 revision 不变')
   })
 
+  // F14：卡片开着时鼠标不离开编辑区，从「阿栀」直接移到「林栀」，卡片应切换为林栀的命中
+  await record('F14 卡片开着时鼠标从阿栀直接移到林栀', async () => {
+    const page = running.page
+    const card = page.getByTestId('character-hover-card')
+    await page.mouse.move(5, 5)
+    await card.waitFor({ state: 'detached', timeout: 2_000 })
+    assert.equal(await card.count(), 0, '开始前无残留卡片')
+    await hitLocator(page, '阿栀').hover()
+    await card.waitFor({ timeout: 2_000 })
+    assert.equal(await card.getAttribute('aria-label'), '人物卡 · 阿栀')
+    assert.match(await card.innerText(), /匹配别名：阿栀/)
+    // 不移到空白处：直接悬停另一处命中
+    await hitLocator(page, '林栀').first().hover()
+    await page.waitForFunction(() => document.querySelector('[data-testid="character-hover-card"]')?.getAttribute('aria-label') === '人物卡 · 林栀', undefined, { timeout: 2_000 })
+    const text = await card.innerText()
+    assert.match(text, /林栀/)
+    assert.ok(!text.includes('匹配别名：阿栀'), `卡片应切换为林栀，实为：${text}`)
+    await page.mouse.move(5, 5)
+    await card.waitFor({ state: 'detached', timeout: 2_000 })
+    assert.equal(await card.count(), 0, '结束后无残留卡片')
+  })
+
   // F14 产品 B+ 主动复现（悬停掉卡）：卡已打开后触发 matcher 更换，断言卡仍在或短时再现。
   // 人物设置页会切走 section 卸载 EditorSurface，无法在真 UI 上「边悬停边改人物」；
   // 故用与 ProjectViews.flush 相同的产物路径：IPC save + 派发 workspace:characters-changed（renderer 内部事件，不改 main/preload/IPC）。
@@ -981,28 +1003,6 @@ try {
       await page.mouse.move(5, 5)
       await card.waitFor({ state: 'detached', timeout: 2_000 })
     }
-  })
-
-  // F14：卡片开着时鼠标不离开编辑区，从「阿栀」直接移到「林栀」，卡片应切换为林栀的命中
-  await record('F14 卡片开着时鼠标从阿栀直接移到林栀', async () => {
-    const page = running.page
-    const card = page.getByTestId('character-hover-card')
-    await page.mouse.move(5, 5)
-    await card.waitFor({ state: 'detached', timeout: 2_000 })
-    assert.equal(await card.count(), 0, '开始前无残留卡片')
-    await hitLocator(page, '阿栀').hover()
-    await card.waitFor({ timeout: 2_000 })
-    assert.equal(await card.getAttribute('aria-label'), '人物卡 · 阿栀')
-    assert.match(await card.innerText(), /匹配别名：阿栀/)
-    // 不移到空白处：直接悬停另一处命中
-    await hitLocator(page, '林栀').first().hover()
-    await page.waitForFunction(() => document.querySelector('[data-testid="character-hover-card"]')?.getAttribute('aria-label') === '人物卡 · 林栀', undefined, { timeout: 2_000 })
-    const text = await card.innerText()
-    assert.match(text, /林栀/)
-    assert.ok(!text.includes('匹配别名：阿栀'), `卡片应切换为林栀，实为：${text}`)
-    await page.mouse.move(5, 5)
-    await card.waitFor({ state: 'detached', timeout: 2_000 })
-    assert.equal(await card.count(), 0, '结束后无残留卡片')
   })
 
   await record('F14 ⑩ 「此别名不提示」后下划线消失，重启后仍不提示', async () => {
