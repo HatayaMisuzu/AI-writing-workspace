@@ -1,5 +1,76 @@
 import { Worker } from 'node:worker_threads'
-import { statSync } from 'node:fs'
+import { closeSync, openSync, readSync, statSync } from 'node:fs'
+import { endianness } from 'node:os'
+
+/**
+ * P3 H-W6（组长定案）：普通保存的 WAL 待回写量由后台 PASSIVE 按量维持，SQLite 自身 wal_autocheckpoint 只作保底。
+ *
+ * 诊断（diag-hw6-autocheckpoint@7115cbc，run 41154768905）：Windows 大章节连续保存的 COMMIT 长尾 250 次里 249 次落在
+ * wal_autocheckpoint 在 COMMIT 内做的同步回写上；改 200 页更差；autocheckpoint=0 + worker PASSIVE 消掉长尾，但只在
+ * 「worker 空闲且待回写 >1MB」时请求一次、之后不再跟进，连续保存时待回写涨到 76.5MB。
+ *
+ * 修法：
+ * - 待回写量 = (mxFrame − nBackfill) × (szPage + 24)，主线程直接读 -shm 的 WAL-index 头（readPendingBackfillBytes，只读 0..99 字节，
+ *   不开连接、不发 PRAGMA、不碰 120..135 的锁字节）。
+ * - 每次普通写事务提交后（noteCommit），在下一轮事件循环检查一次：worker 空闲且待回写 > BACKFILL_TRIGGER_BYTES（1MB）→ 请求一次 PASSIVE；
+ *   这一轮成功结束后若仍 > 1MB，立即再请求一次（requestIfPending 递归），直到 ≤1MB 或失败。
+ * - 保底：主连接 wal_autocheckpoint = autoCheckpointPagesFor(pageSize)（约 8MB 帧对应的页数）。SQLite 按 WAL 帧数 mxFrame 触发，
+ *   mxFrame ≥ 待回写帧数，所以待回写最迟到约 8MB 时由 COMMIT 内的同步检查点接管；worker 正常时它几乎不触发。
+ * - 回写失败 / worker 崩溃：不立即重请求（避免空转），保底照常生效，数据由 SQLite 保证完整；下一次提交再按量请求。
+ * - 不加 journal_size_limit，不做定时 PASSIVE。
+ */
+export const BACKFILL_TRIGGER_BYTES = 1024 * 1024
+export const BACKFILL_BOUND_BYTES = 8 * 1024 * 1024
+/** 保底 wal_autocheckpoint 页数：约 BACKFILL_BOUND_BYTES 的 WAL 帧（帧 = 页 + 24 字节帧头）。4096 页 → 2036。 */
+export function autoCheckpointPagesFor(pageSize: number): number {
+  const size = Number.isFinite(pageSize) && pageSize > 0 ? pageSize : 4096
+  return Math.max(1, Math.floor(BACKFILL_BOUND_BYTES / (size + 24)))
+}
+
+const SHM_READ_BYTES = 100
+const SQLITE_WAL_VERSION = 3007000
+
+function shmChecksum(buf: Buffer, bigEndian: boolean): [number, number] {
+  let s1 = 0; let s2 = 0
+  for (let i = 0; i + 8 <= buf.length; i += 8) {
+    const x0 = bigEndian ? buf.readUInt32BE(i) : buf.readUInt32LE(i)
+    const x1 = bigEndian ? buf.readUInt32BE(i + 4) : buf.readUInt32LE(i + 4)
+    s1 = (s1 + x0 + s2) >>> 0
+    s2 = (s2 + x1 + s1) >>> 0
+  }
+  return [s1, s2]
+}
+
+/**
+ * 读 -shm 的 WAL-index 头算待回写字节数；-wal 不存在或为空 = 0；读不到 / 两份头副本不一致 / 校验和不符时重试，仍失败返回 undefined。
+ * 只读前 100 字节（两份 WalIndexHdr + WalCkptInfo.nBackfill）：Windows 上 SQLite 用 LockFileEx 锁 -shm 的 120..135 字节
+ * （os_win.c WIN_SHM_BASE = 120），这是强制锁，其他句柄 ReadFile 覆盖到被独占锁住的字节会失败（ERROR_LOCK_VIOLATION）。
+ */
+export function readPendingBackfillBytes(dbPath: string, tries = 3): number | undefined {
+  let walSize = 0
+  try { walSize = statSync(`${dbPath}-wal`).size } catch { return 0 }
+  if (walSize < 32) return 0
+  const little = endianness() === 'LE'
+  for (let i = 0; i < tries; i += 1) {
+    let fd: number | undefined
+    let buf: Buffer | undefined
+    try {
+      fd = openSync(`${dbPath}-shm`, 'r')
+      const b = Buffer.alloc(SHM_READ_BYTES)
+      buf = b.subarray(0, readSync(fd, b, 0, SHM_READ_BYTES, 0))
+    } catch { buf = undefined } finally { if (fd !== undefined) try { closeSync(fd) } catch { /* ignore */ } }
+    if (!buf || buf.length < SHM_READ_BYTES) continue
+    const u32 = (o: number): number => (little ? buf!.readUInt32LE(o) : buf!.readUInt32BE(o))
+    if (!buf.subarray(0, 48).equals(buf.subarray(48, 96))) continue
+    if (u32(0) !== SQLITE_WAL_VERSION || buf[12] !== 1) continue
+    const [c1, c2] = shmChecksum(buf.subarray(0, 40), !little)
+    if (c1 !== u32(40) || c2 !== u32(44)) continue
+    const sz = little ? buf.readUInt16LE(14) : buf.readUInt16BE(14)
+    const pageSize = sz === 1 ? 65536 : sz
+    return Math.max(0, u32(16) - u32(96)) * (pageSize + 24)
+  }
+  return undefined
+}
 
 /**
  * P3 PR-2b（组长 2026-10-30 批准方案 1）：大批量事务提交后，把 WAL 检查点移出主线程。
@@ -43,8 +114,12 @@ export interface WalCheckpointerOptions {
   onAttempt?: (attempt: { ok: boolean; ms: number; busy?: number; log?: number; checkpointed?: number; error?: string }) => void
   /** P3 PR-44：主连接写入代数（每次写入递增）；每轮开始与结束各读一次，判定本轮期间是否有新写入 */
   generation?: () => number
-  /** 仅测试：注入 worker 内失败 / 延迟；delaySchedule[i] = 该 worker 第 i 次尝试的延迟（超出部分为 0） */
-  inject?: { failWith?: string; delayMs?: number; delaySchedule?: number[] }
+  /** H-W6：按量后台回写；false = 关闭（只剩批量路径与 wal_autocheckpoint 保底） */
+  backfill?: { triggerBytes?: number } | false
+  /** H-W6：调用方判断此刻能否按量请求（如批量暂停期间、主库已关闭时返回 false） */
+  shouldTrigger?: () => boolean
+  /** 仅测试：注入 worker 内失败 / 延迟 / 崩溃；delaySchedule[i] = 该 worker 第 i 次尝试的延迟（超出部分为 0）；crash = 每个 worker 第一次尝试时线程直接退出 */
+  inject?: { failWith?: string; delayMs?: number; delaySchedule?: number[]; crash?: boolean }
 }
 
 const WORKER_SOURCE = `
@@ -64,6 +139,7 @@ parentPort.on('message', (message) => {
   const delay = Array.isArray(inject.delaySchedule) ? (inject.delaySchedule[attemptIndex] || 0) : inject.delayMs
   attemptIndex += 1
   if (delay) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delay)
+  if (inject.crash) process.exit(1)
   const started = performance.now()
   try {
     if (inject.failWith) throw new Error(inject.failWith)
@@ -94,6 +170,14 @@ export class WalCheckpointer {
   private queued?: Promise<CheckpointOutcome>
   private closing?: Promise<void>
   private readonly log: (message: string) => void
+  /** H-W6 按量回写阈值（字节）；undefined = 关闭 */
+  readonly triggerBytes?: number
+  /** H-W6：按量检查读到的待回写量峰值 / 最近值、读失败次数、按量请求次数（诊断与测试） */
+  pendingPeakBytes = 0
+  lastPendingBytes?: number
+  pendingReadFailures = 0
+  backfillRequests = 0
+  private checkScheduled = false
 
   constructor(private readonly path: string, private readonly options: WalCheckpointerOptions = {}) {
     this.retries = options.retries ?? 3
@@ -101,6 +185,39 @@ export class WalCheckpointer {
     this.walWarnBytes = options.walWarnBytes ?? 256 * 1024 * 1024
     this.failWarnCount = options.failWarnCount ?? 3
     this.log = options.log ?? ((message) => console.warn(message))
+    this.triggerBytes = options.backfill === false ? undefined : (options.backfill?.triggerBytes ?? BACKFILL_TRIGGER_BYTES)
+  }
+
+  /** 主库读待回写量（见 readPendingBackfillBytes）；同时记峰值 */
+  pendingBytes(): number | undefined {
+    const value = readPendingBackfillBytes(this.path)
+    if (value === undefined) this.pendingReadFailures += 1
+    else {
+      this.lastPendingBytes = value
+      if (value > this.pendingPeakBytes) this.pendingPeakBytes = value
+    }
+    return value
+  }
+
+  /**
+   * H-W6：主连接每次普通写事务 COMMIT 后调用。检查推迟到下一轮事件循环（setImmediate，同一轮多次提交合并为一次）：
+   * 不占 COMMIT 路径；同步连续写（如建库、迁移、测试 setup）结束后再看一次。
+   */
+  noteCommit(): void {
+    if (this.triggerBytes === undefined || this.closing || this.checkScheduled) return
+    this.checkScheduled = true
+    setImmediate(() => { this.checkScheduled = false; this.requestIfPending() })
+  }
+
+  /** worker 空闲且待回写 > 阈值 → 请求一次 PASSIVE；该轮成功后仍 > 阈值则立即再请求。读不到待回写量时按超阈值处理（保守）。 */
+  requestIfPending(): void {
+    const threshold = this.triggerBytes
+    if (threshold === undefined || this.closing || this.busy) return
+    try { if (this.options.shouldTrigger && !this.options.shouldTrigger()) return } catch { return }
+    const pending = this.pendingBytes()
+    if (pending !== undefined && pending <= threshold) return
+    this.backfillRequests += 1
+    void this.request().then((outcome) => { if (outcome.ok) this.requestIfPending() })
   }
 
   get busy(): boolean { return Boolean(this.running || this.queued) }

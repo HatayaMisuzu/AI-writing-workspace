@@ -2,7 +2,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { mkdirSync, statSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { schema } from './schema'
-import { WalCheckpointer, type WalCheckpointerOptions } from './wal-checkpointer'
+import { WalCheckpointer, autoCheckpointPagesFor, type WalCheckpointerOptions } from './wal-checkpointer'
 
 export const CURRENT_SCHEMA_VERSION = 10
 /** 退出时等后台检查点 worker 关闭的上限（ms）；超时则 terminate worker、直接关主连接后退出（P3 PR-42）。 */
@@ -89,7 +89,16 @@ export class AppDatabase {
     this.releaseMaxRounds = options.release?.maxRounds ?? RELEASE_MAX_ROUNDS
     this.releaseMaxMs = options.release?.maxMs ?? RELEASE_MAX_MS
     if (path !== ':memory:' && options.checkpointer !== false) {
-      this.checkpointer = new WalCheckpointer(path, { ...(options.checkpointer ?? {}), generation: () => this.writeGeneration() })
+      this.checkpointer = new WalCheckpointer(path, {
+        ...(options.checkpointer ?? {}),
+        generation: () => this.writeGeneration(),
+        shouldTrigger: () => !this.isClosed && this.autoCheckpointHolds === 0
+      })
+      // H-W6：wal_autocheckpoint 只作保底，阈值 ≈ 8MB 待回写帧（见 wal-checkpointer.ts 顶部注释）
+      if (this.checkpointer.triggerBytes !== undefined) {
+        const pageSize = Number((this.raw.prepare('PRAGMA page_size').get() as { page_size: number }).page_size)
+        this.raw.exec(`PRAGMA wal_autocheckpoint = ${autoCheckpointPagesFor(pageSize)}`)
+      }
     }
   }
 
@@ -269,6 +278,8 @@ export class AppDatabase {
         this.writesDuringHold += 1
         void this.checkpointer.request()
       }
+      // H-W6：普通写入后按待回写量请求后台 PASSIVE（批量暂停期间由释放循环负责）
+      if (!held) this.checkpointer?.noteCommit()
       return result
     } catch (error) {
       this.raw.exec('ROLLBACK')
