@@ -1,6 +1,6 @@
 # 数据恢复指南
 
-> 依据 origin/main `a68a3900cc8c9416687e4d4f07d05371251e0b96` 核对（「依据」一节的行号按 `6ca96b8` 记录，之后 main 只改了 `src/main/index.ts`、`src/main/ipc/register.ts`、`src/main/database/*`、`src/shared/ipc.ts`，相关行号可能偏移几行）。
+> 依据 origin/main `5679058ea0344773a523fee14b80ae46b75768fa` 核对（「依据」一节的行号均按此提交逐条核对）。
 
 ## 1. 崩溃、断电之后
 
@@ -58,22 +58,24 @@
 ### 建议
 - 换电脑、重装系统、升级之前，给每部作品导出一次备份，再另外拷一份到 U 盘或网盘。
 - 也可以在**完全退出墨记后**，把整个数据目录（含 `inkstone.sqlite` 和同名的 `-wal`、`-shm` 文件）一起复制保存（推断，未在代码中提供此功能）。
+  - 数据目录位置（安装版）：Windows 为 `%APPDATA%\墨记\`（通常是 `C:\Users\<用户名>\AppData\Roaming\墨记\`）；Linux 为 `$XDG_CONFIG_HOME/墨记/`，未设置 `XDG_CONFIG_HOME` 时为 `~/.config/墨记/`。墨记目前只提供 Windows 和 Linux 版本。（根据 Electron 文档与代码推断，未在真机实测。）
 
 ---
 
 ## 依据
 
-基于 origin/main `6ca96b83ec487eec18a7aee6c5f595241c062108`。
+基于 origin/main `5679058ea0344773a523fee14b80ae46b75768fa`。
 
 - 自动保存节奏与 flush 路径：`src/renderer/src/services/save-coordinator.ts:10–16,43–56`（`SAVE_IDLE_DELAY_MS = 700`、`SAVE_MAX_WAIT_MS = 2000`、`schedule`、`flush`）。卡顿时可能更晚：定时器依赖 `setTimeout`（06-release-gap.md「保存调度没有兜底」）。
-- 保存在事务内：`src/main/services/document-service.ts:229`（`saveContent` → `db.transaction`）；事务实现 `src/main/database/database.ts:187`（`BEGIN IMMEDIATE`）。
+- 保存在事务内：`src/main/services/document-service.ts:229`（`saveContent` → `db.transaction`）；事务实现 `src/main/database/database.ts:259`（`BEGIN IMMEDIATE`）。
+- 数据目录：`src/main/index.ts:49`（`join(app.getPath('userData'), 'inkstone.sqlite')`）；`src/main` 中无 `app.setName` / `app.setPath`；Electron 的 `userData` 默认为 `appData` + 应用名，应用名优先取 package.json 的 `productName`（「墨记」），见 [Electron app 文档](https://www.electronjs.org/docs/latest/api/app)；打包目标只有 Windows NSIS 与 Linux dir（package.json `build.win` / `build.linux`）。未在真机实测。
 - 退出上限：`src/main/database/database.ts`（`QUIT_CLOSE_LIMIT_MS = 5_000`、`closeForQuit`）、`src/main/index.ts`（`will-quit`）。
-- WAL：`src/main/database/schema.ts:2–4`；启动时打开库、迁移：`src/main/database/database.ts:47–64`。无额外启动恢复逻辑、无崩溃处理器：`src/main` 中 grep `uncaughtException|render-process-gone` 无结果（06-release-gap.md）。
-- 快照触发：定时 10 分钟 `document-service.ts:224–228`；大段删除 >1000 字 `document-service.ts:222–223`；AI 修改前 `src/main/services/patch-service.ts:58,90`、`src/renderer/src/components/EditorSurface.tsx:256`；手动 `src/renderer/src/screens/ProjectViews.tsx:123`；快照类型 `src/main/ipc/schemas.ts:84`；显示文案 `src/renderer/src/services/snapshot-label.ts:3–6`。
+- WAL：`src/main/database/schema.ts:2–4`；启动时打开库、迁移：`src/main/database/database.ts:77–94`。无额外启动恢复逻辑、无崩溃处理器：`src/main` 中 grep `uncaughtException|render-process-gone` 无结果（06-release-gap.md）。
+- 快照触发：定时 10 分钟 `document-service.ts:224–228`；大段删除 >1000 字 `document-service.ts:222–223`；AI 修改前 `src/main/services/patch-service.ts:58,90`、`src/renderer/src/components/EditorSurface.tsx:263`；手动 `src/renderer/src/screens/ProjectViews.tsx:123`；快照类型 `src/main/ipc/schemas.ts:84`；显示文案 `src/renderer/src/services/snapshot-label.ts:3–6`。
 - 恢复与恢复前备份、扣回 AI 字数：`document-service.ts:395–419`（`restoreSnapshot`）。
 - 无快照上限：document-service/schema 中无修剪逻辑（06-release-gap.md「快照没有保留上限」）。
-- 全书替换与整批恢复：`document-service.ts:305–333`（`replaceBatch`，出错整批 ROLLBACK）、`337–365`（`restoreBatch`，跳过 changed/deleted，写 `pre_restore`）；IPC `src/main/ipc/register.ts:121–123`；界面 `src/renderer/src/screens/BookFindView.tsx:106–115,133,148,151`；只保留最近一次批次的状态 `BookFindView.tsx:24`（状态放在 WorkspaceScreen 的 `useState`，`WorkspaceScreen.tsx:161`，不落库）。`restoreBatch` 在 renderer 中只有 `BookFindView.tsx:108` 一处调用，历史页 `ProjectViews.tsx:116–124` 只有逐章恢复。
-- 撤销栈清空：`src/renderer/src/screens/WorkspaceScreen.tsx:164`。
-- 备份导出：`src/main/ipc/register.ts:339–346`；内容 `src/main/services/backup-service.ts:256–275`（`exportProject`）；原子写 `backup-service.ts:76–89`（临时文件 + rename）；全局模板只存指纹 `backup-service.ts:273`；全局词表/模板不随作品备份 `src/renderer/src/screens/ProofingView.tsx:58`、`PromptTemplatesView.tsx:113`。
-- 备份导入：`register.ts:347–351`；`backup-service.ts:277–330`（100 MiB 上限 `:58,279`、校验 `:283`、新 id `:288–302`、标题加「（已导入）」`:328`、单事务 `:326`）。
-- 作品库菜单文案：`src/renderer/src/screens/LibraryScreen.tsx:42,65`（「导入备份」「创建项目备份」）。
+- 全书替换与整批恢复：`document-service.ts:305–333`（`replaceBatch`，出错整批 ROLLBACK）、`337–365`（`restoreBatch`，跳过 changed/deleted，写 `pre_restore`）；IPC `src/main/ipc/register.ts:127–128`；界面 `src/renderer/src/screens/BookFindView.tsx:106–115,133,148,151`；只保留最近一次批次的状态 `BookFindView.tsx:24`（状态放在 WorkspaceScreen 的 `useState`，`WorkspaceScreen.tsx:175` 的 `lastBookBatch`，经 `:316` 传给 `BookFindView`，不落库）。`restoreBatch` 在 renderer 中只有 `BookFindView.tsx:108` 一处调用，历史页 `ProjectViews.tsx:116–124` 只有逐章恢复。
+- 撤销栈清空：`src/renderer/src/screens/WorkspaceScreen.tsx:178`。
+- 备份导出：`src/main/ipc/register.ts:346–353`（`backup:export-project`）；内容 `src/main/services/backup-service.ts:256–275`（`exportProject`）；原子写 `backup-service.ts:76–89`（临时文件 + rename）；全局模板只存指纹 `backup-service.ts:273`；全局词表/模板不随作品备份 `src/renderer/src/screens/ProofingView.tsx:58`、`PromptTemplatesView.tsx:114`。
+- 备份导入：`register.ts:354–358`（`backup:import-project`）；`backup-service.ts:277–330`（100 MiB 上限 `:58,279`、校验 `:283`、新 id `:288–302`、标题加「（已导入）」`:328`、单事务 `:326`）。
+- 作品库菜单文案：`src/renderer/src/screens/LibraryScreen.tsx:43,66`（「导入备份」「创建项目备份」）。

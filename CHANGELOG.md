@@ -4,8 +4,6 @@
 
 ## [0.4.0] - 未发布
 
-> 版本号已定为 0.4.0，`package.json` 中的版本号提交另行处理（见对应 PR 说明）。
-
 ### 安全
 
 - S0: 升级 zod 至 ^4.6.7 修复 GHSA-mrhx-c7xc-m3w5（[#1](https://github.com/HatayaMisuzu/AI-writing-workspace/pull/1)，[`7975b57`](https://github.com/HatayaMisuzu/AI-writing-workspace/commit/7975b57)）
@@ -56,6 +54,7 @@
 - P3：will-quit 5s 上限 + diagnostics 门控（无 dbPath）+ quiet===true（A）（[#43](https://github.com/HatayaMisuzu/AI-writing-workspace/pull/43)，[`4d6d5fd`](https://github.com/HatayaMisuzu/AI-writing-workspace/commit/4d6d5fd)）
 - P3：长段 Ctrl+End / 校对定位到段末不再卡住（renderer）[B+]（[#44](https://github.com/HatayaMisuzu/AI-writing-workspace/pull/44)，[`8678446`](https://github.com/HatayaMisuzu/AI-writing-workspace/commit/8678446)）
 - P3 夜间小修：空书名、记忆提案报错文案、关闭校对折叠选区、重命名同步大标题、窄侧栏徽标（B+）（[#47](https://github.com/HatayaMisuzu/AI-writing-workspace/pull/47)，[`9fe3f12`](https://github.com/HatayaMisuzu/AI-writing-workspace/commit/9fe3f12)）
+- P3 PR-53（A）：退出预算按工作量限制——worker 段硬上限 + 退出前检查点 + journal_size_limit/定期写回；WAL ≤ 8MB 时总时长 < 5s（[#51](https://github.com/HatayaMisuzu/AI-writing-workspace/pull/51)，[`5679058`](https://github.com/HatayaMisuzu/AI-writing-workspace/commit/5679058)）
 
 ### 性能
 
