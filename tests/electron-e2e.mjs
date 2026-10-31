@@ -2626,29 +2626,42 @@ try {
       const q = (p) => gaps.length ? +gaps[Math.min(gaps.length - 1, Math.ceil(gaps.length * p) - 1)].toFixed(1) : null
       return { n: gaps.length, p50: q(0.5), p95: q(0.95), max: gaps.length ? +gaps.at(-1).toFixed(1) : null }
     }
+    // [KEYDIAG-R] 整段诊断包 try/catch：出错只记日志，永不影响用例结果。
+    // Linux 下 running.app 不是 ElectronApplication（见 stopApp 的 running.app.kill 分支），无 .evaluate 时窗口项记 NOT_AVAILABLE。
     const keyDiagR = async (stage, sampleRaf = true) => {
-      const r = await page.evaluate((sampleRaf) => new Promise((resolve) => {
-        const info = { hasFocus: document.hasFocus(), visibility: document.visibilityState }
-        if (!sampleRaf) { resolve({ ...info, ts: [] }); return }
-        // 按键段外采样 rAF 间隔 1s
-        const ts = []; const end = performance.now() + 1000
-        const loop = (t) => { ts.push(t); if (t < end) requestAnimationFrame(loop); else resolve({ ...info, ts }) }
-        requestAnimationFrame(loop)
-      }), sampleRaf)
-      const win = await running.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map((w) => ({ focused: w.isFocused(), minimized: w.isMinimized(), visible: w.isVisible() }))).catch((error) => ({ error: String(error) }))
-      process.stdout.write(`[KEYDIAG-R] ${JSON.stringify({ stage, hasFocus: r.hasFocus, visibility: r.visibility, windows: win, rafOutside: rafStats(r.ts) })}\n`)
+      try {
+        const r = await page.evaluate((sampleRaf) => new Promise((resolve) => {
+          const info = { hasFocus: document.hasFocus(), visibility: document.visibilityState }
+          if (!sampleRaf) { resolve({ ...info, ts: [] }); return }
+          // 仅按键段外（段前/段后）采样 rAF 间隔 1s
+          const ts = []; const end = performance.now() + 1000
+          const loop = (t) => { ts.push(t); if (t < end) requestAnimationFrame(loop); else resolve({ ...info, ts }) }
+          requestAnimationFrame(loop)
+        }), sampleRaf)
+        let win = 'NOT_AVAILABLE'
+        if (typeof running.app?.evaluate === 'function') {
+          try { win = await running.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map((w) => ({ focused: w.isFocused(), minimized: w.isMinimized(), visible: w.isVisible() }))) } catch (error) { win = { error: String(error) } }
+        }
+        process.stdout.write(`[KEYDIAG-R] ${JSON.stringify({ stage, hasFocus: r.hasFocus, visibility: r.visibility, windows: win, rafOutside: rafStats(r.ts) })}\n`)
+      } catch (error) {
+        process.stdout.write(`[KEYDIAG-R] ${JSON.stringify({ stage, diagError: String(error) })}\n`)
+      }
     }
     const keystrokes = async (label = 'keys') => {
       await page.locator('.manuscript-editor p').first().click(); await page.keyboard.press('End')
-      await page.evaluate(() => { if (window.__treeKeys) return; window.__treeKeys = []; window.addEventListener('keydown', (event) => { const start = event.timeStamp; requestAnimationFrame(() => window.__treeKeys.push(performance.now() - start)) }, true) })
+      await page.evaluate(() => { if (window.__treeKeys) return; window.__treeKeys = []; window.addEventListener('keydown', (event) => { const start = event.timeStamp; requestAnimationFrame((t) => { window.__treeKeys.push(performance.now() - start); if (window.__treeKeyRafTs) window.__treeKeyRafTs.push(t) }) }, true) })
       for (let i = 0; i < 20; i += 1) { await page.keyboard.press('a'); await page.waitForTimeout(60) }
       await page.waitForTimeout(1000)
-      await page.evaluate(() => { window.__treeKeys = []; window.__rafTs = []; window.__rafOn = true; const loop = (t) => { if (!window.__rafOn) return; window.__rafTs.push(t); requestAnimationFrame(loop) }; requestAnimationFrame(loop) })
+      // [KEYDIAG-R] 段内不挂独立 rAF 循环；只复用测量本身的 keydown→rAF 回调时间戳（window.__treeKeyRafTs），事后推间隔
+      await page.evaluate(() => { window.__treeKeys = []; window.__treeKeyRafTs = [] })
       for (let i = 0; i < 120; i += 1) { await page.keyboard.press('a'); await page.waitForTimeout(60) }
       await page.waitForTimeout(800)
       const s = await page.evaluate(() => window.__treeKeys.toSorted((a, b) => a - b))
-      const rafTs = await page.evaluate(() => { window.__rafOn = false; const ts = window.__rafTs; window.__rafTs = []; return ts })
-      process.stdout.write(`[KEYDIAG-R] ${JSON.stringify({ stage: `${label}-during`, rafDuring: rafStats(rafTs) })}\n`)
+      try {
+        const rafTs = await page.evaluate(() => { const ts = window.__treeKeyRafTs || []; window.__treeKeyRafTs = null; return ts })
+        // 回调约每 60ms 一次（每键一个），间隔 ≈ 按键间隔 + 帧对齐抖动，非逐帧间隔
+        process.stdout.write(`[KEYDIAG-R] ${JSON.stringify({ stage: `${label}-during`, keyRafCallbackGaps: rafStats(rafTs) })}\n`)
+      } catch (error) { process.stdout.write(`[KEYDIAG-R] ${JSON.stringify({ stage: `${label}-during`, diagError: String(error) })}\n`) }
       assert.ok(s.length >= 118, `采样 ${s.length} 应接近 120`)
       const q = (p) => s[Math.min(s.length - 1, Math.ceil(s.length * p) - 1)]
       return { p50: q(0.5), p95: q(0.95), max: s.at(-1), n: s.length }
