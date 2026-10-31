@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { AIStreamEvent, WorkspaceApi } from '../shared/ipc'
 import { AIEventRouter } from './ai-event-router'
+import { DEV_DIAGNOSTICS_ARG } from '../shared/dev-diagnostics'
 
 const invoke = <T>(channel: string, ...args: unknown[]): Promise<T> => ipcRenderer.invoke(channel, ...args) as Promise<T>
 const aiEvents = new AIEventRouter()
@@ -88,7 +89,6 @@ const api: WorkspaceApi = {
     testUrl: (input) => invoke('providers:test-url', input)
   },
   network: { blockedLog: () => invoke('network:blocked-log') },
-  diagnostics: { walCheckpoint: () => invoke('diagnostics:wal-checkpoint') },
   writing: {
     getDay: (projectId, date) => invoke('writing:get-day', projectId, date),
     listRange: (projectId, fromDate, toDate) => invoke('writing:list-range', projectId, fromDate, toDate),
@@ -133,5 +133,8 @@ const api: WorkspaceApi = {
     previewContext: (request) => invoke('ai:preview-context', request)
   }
 }
+
+// 开发用诊断接口：只有 main 在未打包时追加 DEV_DIAGNOSTICS_ARG 才暴露；打包版 window.workspace 上没有这个键。
+if (process.argv.includes(DEV_DIAGNOSTICS_ARG)) api.__devWalCheckpoint = () => invoke('diagnostics:wal-checkpoint')
 
 contextBridge.exposeInMainWorld('workspace', api)

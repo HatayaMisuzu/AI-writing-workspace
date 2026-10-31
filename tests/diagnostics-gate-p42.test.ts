@@ -49,9 +49,10 @@ describe('diagnostics:wal-checkpoint 注册门槛', () => {
     expect(JSON.stringify(result)).not.toMatch(/sqlite|[\\/]/)
   })
 
-  it('源码守卫：index.ts 以 !app.isPackaged 决定是否注册；register.ts 只在 options.diagnostics === true 时注册且不返回 db.path', () => {
+  it('源码守卫：index.ts 以 devDiagnosticsEnabled()（= !app.isPackaged） 决定是否注册；register.ts 只在 options.diagnostics === true 时注册且不返回 db.path', () => {
     const index = readFileSync(resolve('src/main/index.ts'), 'utf8')
-    expect(index).toMatch(/registerIpc\(database, codec, \{[\s\S]*?\}, \{[\s\S]*?diagnostics: !app\.isPackaged[\s\S]*?\}\)/)
+    expect(index).toMatch(/const devDiagnosticsEnabled = \(\): boolean => !app\.isPackaged\n/)
+    expect(index).toMatch(/registerIpc\(database, codec, \{[\s\S]*?\}, \{[\s\S]*?diagnostics: devDiagnosticsEnabled\(\)[\s\S]*?\}\)/)
     const register = readFileSync(resolve('src/main/ipc/register.ts'), 'utf8')
     expect(register).toMatch(/if \(options\.diagnostics === true\) \{\s*handle\('diagnostics:wal-checkpoint'/)
     expect(register.match(/handle\('diagnostics:/g)).toHaveLength(1)

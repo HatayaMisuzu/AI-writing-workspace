@@ -26,10 +26,18 @@ try {
   page.setDefaultTimeout(15_000)
   await page.getByRole('button', { name: '新建作品' }).first().waitFor()
   assert.equal(await page.title(), '墨记')
-  // P3 PR-42：生产（打包）构建不注册诊断通道，renderer 调用被拒绝
-  const diagnostics = await page.evaluate(() => window.workspace.diagnostics.walCheckpoint().then(() => 'REGISTERED', (error) => String(error?.message ?? error)))
-  assert.match(diagnostics, /No handler registered for 'diagnostics:wal-checkpoint'/, `packaged build must not register diagnostics:wal-checkpoint, got: ${diagnostics}`)
-  process.stdout.write(`✓ packaged build: diagnostics:wal-checkpoint not registered (${diagnostics})\n`)
+  // P3 发布包：打包版 app.isPackaged=true；preload 不暴露开发用诊断接口，main 也不注册对应 IPC
+  assert.equal(await app.evaluate(({ app: electronApp }) => electronApp.isPackaged), true, 'package smoke must run a packaged build')
+  const exposed = await page.evaluate(() => ({ dev: typeof window.workspace.__devWalCheckpoint, legacy: 'diagnostics' in window.workspace, keys: Object.keys(window.workspace).filter((key) => key.startsWith('__dev')) }))
+  assert.deepEqual(exposed, { dev: 'undefined', legacy: false, keys: [] }, `packaged preload must not expose dev diagnostics, got: ${JSON.stringify(exposed)}`)
+  // 公开行为：同一 channel 已有 handler 时 ipcMain.handle 会抛错。能注册成功 = 打包版 main 没注册该 IPC；探测后立即移除。
+  const ipcProbe = await app.evaluate(({ ipcMain }) => {
+    try { ipcMain.handle('diagnostics:wal-checkpoint', () => null) } catch (error) { return `REGISTERED: ${error?.message ?? error}` }
+    ipcMain.removeHandler('diagnostics:wal-checkpoint')
+    return 'NOT_REGISTERED'
+  })
+  assert.equal(ipcProbe, 'NOT_REGISTERED', `packaged build must not register diagnostics:wal-checkpoint, got: ${ipcProbe}`)
+  process.stdout.write(`✓ packaged build: __devWalCheckpoint not exposed, diagnostics:wal-checkpoint not registered\n`)
   process.stdout.write(
     `✓ packaged app launched with Electron ${runtimeElectronVersion} and isolated userData: ${executablePath}\n`
   )

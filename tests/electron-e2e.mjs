@@ -2110,7 +2110,7 @@ try {
     assert.equal(await page.getByTestId('book-replace-error').count(), 0)
     // 后台检查点进行期间：IPC 往返、普通保存（第2章，未参与替换）、切章读取（第500章）各 ≤300ms；然后等检查点结束记录耗时
     const probeCheckpoint = (label) => page.evaluate(async ({ projectId, label }) => {
-      const d = window.workspace.diagnostics
+      const d = { walCheckpoint: window.workspace.__devWalCheckpoint }
       const before = await d.walCheckpoint()
       let t = performance.now(); await window.workspace.projects.list(true); const ipcMs = performance.now() - t
       const tree = await window.workspace.documents.tree(projectId)
@@ -2165,7 +2165,7 @@ try {
       }, { projectId: book.id, started: saveStarted })
     }, join(process.cwd(), 'e2e-artifacts', `first-keystroke-after-replace-${process.platform}.cpuprofile`))
     // P3 PR-44 commit 1：主进程侧计时（diagnostics 通道，非打包）——替换后第一次普通保存的 COMMIT 不应再同步做大检查点
-    const walAfterSave = await page.evaluate(() => window.workspace.diagnostics.walCheckpoint())
+    const walAfterSave = await page.evaluate(() => window.workspace.__devWalCheckpoint())
     const firstCommit = walAfterSave.commits.find((c) => c.at >= saveStarted)
     process.stdout.write(`P3 book-replace first save after replace: main COMMIT ${firstCommit?.commitMs}ms autoCheckpoint=${firstCommit?.autoCheckpoint} (limit 50ms); releases ${JSON.stringify(walAfterSave.releases)}; commits since keystroke ${JSON.stringify(walAfterSave.commits.filter((c) => c.at >= saveStarted))}\n`)
     assert.ok(firstCommit, '替换后第一次保存应有主进程 COMMIT 记录')
