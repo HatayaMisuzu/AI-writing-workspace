@@ -64,14 +64,68 @@ const main = async (): Promise<void> => {
   }
   const status = { mode, attempts, autoCheckpoint: db.autoCheckpoint, busy: db.checkpointer?.busy ?? false, last: db.checkpointer?.last ?? null, walBytes: db.checkpointer?.walBytes() ?? 0 }
   process.stdout.write(`READY ${JSON.stringify({ status, projectId: project.id, hashes: chapterHashes(db.raw, project.id) })}\n`)
+  const readyAt = performance.now()
   if (mode === 'quit-stuck' || mode === 'quit-dead') {
     // 分段计时由 closeForQuit 自己返回（P3 PR-53：worker 段 / 退出前检查点 / 主连接 close）
     const walBefore = db.checkpointer?.walBytes() ?? 0
     // 待回写量（新口径 N）：(mxFrame − nBackfill) × 帧大小
     const pendingBytesAtQuit = pendingBackfillBytes(dbPath)
+    // H-W6 / p42 分段：只在本子进程里包一层计时（不改产品退出逻辑），把 closeForQuit 内部各步时间点（相对 quitStarted，ms）打出来，
+    // 各段相加 = closeForQuit 总用时。子进程没有窗口，「窗口销毁」段不存在。
+    let base = performance.now()
+    const at: Record<string, number> = {}
+    const mark = (k: string): void => { if (at[k] === undefined) at[k] = Math.round((performance.now() - base) * 10) / 10 }
+    type W = { terminate(): Promise<number>; once(event: 'exit', fn: () => void): void }
+    const cpAny = db.checkpointer as unknown as { worker?: W; close(): Promise<void> } | undefined
+    const w = cpAny?.worker
+    if (w) {
+      const origTerminate = w.terminate.bind(w)
+      w.terminate = () => { mark('workerTerminateCalled'); return origTerminate() }
+      w.once('exit', () => mark('workerExitEvent'))
+    }
+    if (cpAny) {
+      const origCpClose = cpAny.close.bind(cpAny)
+      cpAny.close = () => { mark('cpCloseCalled'); const p = origCpClose(); void p.then(() => mark('cpCloseResolved')); return p }
+    }
+    type St = { get(): unknown }
+    const raw = db.raw as unknown as { prepare(sql: string): St; close(): void }
+    const origPrepare = raw.prepare.bind(raw)
+    raw.prepare = (sql: string): St => {
+      const truncate = sql.includes('TRUNCATE')
+      if (truncate) mark('truncatePrepareStart')
+      const st = origPrepare(sql)
+      if (!truncate) return st
+      mark('truncatePrepared')
+      const origGet = st.get.bind(st)
+      st.get = () => { mark('truncateGetStart'); try { return origGet() } finally { mark('truncateGetEnd') } }
+      return st
+    }
+    const origRawClose = raw.close.bind(raw)
+    raw.close = () => { mark('mainCloseStart'); try { origRawClose() } finally { mark('mainCloseEnd') } }
     const quitStarted = performance.now()
+    base = quitStarted
     const result = await db.closeForQuit(QUIT_CLOSE_LIMIT_MS)
-    const segments = { ...result.segments, walBytesAtQuit: walBefore, pendingBytesAtQuit }
+    mark('resolved')
+    const gap = (a: number | undefined, b: number | undefined): number | null => (a === undefined || b === undefined ? null : Math.round((b - a) * 10) / 10)
+    // 段：等 worker（到 terminate / exit 事件 / close 解析）→ 进 TRUNCATE 前的空隙（race 收尾 + stat）→ TRUNCATE prepare → TRUNCATE 执行 → close 前空隙（stat）→ 主连接 close → 返回
+    const workerEnd = at.cpCloseResolved ?? at.workerExitEvent ?? 0
+    const timeline = {
+      at,
+      split: {
+        workerUntilTerminate: gap(0, at.workerTerminateCalled),
+        workerTerminateToExit: gap(at.workerTerminateCalled, at.workerExitEvent),
+        workerWaitTotal: gap(0, workerEnd),
+        gapBeforeTruncate: gap(workerEnd, at.truncatePrepareStart),
+        truncatePrepare: gap(at.truncatePrepareStart, at.truncatePrepared),
+        truncateRun: gap(at.truncateGetStart, at.truncateGetEnd),
+        gapBeforeClose: gap(at.truncateGetEnd, at.mainCloseStart),
+        mainClose: gap(at.mainCloseStart, at.mainCloseEnd),
+        afterClose: gap(at.mainCloseEnd, at.resolved),
+        total: at.resolved
+      },
+      preQuitMs: Math.round(quitStarted - readyAt)
+    }
+    const segments = { ...result.segments, walBytesAtQuit: walBefore, pendingBytesAtQuit, timeline }
     if (process.env.INKSTONE_QUIT_TEST_DIAG === '1') process.stderr.write(`QDIAG ${JSON.stringify({ quitStarted: Math.round(quitStarted), resolved: Math.round(performance.now()), segments })}\n`)
     process.stdout.write(`CLOSED ${JSON.stringify({ timedOut: result.timedOut, ms: result.ms, limitMs: QUIT_CLOSE_LIMIT_MS, mainClosed: db.closed, segments })}\n`)
     process.exit(0)
