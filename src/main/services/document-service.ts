@@ -303,6 +303,8 @@ export class DocumentService {
    * - 当前版本：revision 等于当前正文 revision 的快照（含刚写入的这一条；正文本身在 document_contents，不在本表）；
    * - 整批恢复点：reason = manual 且 metadata.kind = book_replace（restoreBatch 按 batchId 读的正是这些行），
    *   以及整批恢复前打的 pre_restore（metadata 带 batchId）。
+   * 普通手动快照（metadata 为 {}）可淘汰：谓词用 IFNULL / IS NOT NULL 保证不出现 NULL（三值逻辑下 NOT NULL 仍是 NULL 会把行整行排除）；
+   *   metadata_json 列 NOT NULL DEFAULT '{}'，非法 JSON 经 json_valid 守卫按「无 kind / 无 batchId」处理（可淘汰，且不会让 json_extract 报错导致保存失败）。
    * 受保护的点本身超过上限时全部保留，只淘汰其余可淘汰的快照（此时总数 > 上限）。
    * 失败直接抛出，由外层事务 / SAVEPOINT 回滚。
    */
@@ -311,8 +313,8 @@ export class DocumentService {
     if (n <= SNAPSHOT_CAP_PER_DOCUMENT) return
     const victims = this.db.raw.prepare(`SELECT rowid AS rowid FROM snapshots
       WHERE project_id = ? AND document_id = ? AND revision != ?
-        AND NOT (reason = 'manual' AND json_extract(metadata_json, '$.kind') = 'book_replace')
-        AND NOT (reason = 'pre_restore' AND json_extract(metadata_json, '$.batchId') IS NOT NULL)
+        AND NOT (reason = 'manual' AND IFNULL(CASE WHEN json_valid(metadata_json) THEN json_extract(metadata_json, '$.kind') END, '') = 'book_replace')
+        AND NOT (reason = 'pre_restore' AND (CASE WHEN json_valid(metadata_json) THEN json_extract(metadata_json, '$.batchId') END) IS NOT NULL)
       ORDER BY created_at ASC, rowid ASC LIMIT ?`).all(projectId, documentId, currentRevision, n - SNAPSHOT_CAP_PER_DOCUMENT) as Array<{ rowid: number }>
     const del = this.db.raw.prepare('DELETE FROM snapshots WHERE rowid = ?')
     for (const { rowid } of victims) del.run(rowid)

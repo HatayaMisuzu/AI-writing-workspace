@@ -167,4 +167,53 @@ describe('每章快照上限 50', () => {
       query: '林舟', replacement: 'x', regex: false, caseSensitive: false })).toThrow('INJECTED_prune')
     expect(dumpAll(s.db)).toBe(dump)
   })
+
+  it('H1：普通手动快照（metadata 为 {}）超过 50 个时修剪到 50，删的是最旧的手动快照', () => {
+    const s = setup()
+    const old = seed(s, 70, { prefix: 'man', reason: 'manual', metadata: {} })
+    const created = s.docs.createSnapshot(s.project.id, s.id, 'manual')
+    const after = ids(s)
+    expect(after).toHaveLength(50)
+    expect(after).toEqual([...old.slice(21), created.id])
+  })
+
+  it('H1：旧库手动与定时（interval）混合 500 个，修剪到 50，手动快照同样被淘汰', () => {
+    const s = setup()
+    const insert = s.db.raw.prepare(`INSERT INTO snapshots (id, project_id, document_id, reason, revision, content, plain_text, metadata_json, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    const old: string[] = []
+    for (let i = 0; i < 500; i += 1) {
+      const id = `mix-${i}`
+      insert.run(id, s.project.id, s.id, i % 3 === 2 ? 'manual' : 'interval', 10000 + i, JSON.stringify(doc(`旧${i}`)), `旧${i}`, '{}', 1000 + i)
+      old.push(id)
+    }
+    const created = s.docs.createSnapshot(s.project.id, s.id, 'manual')
+    const after = ids(s)
+    expect(after).toHaveLength(50)
+    expect(after).toEqual([...old.slice(451), created.id])
+    const reasons = s.db.raw.prepare("SELECT reason, COUNT(*) AS n FROM snapshots WHERE document_id = ? AND id LIKE 'mix-%' GROUP BY reason").all(s.id) as Array<{ reason: string; n: number }>
+    expect(reasons.find((r) => r.reason === 'manual')!.n).toBeGreaterThan(0)
+    expect(reasons.find((r) => r.reason === 'interval')!.n).toBeGreaterThan(0)
+  })
+
+  it('H1：metadata_json 为非法 JSON 的旧快照可被淘汰，且不会让修剪报错', () => {
+    const s = setup()
+    const bad = seed(s, 50, { prefix: 'bad', reason: 'manual' })
+    s.db.raw.prepare("UPDATE snapshots SET metadata_json = 'not json' WHERE id LIKE 'bad-%'").run()
+    const created = s.docs.createSnapshot(s.project.id, s.id, 'manual')
+    expect(ids(s)).toEqual([...bad.slice(1), created.id])
+  })
+
+  it('H1：普通手动快照与受保护快照混合时，只淘汰普通手动快照，受保护的全部保留', () => {
+    const s = setup()
+    const current = s.docs.getContent(s.project.id, s.id)
+    const cur = seed(s, 1, { prefix: 'cur', reason: 'manual', revision: () => current.revision, at: 100 })
+    const batch = seed(s, 2, { prefix: 'batch', reason: 'manual', metadata: { kind: 'book_replace', batchId: 'b-1' }, at: 200 })
+    const pre = seed(s, 2, { prefix: 'pre', reason: 'pre_restore', metadata: { batchId: 'b-1' }, at: 300 })
+    const man = seed(s, 60, { prefix: 'man', reason: 'manual' })
+    const created = s.docs.createSnapshot(s.project.id, s.id, 'manual')
+    const after = ids(s)
+    expect(after).toHaveLength(50)
+    expect(after).toEqual([...cur, ...batch, ...pre, ...man.slice(16), created.id])
+  })
 })
