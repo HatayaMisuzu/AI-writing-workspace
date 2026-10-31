@@ -96,7 +96,7 @@ export class AppDatabase {
         generation: () => this.writeGeneration(),
         shouldTrigger: () => !this.isClosed && this.autoCheckpointHolds === 0
       })
-      // H-W6：wal_autocheckpoint 只作保底，阈值 ≈ 7MB 帧，按实际 page_size 计算（见 wal-checkpointer.ts 顶部注释）
+      // H-W6：wal_autocheckpoint 只作保底，阈值 ≈ 6MB 帧（上界 = 6MB + 一次提交），按实际 page_size 计算（见 wal-checkpointer.ts 顶部注释）
       if (this.checkpointer.triggerBytes !== undefined) {
         const pageSize = Number((this.raw.prepare('PRAGMA page_size').get() as { page_size: number }).page_size)
         this.raw.exec(`PRAGMA wal_autocheckpoint = ${autoCheckpointPagesFor(pageSize)}`)

@@ -14,17 +14,19 @@ import { endianness } from 'node:os'
  *   不开连接、不发 PRAGMA、不碰 120..135 的锁字节）。
  * - 每次普通写事务提交后（noteCommit），在下一轮事件循环检查一次：worker 空闲且待回写 > BACKFILL_TRIGGER_BYTES（1MB）→ 请求一次 PASSIVE；
  *   这一轮成功结束后若仍 > 1MB，立即再请求一次（requestIfPending 递归），直到 ≤1MB 或失败。
- * - 保底：主连接 wal_autocheckpoint = autoCheckpointPagesFor(pageSize)（约 7MB 帧对应的页数，按实际 page_size 算）。SQLite 按 WAL 帧数 mxFrame 触发，
- *   mxFrame ≥ 待回写帧数，所以待回写最迟到约 7MB 时由 COMMIT 内的同步检查点接管；worker 正常时它几乎不触发。
+ * - 保底：主连接 wal_autocheckpoint = autoCheckpointPagesFor(pageSize)（约 6MB 帧对应的页数，按实际 page_size 算）。SQLite 按 WAL 帧数 mxFrame 触发，
+ *   mxFrame ≥ 待回写帧数，所以待回写最迟到约 6MB 时由 COMMIT 内的同步检查点接管；worker 正常时它几乎不触发。
+ *   注意：保底在「提交之后」才触发，实际上界 = 6MB + 一次提交的帧；单次提交不超过约 2MB 时在 8MB 以内。
+ *   （验收员 page_size 8192、单章约 10 万字、回写失败连续保存实测：旧目标 7MB 时峰值 8,404,968B > 8MB，故降到 6MB，组长 2026-10-31。）
  * - 回写失败 / worker 崩溃：不立即重请求（避免空转），保底照常生效，数据由 SQLite 保证完整；下一次提交再按量请求。
  * - 不加 journal_size_limit，不做定时 PASSIVE。
  */
 export const BACKFILL_TRIGGER_BYTES = 1024 * 1024
 /** 待回写上界（测试硬断言 ≤ 此值） */
 export const BACKFILL_BOUND_BYTES = 8 * 1024 * 1024
-/** 保底 wal_autocheckpoint 的目标：约 7MB 帧，给上界 8MB 留 1MB 余量（组长 2026-10-31） */
-export const AUTOCHECKPOINT_TARGET_BYTES = 7 * 1024 * 1024
-/** 保底 wal_autocheckpoint 页数 = floor(7MB / (page_size + 24))，page_size 启动时由 PRAGMA page_size 读出。4096 → 1781，8192 → 893。 */
+/** 保底 wal_autocheckpoint 的目标：约 6MB 帧，给上界 8MB 留 2MB 余量容纳一次提交（组长 2026-10-31，由 7MB 降到 6MB） */
+export const AUTOCHECKPOINT_TARGET_BYTES = 6 * 1024 * 1024
+/** 保底 wal_autocheckpoint 页数 = floor(6MB / (page_size + 24)) = floor(6291456 / (page_size + 24))，page_size 启动时由 PRAGMA page_size 读出。4096 → 1527，8192 → 765。 */
 export function autoCheckpointPagesFor(pageSize: number): number {
   const size = Number.isFinite(pageSize) && pageSize > 0 ? pageSize : 4096
   return Math.max(1, Math.floor(AUTOCHECKPOINT_TARGET_BYTES / (size + 24)))

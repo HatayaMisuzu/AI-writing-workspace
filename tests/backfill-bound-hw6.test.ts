@@ -1,5 +1,5 @@
 /**
- * P3 H-W6：普通保存按待回写量触发后台 PASSIVE，wal_autocheckpoint（≈8MB）只作保底。
+ * P3 H-W6：普通保存按待回写量触发后台 PASSIVE，wal_autocheckpoint（≈6MB 帧）只作保底。
  * 1) 连续 300 次大章保存，待回写峰值 ≤ 8MB（硬断言）；记录 COMMIT p95 / 最坏值，与同 runner 的 A1000 对照（checkpointer:false = 旧 1000 页 autocheckpoint）。
  * 2) 退出不与进行中的 PASSIVE 互卡（#51 closeForQuit 三段预算）。
  * 3) 回写失败 / worker 崩溃：保底接管，待回写仍 ≤ 8MB，重开 integrity_check ok、正文完整。
@@ -70,11 +70,11 @@ async function saveRun(s: S, n: number, gapMs = 0) {
 }
 
 describe('H-W6 1：连续保存的待回写上界', () => {
-  it('300 次连续大章保存：待回写峰值 ≤ 8MB；产品读法读 -shm 零失败；保底页数 = floor(7MB / 4120) = 1781', async () => {
+  it('300 次连续大章保存：待回写峰值 ≤ 8MB；产品读法读 -shm 零失败；保底页数 = floor(6MB / 4120) = 1527', async () => {
     const s = open()
     const cp = s.db.checkpointer!
     expect(s.db.autoCheckpoint).toBe(autoCheckpointPagesFor(4096))
-    expect(s.db.autoCheckpoint).toBe(1781)
+    expect(s.db.autoCheckpoint).toBe(1527)
     const started = performance.now()
     const r = await saveRun(s, 300)
     const totalMs = Math.round(performance.now() - started)
@@ -157,7 +157,7 @@ describe('H-W6 3：回写失败 / worker 崩溃 → 保底接管、数据完整'
     expect(cp.backfillRequests).toBeGreaterThan(0)
     expect(cp.last?.ok).toBe(false)
     expect(cp.consecutiveFailures).toBeGreaterThan(0)
-    expect(s.db.autoCheckpoint).toBe(1781)
+    expect(s.db.autoCheckpoint).toBe(1527)
     expect(r.unread).toBe(0)
     expect(r.peak).toBeLessThanOrEqual(BACKFILL_BOUND_BYTES)
     expect(s.docs.getContent(s.project.id, s.chapter.id).plainText).toBe(text(119))
@@ -169,13 +169,13 @@ describe('H-W6 3：回写失败 / worker 崩溃 → 保底接管、数据完整'
 })
 
 describe('H-W6 4：保底页数按实际 page_size 计算', () => {
-  it('公式：floor(7340032 / (page_size + 24))', () => {
-    expect(autoCheckpointPagesFor(4096)).toBe(1781)
-    expect(autoCheckpointPagesFor(8192)).toBe(893)
-    expect(autoCheckpointPagesFor(65536)).toBe(111)
+  it('公式：floor(6291456 / (page_size + 24))', () => {
+    expect(autoCheckpointPagesFor(4096)).toBe(1527)
+    expect(autoCheckpointPagesFor(8192)).toBe(765)
+    expect(autoCheckpointPagesFor(65536)).toBe(95)
   })
 
-  it('page_size=8192 的库：启动时读 PRAGMA page_size，wal_autocheckpoint 实际为 893；回写失败时 120 次连续保存待回写 ≤ 8MB，重开数据完整', async () => {
+  it('page_size=8192 的库：启动时读 PRAGMA page_size，wal_autocheckpoint 实际为 765；回写失败时 120 次连续保存待回写 ≤ 8MB，重开数据完整', async () => {
     const path = join(tempDir(), 'p8192.sqlite')
     const pre = new DatabaseSync(path)
     pre.exec('PRAGMA page_size = 8192')
@@ -183,7 +183,7 @@ describe('H-W6 4：保底页数按实际 page_size 计算', () => {
     pre.close()
     const s = open({ checkpointer: { inject: { failWith: 'INJECTED_BACKFILL_FAIL' }, retries: 1, retryDelayMs: 20, log: () => undefined } }, path)
     expect(Number((s.db.raw.prepare('PRAGMA page_size').get() as { page_size: number }).page_size)).toBe(8192)
-    expect(s.db.autoCheckpoint).toBe(893)
+    expect(s.db.autoCheckpoint).toBe(765)
     const cp = s.db.checkpointer!
     const r = await saveRun(s, 120)
     await s.db.checkpointIdle()
@@ -191,11 +191,54 @@ describe('H-W6 4：保底页数按实际 page_size 计算', () => {
     expect(cp.last?.ok).toBe(false)
     expect(r.unread).toBe(0)
     expect(r.peak).toBeLessThanOrEqual(BACKFILL_BOUND_BYTES)
-    expect(s.db.autoCheckpoint).toBe(893)
+    expect(s.db.autoCheckpoint).toBe(765)
     await s.db.closeAsync()
     const reopened = new AppDatabase(s.path, { checkpointer: false }); dbs.push(reopened)
     expect(integrity(reopened)).toBe('ok')
     expect(new DocumentService(reopened).getContent(s.project.id, s.chapter.id).plainText).toBe(text(119))
+  })
+  it('page_size=4096 的库：wal_autocheckpoint 实际为 1527（PRAGMA 读回）', () => {
+    const s = open()
+    expect(Number((s.db.raw.prepare('PRAGMA page_size').get() as { page_size: number }).page_size)).toBe(4096)
+    expect(s.db.autoCheckpoint).toBe(1527)
+    expect(Number((s.db.raw.prepare('PRAGMA wal_autocheckpoint').get() as { wal_autocheckpoint: number }).wal_autocheckpoint)).toBe(1527)
+  })
+
+  // 验收员复现（/workspace/pr54logs/w-fail-8192-curve.jsonl：旧 7MB 目标下峰值 8,404,968B > 8MB）：
+  // 单章约 10 万字 = 22 字句子 × 4500 = 99,000 字；UTF-8 中文 3 字节 → plainText 约 297KB，editorJson 再一份约 297KB，
+  // 加上 FTS / 修订等，验收员曲线里单次提交最大增量 1,158,456B（≈141 帧 × 8216B），即一次提交 ≈ 1MB+ 帧（与验收员同规格，不另放大）。
+  // 回写一直失败（PASSIVE 注入失败），只剩 wal_autocheckpoint 保底：峰值应 ≤ 6MB + 一次提交 ≈ 7.2MB ≤ 8MB。
+  it('page_size=8192、单章约 10 万字、回写一直失败：150 次连续保存，待回写峰值 ≤ 8MB', async () => {
+    const path = join(tempDir(), 'p8192-100k.sqlite')
+    const pre = new DatabaseSync(path)
+    pre.exec('PRAGMA page_size = 8192')
+    pre.exec('CREATE TABLE _page_size_probe(x INTEGER)')
+    pre.close()
+    const s = open({ checkpointer: { inject: { failWith: 'INJECTED_BACKFILL_FAIL' }, retries: 1, retryDelayMs: 20, log: () => undefined } }, path)
+    expect(Number((s.db.raw.prepare('PRAGMA page_size').get() as { page_size: number }).page_size)).toBe(8192)
+    expect(s.db.autoCheckpoint).toBe(765)
+    expect(Number((s.db.raw.prepare('PRAGMA wal_autocheckpoint').get() as { wal_autocheckpoint: number }).wal_autocheckpoint)).toBe(765)
+    const big = (i: number): string => `第${i}次保存` + SENT.repeat(4500)
+    const cp = s.db.checkpointer!
+    let peak = 0; let unread = 0; let maxCommitBytes = 0; let prev = readPendingBackfillBytes(s.path) ?? 0
+    for (let i = 0; i < 150; i += 1) {
+      s.docs.saveContent({ projectId: s.project.id, documentId: s.chapter.id, editorJson: doc(big(i)), plainText: big(i) })
+      const pending = readPendingBackfillBytes(s.path)
+      if (pending === undefined) unread += 1
+      else {
+        if (pending > peak) peak = pending
+        if (pending > prev && pending - prev > maxCommitBytes) maxCommitBytes = pending - prev
+        prev = pending
+      }
+      await tick()
+    }
+    await s.db.checkpointIdle()
+    log('HW6FIX-100K', { pageSize: 8192, saves: 150, pendingPeakBytes: peak, pendingPeakMB: r2(peak / 1048576), maxCommitBytes, autoCheckpoint: s.db.autoCheckpoint, backfillRequests: cp.backfillRequests, runs: cp.runs, last: cp.last })
+    expect(cp.last?.ok).toBe(false)
+    expect(unread).toBe(0)
+    expect(peak).toBeLessThanOrEqual(BACKFILL_BOUND_BYTES)
+    expect(peak).toBeLessThanOrEqual(8 * 1024 * 1024)
+    expect(s.docs.getContent(s.project.id, s.chapter.id).plainText).toBe(big(149))
   })
 })
 
