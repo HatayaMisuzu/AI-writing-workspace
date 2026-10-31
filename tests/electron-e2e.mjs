@@ -135,12 +135,18 @@ const finishLaunch = async (app, page) => {
   page.on('pageerror', (error) => process.stderr.write(`renderer error: ${error.stack ?? error.message}\n`))
   page.on('console', (message) => { if (message.type() === 'error') process.stderr.write(`renderer console: ${message.text()}\n`) })
   await page.waitForLoadState('domcontentloaded')
-  // P3 发布包：minWidth 1100 → 1000 后，CI 小屏（如 Windows runner）上窗口会被压到 ≤1080 的窄屏布局（同行者默认收起）。
-  // 改前 minWidth 1100 让窗口至少 1100 宽；这里把视口补到 1100，保持既有用例的宽屏前提。窄屏布局由各自用例显式 setViewportSize 覆盖。
+  // P3 发布包：minWidth 1100 → 1000 后，CI 小屏（Windows runner 1024 宽）上窗口会被压到 ≤1080 的窄屏布局（同行者默认收起）。
+  // 改前 minWidth 1100 让真实窗口至少 1100 宽；这里用 BrowserWindow.setSize 把真实窗口补到 1100 宽（不用视口模拟，免得命中测试错位），
+  // 保持既有用例的宽屏前提。窄屏布局由各自用例显式 setViewportSize 覆盖。Linux 走 CDP（无 app.evaluate），屏幕够宽不受影响。
   const initial = await page.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }))
-  if (initial.width < 1100) {
-    await page.setViewportSize({ width: 1100, height: initial.height })
-    process.stdout.write(`e2e viewport ${initial.width}x${initial.height} < 1100 wide, emulated 1100x${initial.height}\n`)
+  if (initial.width < 1100 && typeof app.evaluate === 'function') {
+    await app.evaluate(({ BrowserWindow }) => {
+      const win = BrowserWindow.getAllWindows()[0]
+      const [, height] = win.getSize()
+      win.setSize(1100, height)
+    })
+    await page.waitForFunction(() => window.innerWidth >= 1100, null, { timeout: 5_000 }).catch(() => {})
+    process.stdout.write(`e2e window ${initial.width}x${initial.height} < 1100 wide, resized to ${await page.evaluate(() => `${window.innerWidth}x${window.innerHeight}`)}\n`)
   }
   process.stdout.write(`launched: ${await page.title()} ${page.url()}\n`)
   return { app, page }
