@@ -7,6 +7,7 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
+import { DatabaseSync } from 'node:sqlite'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { AppDatabase, QUIT_CLOSE_LIMIT_MS, QUIT_WORKER_LIMIT_MS, type AppDatabaseOptions } from '../src/main/database/database'
@@ -69,11 +70,11 @@ async function saveRun(s: S, n: number, gapMs = 0) {
 }
 
 describe('H-W6 1：连续保存的待回写上界', () => {
-  it('300 次连续大章保存：待回写峰值 ≤ 8MB；产品读法读 -shm 零失败；保底页数 = 8MB 帧', async () => {
+  it('300 次连续大章保存：待回写峰值 ≤ 8MB；产品读法读 -shm 零失败；保底页数 = floor(7MB / 4120) = 1781', async () => {
     const s = open()
     const cp = s.db.checkpointer!
     expect(s.db.autoCheckpoint).toBe(autoCheckpointPagesFor(4096))
-    expect(s.db.autoCheckpoint).toBe(2036)
+    expect(s.db.autoCheckpoint).toBe(1781)
     const started = performance.now()
     const r = await saveRun(s, 300)
     const totalMs = Math.round(performance.now() - started)
@@ -155,10 +156,41 @@ describe('H-W6 3：回写失败 / worker 崩溃 → 保底接管、数据完整'
     expect(cp.backfillRequests).toBeGreaterThan(0)
     expect(cp.last?.ok).toBe(false)
     expect(cp.consecutiveFailures).toBeGreaterThan(0)
-    expect(s.db.autoCheckpoint).toBe(2036)
+    expect(s.db.autoCheckpoint).toBe(1781)
     expect(r.unread).toBe(0)
     expect(r.peak).toBeLessThanOrEqual(BACKFILL_BOUND_BYTES)
     expect(s.docs.getContent(s.project.id, s.chapter.id).plainText).toBe(text(119))
+    await s.db.closeAsync()
+    const reopened = new AppDatabase(s.path, { checkpointer: false }); dbs.push(reopened)
+    expect(integrity(reopened)).toBe('ok')
+    expect(new DocumentService(reopened).getContent(s.project.id, s.chapter.id).plainText).toBe(text(119))
+  })
+})
+
+describe('H-W6 4：保底页数按实际 page_size 计算', () => {
+  it('公式：floor(7340032 / (page_size + 24))', () => {
+    expect(autoCheckpointPagesFor(4096)).toBe(1781)
+    expect(autoCheckpointPagesFor(8192)).toBe(893)
+    expect(autoCheckpointPagesFor(65536)).toBe(111)
+  })
+
+  it('page_size=8192 的库：启动时读 PRAGMA page_size，wal_autocheckpoint 实际为 893；回写失败时 120 次连续保存待回写 ≤ 8MB，重开数据完整', async () => {
+    const path = join(tempDir(), 'p8192.sqlite')
+    const pre = new DatabaseSync(path)
+    pre.exec('PRAGMA page_size = 8192')
+    pre.exec('CREATE TABLE _page_size_probe(x INTEGER)')
+    pre.close()
+    const s = open({ checkpointer: { inject: { failWith: 'INJECTED_BACKFILL_FAIL' }, retries: 1, retryDelayMs: 20, log: () => undefined } }, path)
+    expect(Number((s.db.raw.prepare('PRAGMA page_size').get() as { page_size: number }).page_size)).toBe(8192)
+    expect(s.db.autoCheckpoint).toBe(893)
+    const cp = s.db.checkpointer!
+    const r = await saveRun(s, 120)
+    await s.db.checkpointIdle()
+    log('HW6FIX-FAULT', { fault: 'PASSIVE 一直失败（page_size=8192）', commit: stats(r.commit), pendingPeakBytes: r.peak, backfillRequests: cp.backfillRequests, runs: cp.runs })
+    expect(cp.last?.ok).toBe(false)
+    expect(r.unread).toBe(0)
+    expect(r.peak).toBeLessThanOrEqual(BACKFILL_BOUND_BYTES)
+    expect(s.db.autoCheckpoint).toBe(893)
     await s.db.closeAsync()
     const reopened = new AppDatabase(s.path, { checkpointer: false }); dbs.push(reopened)
     expect(integrity(reopened)).toBe('ok')
