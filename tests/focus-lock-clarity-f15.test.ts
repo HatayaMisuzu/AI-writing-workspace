@@ -136,7 +136,7 @@ describe('F15 锁定期间拒绝清单（从另一本书发起；全部拒绝是
     expectTitledNoPrefix(await rejection('providers:test-url', { baseUrl: 'http://localhost:11434/v1', apiKey: 'k', modelId: 'mock' }))
     expect(rawFetchCalls).toBe(0)
     focus.emergencyExit(locked.id, FOCUS_EXIT_PHRASE)
-    await invoke('providers:test-url', { baseUrl: 'http://localhost:11434/v1', apiKey: 'k', modelId: 'mock' })
+    await invoke('providers:test-url', { baseUrl: 'http://localhost:11434/v1', apiKey: 'k', modelId: 'mock', providerId: 'p' })
     expect(rawFetchCalls).toBeGreaterThan(0)
   })
   it('R8 主进程 guardedFetch（所有 Provider 适配器的唯一出口，兜底）→ EgressBlockedError focus-locked，带书名', async () => {

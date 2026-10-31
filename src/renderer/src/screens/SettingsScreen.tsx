@@ -82,10 +82,16 @@ export function SettingsScreen(): React.JSX.Element {
     const totalTimeoutMs = form.totalTimeoutMs.trim() ? Number(form.totalTimeoutMs) : undefined
     if (firstTokenTimeoutMs !== undefined && (!Number.isFinite(firstTokenTimeoutMs) || firstTokenTimeoutMs <= 0)) throw new Error('首 token 超时须为正整数毫秒。')
     if (totalTimeoutMs !== undefined && (!Number.isFinite(totalTimeoutMs) || totalTimeoutMs <= 0)) throw new Error('总超时须为正整数毫秒。')
-    await window.workspace.providers.save({
-      id, providerType: form.providerType, displayName: form.displayName, baseUrl: form.baseUrl,
-      apiKey: form.apiKey || undefined, firstTokenTimeoutMs, totalTimeoutMs
-    })
+    try {
+      await window.workspace.providers.save({
+        id, providerType: form.providerType, displayName: form.displayName, baseUrl: form.baseUrl,
+        apiKey: form.apiKey || undefined, firstTokenTimeoutMs, totalTimeoutMs
+      })
+    } catch (error) {
+      // A·M1：作者在确认框里点了「取消」——不是故障，配置保持原样
+      if (userErrorMessage(error).includes('已取消保存')) { setNotice({ ok: false, text: '已取消保存，服务配置未改动。' }); return }
+      throw error
+    }
     setSelectedId(id)
     setNotice({ ok: true, text: hasSecretQuery(form.baseUrl) ? `服务配置已安全保存到本机。${BASE_URL_QUERY_SECRET_HINT}` : '服务配置已安全保存到本机。' })
     await reload()
@@ -116,7 +122,9 @@ export function SettingsScreen(): React.JSX.Element {
     const savedSame = Boolean(selectedId && selected && !selected.baseUrlError && form.baseUrl === selected.baseUrl && form.providerType === selected.providerType)
     const result = savedSame && selectedId && activeModel
       ? await window.workspace.providers.test(selectedId, activeModel.modelId)
-      : await window.workspace.providers.testUrl({ baseUrl: form.baseUrl, apiKey: form.apiKey || undefined, modelId: draftModelId, providerType: form.providerType })
+      : await window.workspace.providers.testUrl({ baseUrl: form.baseUrl, apiKey: form.apiKey || undefined, modelId: draftModelId, providerType: form.providerType, providerId: selected ? selectedId : undefined })
+    // A·M1：地址与上次保存不同时由 main 进程弹确认框；取消时不发请求
+    if ('cancelled' in result && result.cancelled) { setNotice({ ok: false, text: result.message ?? '已取消测试连接，API Key 未发送。' }); return }
     setNotice({ ok: result.ok, text: result.ok ? '连接成功。' : `连接失败：${result.message ?? '未知错误'} 正文与本地保存不受影响。` })
   })
   const updateModel = (item: ModelConfig, changes: Partial<ModelConfig>): Promise<void> => run(async () => {
