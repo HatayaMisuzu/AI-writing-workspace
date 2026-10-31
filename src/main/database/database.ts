@@ -2,7 +2,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { mkdirSync, statSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { schema } from './schema'
-import { WalCheckpointer, autoCheckpointPagesFor, type WalCheckpointerOptions } from './wal-checkpointer'
+import { WalCheckpointer, autoCheckpointPagesFor, readWalIndexHeader, type WalCheckpointerOptions, type WalIndexHeader } from './wal-checkpointer'
 
 export const CURRENT_SCHEMA_VERSION = 10
 /** 退出时等后台检查点 worker 关闭的上限（ms）；超时则 terminate worker、直接关主连接后退出（P3 PR-42）。 */
@@ -55,8 +55,23 @@ export interface ReleaseRecord {
   at: number
 }
 
-/** 主连接最近的写事务 COMMIT 耗时（墙钟 ms），诊断与测试用 */
-export interface CommitRecord { at: number; commitMs: number; autoCheckpoint: boolean; held: boolean }
+/**
+ * 主连接最近的写事务 COMMIT 耗时（墙钟 ms），诊断与测试用。
+ * autoCheckpoint 只等于 !held（当时不在批量暂停中），不代表 SQLite 真的做了检查点。
+ * P3（wal-restart）诊断字段：COMMIT 前后各读一次 -shm 的 WAL-index 头（readWalIndexHeader，在 COMMIT 计时之外读；只进诊断记录）。
+ * - mxFrameBefore / mxFrameAfter：WalIndexHdr.mxFrame（wal.c:328）。
+ * - nBackfillBefore / nBackfillAfter：WalCkptInfo.nBackfill（wal.c:395）。
+ * - walRestarted：mxFrameAfter < mxFrameBefore，即本次提交的帧从 WAL 文件头写起（walRestartLog 成功，wal.c:3976-3997）。
+ * - backfilledInCommit：nBackfillAfter ≠ nBackfillBefore。若提交期间后台 worker 不在跑（checkpointerBusy=false），
+ *   说明 COMMIT 里同步做了检查点回写（wal_autocheckpoint 的默认 hook）。
+ * - checkpointerBusy：COMMIT 前后台检查点是否有运行中/排队的轮次（为 true 时 nBackfill 变化可能来自 worker）。
+ * 读不到 -shm 时这些字段缺省。
+ */
+export interface CommitRecord {
+  at: number; commitMs: number; autoCheckpoint: boolean; held: boolean
+  mxFrameBefore?: number; mxFrameAfter?: number; nBackfillBefore?: number; nBackfillAfter?: number
+  walRestarted?: boolean; backfilledInCommit?: boolean; checkpointerBusy?: boolean
+}
 
 export const RELEASE_MAX_ROUNDS = 10
 export const RELEASE_MAX_MS = 30_000
@@ -102,6 +117,12 @@ export class AppDatabase {
         this.raw.exec(`PRAGMA wal_autocheckpoint = ${autoCheckpointPagesFor(pageSize)}`)
       }
     }
+  }
+
+  /** 诊断：读 -shm 的 WAL-index 头（:memory: 库或读不到时 undefined）。只读前 100 字节，不开连接。 */
+  private readWalIndex(): WalIndexHeader | undefined {
+    if (this.path === ':memory:') return undefined
+    try { return readWalIndexHeader(this.path, 1) } catch { return undefined }
   }
 
   private walFileBytes(): number {
@@ -280,9 +301,21 @@ export class AppDatabase {
     try {
       const result = fn()
       const held = this.autoCheckpointHolds > 0
+      // 诊断：COMMIT 前读 WAL-index 头（在计时之外）
+      const checkpointerBusy = this.checkpointer ? this.checkpointer.busy : undefined
+      const before = this.readWalIndex()
       const started = performance.now()
       this.raw.exec('COMMIT')
-      this.commits.push({ at: Date.now(), commitMs: Math.round((performance.now() - started) * 100) / 100, autoCheckpoint: !held, held })
+      const commitMs = Math.round((performance.now() - started) * 100) / 100
+      const after = before ? this.readWalIndex() : undefined
+      const record: CommitRecord = { at: Date.now(), commitMs, autoCheckpoint: !held, held }
+      if (before && after) {
+        Object.assign(record, {
+          mxFrameBefore: before.mxFrame, mxFrameAfter: after.mxFrame, nBackfillBefore: before.nBackfill, nBackfillAfter: after.nBackfill,
+          walRestarted: after.mxFrame < before.mxFrame, backfilledInCommit: after.nBackfill !== before.nBackfill, checkpointerBusy
+        })
+      }
+      this.commits.push(record)
       if (this.commits.length > 50) this.commits.splice(0, this.commits.length - 50)
       // 暂停期间（释放循环进行中）的每次写入：请求补做一轮检查点，合并进现有队列
       if (held && this.releaseLoop && this.checkpointer && !this.checkpointer.closed) {

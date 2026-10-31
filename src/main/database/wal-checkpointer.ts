@@ -46,15 +46,17 @@ function shmChecksum(buf: Buffer, bigEndian: boolean): [number, number] {
   return [s1, s2]
 }
 
+/** -shm WAL-index 头里与检查点相关的字段（readWalIndexHeader） */
+export interface WalIndexHeader { mxFrame: number; nBackfill: number; pageSize: number }
+
 /**
- * 读 -shm 的 WAL-index 头算待回写字节数；-wal 不存在或为空 = 0；读不到 / 两份头副本不一致 / 校验和不符时重试，仍失败返回 undefined。
- * 只读前 100 字节（两份 WalIndexHdr + WalCkptInfo.nBackfill）：Windows 上 SQLite 用 LockFileEx 锁 -shm 的 120..135 字节
- * （os_win.c WIN_SHM_BASE = 120），这是强制锁，其他句柄 ReadFile 覆盖到被独占锁住的字节会失败（ERROR_LOCK_VIOLATION）。
+ * 只读 -shm 前 100 字节解析 WAL-index 头。依据 SQLite wal.c 的结构定义（参考源码 /workspace/eng-logs/main-red/wal.c）：
+ * - struct WalIndexHdr（wal.c:321-333，48 字节，本机字节序）：0 iVersion、12 isInit、14 szPage(u16，1 表示 65536)、16 mxFrame（wal.c:328）、
+ *   40 aCksum[2]；-shm 0..47 与 48..95 是两份副本，必须逐字节一致。
+ * - struct WalCkptInfo（wal.c:394-400）紧跟两份头之后，起点 96：96 nBackfill（wal.c:395）。
+ * 读不到 / 副本不一致 / 校验和不符时重试，仍失败返回 undefined。不开连接、不发 PRAGMA、不碰 120..135 的锁字节（见下）。
  */
-export function readPendingBackfillBytes(dbPath: string, tries = 3): number | undefined {
-  let walSize = 0
-  try { walSize = statSync(`${dbPath}-wal`).size } catch { return 0 }
-  if (walSize < 32) return 0
+export function readWalIndexHeader(dbPath: string, tries = 3): WalIndexHeader | undefined {
   const little = endianness() === 'LE'
   for (let i = 0; i < tries; i += 1) {
     let fd: number | undefined
@@ -71,10 +73,23 @@ export function readPendingBackfillBytes(dbPath: string, tries = 3): number | un
     const [c1, c2] = shmChecksum(buf.subarray(0, 40), !little)
     if (c1 !== u32(40) || c2 !== u32(44)) continue
     const sz = little ? buf.readUInt16LE(14) : buf.readUInt16BE(14)
-    const pageSize = sz === 1 ? 65536 : sz
-    return Math.max(0, u32(16) - u32(96)) * (pageSize + 24)
+    return { mxFrame: u32(16), nBackfill: u32(96), pageSize: sz === 1 ? 65536 : sz }
   }
   return undefined
+}
+
+/**
+ * 读 -shm 的 WAL-index 头算待回写字节数；-wal 不存在或为空 = 0；读不到 / 两份头副本不一致 / 校验和不符时重试，仍失败返回 undefined。
+ * 只读前 100 字节（两份 WalIndexHdr + WalCkptInfo.nBackfill）：Windows 上 SQLite 用 LockFileEx 锁 -shm 的 120..135 字节
+ * （os_win.c WIN_SHM_BASE = 120），这是强制锁，其他句柄 ReadFile 覆盖到被独占锁住的字节会失败（ERROR_LOCK_VIOLATION）。
+ */
+export function readPendingBackfillBytes(dbPath: string, tries = 3): number | undefined {
+  let walSize = 0
+  try { walSize = statSync(`${dbPath}-wal`).size } catch { return 0 }
+  if (walSize < 32) return 0
+  const h = readWalIndexHeader(dbPath, tries)
+  if (!h) return undefined
+  return Math.max(0, h.mxFrame - h.nBackfill) * (h.pageSize + 24)
 }
 
 /**
