@@ -433,16 +433,16 @@ const diagInstall = (page, tag) => page.evaluate((tag) => {
   let degraded = Boolean(document.querySelector('[data-testid="hover-degraded"]')); let lastHl = hl()
   const mo = new MutationObserver((list) => {
     for (const m of list) {
-      if (m.type === 'attributes') { if (m.target.classList?.contains('character-hit') || m.oldValue?.includes('character-hit')) log('hit-attr', { id: idOf(m.target), attr: m.attributeName, old: m.oldValue, text: m.target.textContent }); continue }
-      for (const n of m.removedNodes) { for (const h of hitsIn(n)) log('hit-removed', { id: idOf(h), text: h.textContent, connected: h.isConnected }); if (n.nodeType === 3 && m.target.closest?.('.manuscript-editor')) log('text-removed', { parent: m.target.className || m.target.tagName, text: n.textContent.slice(0, 12) }) }
-      for (const n of m.addedNodes) { for (const h of hitsIn(n)) log('hit-added', { id: idOf(h), text: h.textContent }); if (n.nodeType === 3 && m.target.closest?.('.manuscript-editor')) log('text-added', { parent: m.target.className || m.target.tagName, text: n.textContent.slice(0, 12) }) }
+      if (m.type === 'attributes') { if (m.target.title === "悬停人名显示只读人物卡") { log("hover-toggle-attr", { attr: m.attributeName, old: m.oldValue, now: m.target.getAttribute(m.attributeName) }); continue } if (m.target.classList?.contains('character-hit') || m.oldValue?.includes('character-hit')) log('hit-attr', { id: idOf(m.target), attr: m.attributeName, old: m.oldValue, text: m.target.textContent }); continue }
+      for (const n of m.removedNodes) { if (n.nodeType === 1 && (n.matches("[data-testid=\"character-hover-card\"]") || n.querySelector("[data-testid=\"character-hover-card\"]"))) log("card-removed", {}); for (const h of hitsIn(n)) log('hit-removed', { id: idOf(h), text: h.textContent, connected: h.isConnected }); if (n.nodeType === 3 && m.target.closest?.('.manuscript-editor')) log('text-removed', { parent: m.target.className || m.target.tagName, text: n.textContent.slice(0, 12) }) }
+      for (const n of m.addedNodes) { if (n.nodeType === 1 && (n.matches("[data-testid=\"character-hover-card\"]") || n.querySelector("[data-testid=\"character-hover-card\"]"))) log("card-added", {}); if (n.nodeType === 1) { const tg = n.matches("[title=\"悬停人名显示只读人物卡\"]") ? n : n.querySelector("[title=\"悬停人名显示只读人物卡\"]"); if (tg) log("hover-toggle-added", { disabled: tg.disabled, pressed: tg.getAttribute("aria-pressed") }) } for (const h of hitsIn(n)) log('hit-added', { id: idOf(h), text: h.textContent }); if (n.nodeType === 3 && m.target.closest?.('.manuscript-editor')) log('text-added', { parent: m.target.className || m.target.tagName, text: n.textContent.slice(0, 12) }) }
     }
     const now = document.querySelector('.manuscript-editor')
     if (now !== root) { log('editor-root-replaced', { from: root ? idOf(root) : null, to: now ? idOf(now) : null }); root = now }
     const d = Boolean(document.querySelector('[data-testid="hover-degraded"]')); if (d !== degraded) { log('degraded', { degraded: d }); degraded = d }
     const h = hl(); if (h !== lastHl) { log('css-highlights', { size: h }); lastHl = h }
   })
-  mo.observe(document.body, { subtree: true, childList: true, attributes: true, attributeOldValue: true, attributeFilter: ['class', 'data-term', 'data-character-ids'] })
+  mo.observe(document.body, { subtree: true, childList: true, attributes: true, attributeOldValue: true, attributeFilter: ["class", "data-term", "data-character-ids", "disabled", "aria-pressed"] })
   const onSel = () => { const s = window.getSelection(); const r = s && s.rangeCount ? s.getRangeAt(0) : null
     log('selectionchange', { rangeCount: s?.rangeCount ?? 0, collapsed: r ? r.collapsed : null, len: s ? s.toString().length : 0,
       startConnected: r ? r.startContainer.isConnected : null, endConnected: r ? r.endContainer.isConnected : null, chip: chip(), active: document.activeElement?.className ?? null }) }
@@ -980,6 +980,74 @@ const diagDump = async (page, tag) => {
     }
     if (diagViewport) await page.setViewportSize(diagViewport).catch(() => undefined)
   })
+
+  // [F14DIAG] (a)(b) 独立诊断块：只记录、不断言、不计入 record；任何异常只打日志
+  {
+    const page = running.page
+    const out = (s) => process.stdout.write(`[F14DIAG] ${s}\n`)
+    out(`(a)(b) ${process.platform} NOT FOUND: characters:list / characters:hover-prefs 的 IPC 响应时刻（ipcRenderer.invoke 不经网络，Playwright 无法监听；renderer 无人物列表 DOM）；以 hover-toggle-attr/added（人物悬停按钮 disabled={!hoverPrefs}）与首个 hit-added 作为异步到达的可观察信号`)
+    // (a) 开章后不等稳定立刻悬停，2s 内记录卡片出现/消失
+    for (let round = 1; round <= 4; round += 1) {
+      try {
+        await page.mouse.move(5, 5)
+        await openChapter(page, '第二章')
+        await page.locator('.manuscript-editor').waitFor()
+        await diagInstall(page, `a-round${round}`)
+        await openChapter(page, '悬停章')
+        await diagMark(page, 'chapter-clicked')
+        await hitLocator(page, '林栀').first().hover({ timeout: 2_000 })
+        await diagMark(page, 'hovered')
+        await page.waitForTimeout(2_000)
+        await diagMark(page, 'hover+2000ms')
+      } catch (e) { out(`a-round${round} ${process.platform} step error ${e.message.split('\n')[0]}`) }
+      await diagDump(page, `a-round${round}`)
+      await page.keyboard.press('Escape').catch(() => undefined)
+    }
+    await page.mouse.move(5, 5)
+    // (b) 复刻 #56 窄屏覆盖的前置：[1093, 1150] 依次 resize → 点编辑区 → Ctrl+A →（>1080 等 chip 3s）→ 读「修改」→ P3 查找 → Escape
+    const viewport = page.viewportSize()
+    out(`b ${process.platform} 偏差: 用「悬停章」代替 #56 新建的「窄屏验收章」（避免新增章节影响后续用例）；Windows 也用 setViewportSize（main 上没有 #56 的 resizeRealWindow/setContentSize）；不点「修改」不发送（避免产生补丁），只在 #56 点「修改」的时刻读取其可用性；viewport=${JSON.stringify(viewport)}`)
+    try {
+      await openChapter(page, '悬停章')
+      const editor = page.locator('.manuscript-editor')
+      await editor.waitFor()
+      for (const width of [1093, 1150]) {
+        const step = async (name, fn) => { try { await fn(); await diagMark(page, `b${width} ok ${name}`) } catch (e) { await diagMark(page, `b${width} FAIL ${name}: ${e.message.split('\n')[0]}`) } }
+        await diagInstall(page, `b-${width}`)
+        await step('setViewportSize', () => page.setViewportSize({ width, height: viewport?.height ?? 800 }))
+        await step('editor.click', () => editor.click())
+        await step('Control+A', () => page.keyboard.press('Control+A'))
+        await step('wait-assistant-chip-3s', () => page.locator('.assistant-panel .selection-chip').waitFor({ timeout: 3_000 }))
+        await step('modify-enabled-at-click-time', async () => { const b = page.getByRole('button', { name: '修改', exact: true }); await diagMark(page, `b${width} modify enabled=${await b.isEnabled({ timeout: 1_000 }).catch((e) => `ERR ${e.message.split('\n')[0]}`)}`) })
+        await step('editor.click(find)', () => editor.click())
+        await step('Control+Home', () => page.keyboard.press('Control+Home'))
+        await step('Control+f', () => page.keyboard.press('Control+f'))
+        await step('find fill 林栀', () => page.getByLabel('查找', { exact: true }).fill('林栀'))
+        await step('find-count', () => page.getByTestId('find-count').filter({ hasText: '共' }).waitFor({ timeout: 2_000 }))
+        await step('regex check', () => page.getByLabel('正则').check())
+        await step('find fill 林.', () => page.getByLabel('查找', { exact: true }).fill('林.'))
+        await step('regex uncheck', () => page.getByLabel('正则').uncheck())
+        await step('Escape', () => page.getByLabel('查找', { exact: true }).press('Escape'))
+        await step('find-panel detached', () => page.getByTestId('find-panel').waitFor({ state: 'detached', timeout: 2_000 }))
+        await diagDump(page, `b-${width}`)
+      }
+      // #56 失败点是「上一轮查找 + Escape 之后」的那次全选：在 1150 下再做一次全选并静置 1.5s
+      await diagInstall(page, 'b-1150-after-find')
+      await editor.click().catch(() => undefined)
+      await page.keyboard.press('Control+A')
+      await diagMark(page, 'after-ctrl-a')
+      await page.locator('.assistant-panel .selection-chip').waitFor({ timeout: 3_000 }).catch(() => undefined)
+      await diagMark(page, 'after-chip-wait')
+      await page.waitForTimeout(1_500)
+      await diagMark(page, 'after-1500ms')
+      await diagDump(page, 'b-1150-after-find')
+    } catch (e) { out(`b ${process.platform} error ${e.message.split('\n')[0]}`) }
+    finally {
+      if (viewport) await page.setViewportSize(viewport).catch(() => undefined)
+      await page.locator('.manuscript-editor').click().catch(() => undefined)
+      await page.mouse.move(5, 5)
+    }
+  }
 
   await record('F14 ⑩ 「此别名不提示」后下划线消失，重启后仍不提示', async () => {
     let page = running.page
