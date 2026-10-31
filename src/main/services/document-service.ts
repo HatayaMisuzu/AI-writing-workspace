@@ -33,6 +33,9 @@ export const countChineseWords = (text: string): number => {
   return han + words
 }
 
+/** 每章（每个文档节点）最多保留的快照数；受保护的点见 DocumentService.pruneSnapshots */
+export const SNAPSHOT_CAP_PER_DOCUMENT = 50
+
 export class DocumentService {
   private readonly styleSamples: StyleSampleService
   private readonly writingDaily: WritingDailyService
@@ -220,13 +223,16 @@ export class DocumentService {
     const current = this.getContent(input.projectId, input.documentId)
     if (input.expectedRevision !== undefined && current.revision !== input.expectedRevision) throw new Error('REVISION_CONFLICT')
     const deletion = current.plainText.length - input.plainText.length
-    if (deletion > 1000) this.createSnapshot(input.projectId, input.documentId, 'large_delete')
-    const latestSnapshot = this.db.raw.prepare('SELECT created_at FROM snapshots WHERE project_id = ? AND document_id = ? ORDER BY created_at DESC LIMIT 1')
-      .get(input.projectId, input.documentId) as { created_at: number } | undefined
-    if (current.revision > 0 && (!latestSnapshot || Date.now() - latestSnapshot.created_at >= 10 * 60 * 1000)) {
-      this.createSnapshot(input.projectId, input.documentId, 'interval')
-    }
-    this.db.transaction(() => { this.writeContentInTx(input, current) })
+    // 自动快照（含每章上限修剪）与正文写入同一事务：任一步失败整体 ROLLBACK，不会出现「旧快照删了 / 新快照或正文没写进」的中间态
+    this.db.transaction(() => {
+      if (deletion > 1000) this.createSnapshot(input.projectId, input.documentId, 'large_delete')
+      const latestSnapshot = this.db.raw.prepare('SELECT created_at FROM snapshots WHERE project_id = ? AND document_id = ? ORDER BY created_at DESC LIMIT 1')
+        .get(input.projectId, input.documentId) as { created_at: number } | undefined
+      if (current.revision > 0 && (!latestSnapshot || Date.now() - latestSnapshot.created_at >= 10 * 60 * 1000)) {
+        this.createSnapshot(input.projectId, input.documentId, 'interval')
+      }
+      this.writeContentInTx(input, current)
+    })
     return this.getContent(input.projectId, input.documentId)
   }
 
@@ -288,7 +294,33 @@ export class DocumentService {
       (id, project_id, document_id, reason, revision, content, plain_text, metadata_json, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
       .run(randomUUID(), projectId, documentId, reason, current.revision, current.editorJsonText, current.plainText, JSON.stringify(metadata), Date.now())
+    this.pruneSnapshots(projectId, documentId, current.revision)
   }
+
+  /**
+   * 每章快照上限（P3）：插入新快照后、同一事务内调用。总数超过 SNAPSHOT_CAP_PER_DOCUMENT 时按 created_at（同毫秒按 rowid）删最旧的「可淘汰」快照。
+   * 受保护（计入总数但永不淘汰）：
+   * - 当前版本：revision 等于当前正文 revision 的快照（含刚写入的这一条；正文本身在 document_contents，不在本表）；
+   * - 整批恢复点：reason = manual 且 metadata.kind = book_replace（restoreBatch 按 batchId 读的正是这些行），
+   *   以及整批恢复前打的 pre_restore（metadata 带 batchId）。
+   * 受保护的点本身超过上限时全部保留，只淘汰其余可淘汰的快照（此时总数 > 上限）。
+   * 失败直接抛出，由外层事务 / SAVEPOINT 回滚。
+   */
+  private pruneSnapshots(projectId: string, documentId: string, currentRevision: number): void {
+    const { n } = this.db.raw.prepare('SELECT COUNT(*) AS n FROM snapshots WHERE project_id = ? AND document_id = ?').get(projectId, documentId) as { n: number }
+    if (n <= SNAPSHOT_CAP_PER_DOCUMENT) return
+    const victims = this.db.raw.prepare(`SELECT rowid AS rowid FROM snapshots
+      WHERE project_id = ? AND document_id = ? AND revision != ?
+        AND NOT (reason = 'manual' AND json_extract(metadata_json, '$.kind') = 'book_replace')
+        AND NOT (reason = 'pre_restore' AND json_extract(metadata_json, '$.batchId') IS NOT NULL)
+      ORDER BY created_at ASC, rowid ASC LIMIT ?`).all(projectId, documentId, currentRevision, n - SNAPSHOT_CAP_PER_DOCUMENT) as Array<{ rowid: number }>
+    const del = this.db.raw.prepare('DELETE FROM snapshots WHERE rowid = ?')
+    for (const { rowid } of victims) del.run(rowid)
+    this.onSnapshotsPruned(documentId, victims.length)
+  }
+
+  /** 测试钩子（失败注入）：修剪删除之后、事务提交之前调用；生产里为空操作。 */
+  protected onSnapshotsPruned(documentId: string, deleted: number): void { void documentId; void deleted }
 
   /** 一次扫描本作品 FTS 行：document_id → rowid[]（只读 UNINDEXED 列，事务内调用）。 */
   private ftsRowidMap(projectId: string): Map<string, number[]> {
@@ -373,10 +405,20 @@ export class DocumentService {
       id: randomUUID(), projectId, documentId, reason, revision: current.revision,
       content: JSON.stringify(current.editorJson), plainText: current.plainText, metadata, createdAt: Date.now()
     }
-    this.db.raw.prepare(`INSERT INTO snapshots
-      (id, project_id, document_id, reason, revision, content, plain_text, metadata_json, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-      .run(snapshot.id, projectId, documentId, reason, snapshot.revision, snapshot.content, snapshot.plainText, JSON.stringify(metadata), snapshot.createdAt)
+    // 插入 + 修剪原子化：SAVEPOINT 在外层事务内（saveContent / prepareBatch）是嵌套保存点，单独调用时（IPC / restoreSnapshot / prepare）自成一个事务
+    this.db.raw.exec('SAVEPOINT snapshot_cap')
+    try {
+      this.db.raw.prepare(`INSERT INTO snapshots
+        (id, project_id, document_id, reason, revision, content, plain_text, metadata_json, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(snapshot.id, projectId, documentId, reason, snapshot.revision, snapshot.content, snapshot.plainText, JSON.stringify(metadata), snapshot.createdAt)
+      this.pruneSnapshots(projectId, documentId, snapshot.revision)
+      this.db.raw.exec('RELEASE snapshot_cap')
+    } catch (error) {
+      this.db.raw.exec('ROLLBACK TO snapshot_cap')
+      this.db.raw.exec('RELEASE snapshot_cap')
+      throw error
+    }
     return snapshot
   }
 
