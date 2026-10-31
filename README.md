@@ -67,9 +67,22 @@
 
 ### Windows
 1. 下载 `墨记 Setup x.y.z.exe` 安装包（发布地址：待定）。
-2. **安装包没有代码签名**，Windows SmartScreen 会弹出「Windows 已保护你的电脑」。放行方法：点「**更多信息**」→「**仍要运行**」。如果浏览器下载时提示「不常下载」，在下载列表里选择「保留」。Windows Defender 是否误报：待核实。
+2. **安装包没有代码签名**，Windows SmartScreen 会拦截，放行步骤见下一节。Windows Defender 是否误报：待核实。
 3. 安装时可以改安装目录，会创建桌面快捷方式。
 4. 升级：没有自动更新。下载新版安装包覆盖安装即可。覆盖安装和卸载时作品数据会不会保留：待核实。升级前建议先给每部作品导出一次备份。
+
+### Windows 安装包未签名，如何在 SmartScreen 放行
+墨记的 Windows 安装包目前**没有代码签名**。CI 打包日志里出现的「signing with signtool.exe」只表示 electron-builder 经过了签名步骤；仓库没有配置任何签名证书，产物 PE 文件的证书表为空（核对 CI run 41155049730 的 `墨记 Setup 0.3.0.exe`、`墨记.exe`、`elevate.exe`），所以安装包上没有任何数字签名，更没有可信任的代码签名。按微软说明，未签名的程序首次运行时会出现「Windows 已保护你的电脑」提示，需要你手动选择继续运行；每个新版本的信誉都要从零积累，所以每次升级都可能再出现一次（来源：[Windows 应用开发者的 SmartScreen 声誉 - Microsoft Learn](https://learn.microsoft.com/zh-cn/windows/apps/package-and-deploy/smartscreen-reputation)）。
+
+放行步骤（按钮文字以实际界面为准）：
+1. 双击安装包，出现蓝色的「Windows 已保护你的电脑」窗口，起初只有「不运行」按钮。
+2. 点窗口里的「**更多信息**」，会显示应用名称，发布者一栏为「未知发布者」。
+3. 确认文件是你自己从墨记发布地址下载的之后，点「**仍要运行**」，安装程序照常启动。
+
+补充说明：
+- 如果浏览器下载时提示文件「不常被下载」，在浏览器下载列表里选择「保留」。
+- Windows 11 上如果开启了「智能应用控制」，未签名程序可能会被直接阻止、看不到「仍要运行」。相关设置在「Windows 安全中心 → 应用和浏览器控制」，见微软说明：[Windows 安全中心中的应用和浏览器控制](https://support.microsoft.com/zh-cn/windows/windows-%E5%AE%89%E5%85%A8%E4%B8%AD%E5%BF%83-%E5%BA%94%E7%94%A8%E4%B8%AD%E7%9A%84%E5%BA%94%E7%94%A8-%E6%B5%8F%E8%A7%88%E5%99%A8%E6%8E%A7%E4%BB%B6-8f68fb65-ebb4-3cfb-4bd7-ef0f376f3dc3)、[智能应用控制常见问题解答](https://support.microsoft.com/zh-cn/windows/security/threat-malware-protection/smart-app-control-frequently-asked-questions)。不建议为了装一个程序长期关闭 SmartScreen 或智能应用控制。
+- 只运行从墨记官方发布地址下载的安装包（发布地址目前待定，见上）。仓库暂未提供安装包校验值；以后发布时提供了校验值的话，可以用 PowerShell 的 `Get-FileHash <文件> -Algorithm SHA256` 核对。
 
 ### Linux
 目前没有提供安装包。可以从源码用 `npm run dist:linux-dir` 打免安装的目录版；持续集成在 Linux 上跑端到端测试。
@@ -93,7 +106,7 @@ npm run dev
 - 没有用量（token）统计。
 
 ## 许可证
-仓库目前没有 LICENSE 文件，许可证待权利人选定。
+MIT，见 [LICENSE](LICENSE)。
 
 ## 开发者文档
 - 设计与审计报告见 [docs/](docs/)，例如 [核心正确性修复报告](docs/CORE_CORRECTNESS_REPORT.md)、[初版执行报告](docs/EXECUTION_REPORT.md)。

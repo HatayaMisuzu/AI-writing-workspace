@@ -7,7 +7,9 @@
 ## 1. 数据存在哪里
 
 - **所有作品数据**（正文、大纲、资料、人物、伏笔、时间线、快照、AI 对话、码字统计等）都存在一个本地数据库文件 `inkstone.sqlite` 里，放在系统给应用分配的用户数据目录下。
-  - Windows 上一般是 `%APPDATA%\墨记\`（具体文件夹名：待核实）。
+  - Windows：`%APPDATA%\墨记\`（通常是 `C:\Users\<用户名>\AppData\Roaming\墨记\`）。
+  - Linux：`$XDG_CONFIG_HOME/墨记/`；未设置 `XDG_CONFIG_HOME` 时为 `~/.config/墨记/`。
+  - 墨记目前只提供 Windows 和 Linux 版本。以上路径根据 Electron 文档与代码推断，未在真机实测。
   - 数据库旁边还会有 `inkstone.sqlite-wal`、`inkstone.sqlite-shm` 两个临时日志文件，属于正常现象，不要单独删除。
 - **设置**：模型服务配置、全局词表、全局提示词模板等也存在这个数据库里；每部作品自己的设置（例如小黑屋状态、人物悬停偏好）随作品一起存。没有另外的设置文件。
 - **备份**：墨记不会自己在后台写备份文件。只有你点「创建项目备份」时，才会把这部作品导出成一个 `.aiwproj` 文件，保存到你选的位置。导出的正文同理。
@@ -42,7 +44,7 @@
 
 基于 origin/main `6ca96b83ec487eec18a7aee6c5f595241c062108`。
 
-- 数据库文件名与位置：`src/main/index.ts:49`（`join(app.getPath('userData'), 'inkstone.sqlite')`）。Windows 的具体目录名由 Electron 根据应用名决定（package.json `productName: "墨记"`，`name: "inkstone-writing-workspace"`），属于推断，待核实。
+- 数据库文件名与位置：`src/main/index.ts:49`（`join(app.getPath('userData'), 'inkstone.sqlite')`）。代码中无 `app.setName` / `app.setPath`（`src/main` 内 rg 无结果，按 origin/main `5679058` 核对）。Electron 的 `userData` 默认为 `appData`（Windows `%APPDATA%`，Linux `$XDG_CONFIG_HOME` 或 `~/.config`）加应用名，应用名优先取 package.json 的 `productName`（`"墨记"`），其次才是 `name`（`inkstone-writing-workspace`），见 [Electron app 文档](https://www.electronjs.org/docs/latest/api/app)，因此目录名为「墨记」。打包目标只有 Windows NSIS 与 Linux dir。属于推断，未在真机实测。
 - WAL 日志文件：`src/main/database/schema.ts:2`（`PRAGMA journal_mode = WAL`）。
 - 设置存在数据库：`src/main/database/schema.ts:274`（`app_settings` 表）；全局词表 `src/main/services/lint-service.ts:3`；作品设置 `projects.settings_json`（`src/main/services/focus-lock-service.ts:2`）。
 - 服务配置与加密 Key 列：`src/main/database/schema.ts:192–197`（`provider_configs.encrypted_api_key BLOB`）。
