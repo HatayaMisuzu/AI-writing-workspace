@@ -1016,6 +1016,41 @@ try {
     }
   })
 
+  // U03 兜底：Mod-a 由编辑器 priority 1000 扩展接管；焦点在查找框时 Ctrl+A 只选输入框文字，不选正文、不出 chip。
+  // 选择器沿用：查找框 getByLabel('查找')（:991、:1769），find-panel testid（:994），chip（:986）。
+  await record('U03 兜底：查找框内 Ctrl+A 只选输入框文字、正文不被选中', async () => {
+    const page = running.page
+    const editor = page.locator('.manuscript-editor')
+    await openChapter(page, '悬停章')
+    await page.locator('.manuscript-editor', { hasText: '林栀推门进来' }).waitFor()
+    // 开头不留全选：光标折叠到正文开头
+    await editor.click()
+    await page.keyboard.press('Control+Home')
+    await page.locator('.assistant-panel .selection-chip').waitFor({ state: 'detached', timeout: 2_000 })
+    await page.keyboard.press('Control+f')
+    const input = page.getByLabel('查找', { exact: true })
+    await input.fill('林栀推门')
+    await page.getByTestId('find-count').filter({ hasText: '共' }).waitFor({ timeout: 2_000 })
+    await input.press('Control+A')
+    const state = await input.evaluate((el) => {
+      const sel = window.getSelection()
+      const editorEl = document.querySelector('.manuscript-editor')
+      const inEditor = !!sel?.anchorNode && !!editorEl?.contains(sel.anchorNode)
+      return { value: el.value, start: el.selectionStart, end: el.selectionEnd, focused: document.activeElement === el,
+        domInEditor: inEditor, domLen: inEditor ? sel.toString().length : 0, chip: document.querySelector('.assistant-panel .selection-chip')?.textContent ?? null }
+    })
+    process.stdout.write(`e2e U03 find-input Ctrl+A ${process.platform}: ${JSON.stringify(state)}\n`)
+    assert.equal(state.start, 0, `查找框 Ctrl+A：selectionStart 应为 0：${JSON.stringify(state)}`)
+    assert.equal(state.end, state.value.length, `查找框 Ctrl+A：selectionEnd 应覆盖全部文字：${JSON.stringify(state)}`)
+    assert.ok(!state.domInEditor || state.domLen === 0, `查找框 Ctrl+A：正文 DOM 选区不应在编辑器内或应为空：${JSON.stringify(state)}`)
+    assert.equal(state.chip, null, `查找框 Ctrl+A：不应出现选区 chip：${JSON.stringify(state)}`)
+    await input.press('Escape')
+    await page.getByTestId('find-panel').waitFor({ state: 'detached', timeout: 2_000 })
+    // 结尾不留全选
+    await editor.click()
+    await page.keyboard.press('Control+Home')
+  })
+
   await record('F14 ⑩ 「此别名不提示」后下划线消失，重启后仍不提示', async () => {
     let page = running.page
     await hitLocator(page, '林栀').first().hover()
