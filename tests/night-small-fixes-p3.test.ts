@@ -60,10 +60,12 @@ describe('小修⑥ 重命名后同步大标题', async () => {
 describe('小修⑦ 窄侧栏样式', () => {
   it('行网格给徽标留 auto 列，徽标不折行不收缩，标题省略号', () => {
     const css = read('src/renderer/src/styles.css')
-    expect(css).toContain('grid-template-columns: minmax(0, 1fr) auto 26px 26px')
-    // 250px 侧栏：操作按钮平时不占列，悬停 / 焦点进入行时才展开（键盘可达）
-    expect(css).toMatch(/\.chapter-row \{[^}]*grid-template-columns: minmax\(0, 1fr\) auto 0 0;/)
-    expect(css).toMatch(/\.chapter-row:hover, \.chapter-row:focus-within \{ grid-template-columns: minmax\(0, 1fr\) auto 26px 26px; \}/)
+    // 叠放方案：grid 不给按钮留列；按钮容器绝对定位叠在标题尾部，只靠 opacity 显隐（不重排），背景跟随行的 --row-bg
+    expect(css).toMatch(/\.chapter-row \{[^}]*position: relative;[^}]*grid-template-columns: minmax\(0, 1fr\) 0 auto;/)
+    expect(css).not.toMatch(/\.chapter-row[^{]*\{[^}]*grid-template-columns:[^;]*26px/)
+    expect(css).toMatch(/\.chapter-actions \{[^}]*position: absolute;[^}]*background-color: var\(--row-bg\);[^}]*opacity: 0;/)
+    expect(css).toMatch(/\.chapter-row:hover \.chapter-actions, \.chapter-row:focus-within \.chapter-actions \{ opacity: 1;/)
+    expect(css).toMatch(/\.chapter-row\.active \{ --row-bg: var\(--accent-soft\);/)
     expect(css).toMatch(/\.chapter-status-badge \{[^}]*flex-shrink: 0;[^}]*white-space: nowrap;/)
     expect(css).toMatch(/\.chapter-title \{[^}]*text-overflow: ellipsis/)
     expect(css).toMatch(/\.chapter-open \{[^}]*min-width: 0/)

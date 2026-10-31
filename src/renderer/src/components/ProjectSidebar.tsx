@@ -38,8 +38,10 @@ export function ProjectSidebar({ project, tree, selectedId, section, onSection, 
             aria-label={`${node.title}状态${CHAPTER_STATUS_LABEL[node.status]}`}
             onClick={(event) => { event.stopPropagation(); onSetStatus?.(node, nextStatus(node.status)) }}
           >{CHAPTER_STATUS_LABEL[node.status]}</button>
+          <div className="chapter-actions-anchor"><div className="chapter-actions">
           <button className="icon-button tree-node-action" onClick={() => onRename(node)} title="重命名章节" aria-label={`重命名${node.title}`}><Pencil size={13} /></button>
           <button className="icon-button tree-node-action danger" onClick={() => onDelete(node)} title="删除章节" aria-label={`删除${node.title}`}><Trash2 size={13} /></button>
+          </div></div>
         </div>)}
       </div>})}
       <div className="tree-actions"><button onClick={onNewVolume}><Plus size={15} />新建卷</button><button onClick={() => onNewChapter(volumes[0]?.id)}><Plus size={15} />新建章</button></div>

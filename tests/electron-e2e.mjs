@@ -1285,13 +1285,48 @@ try {
         assert.notEqual(a.prefix, b.prefix)
         assert.ok(a.prefixW <= a.titleW && b.prefixW <= b.titleW, `${width}px 第491章与第499章可见文本应不同`)
       }
-      // 键盘可达：Tab 聚焦到行内重命名按钮时按钮展开可见
-      const row = page.locator('.chapter-row').filter({ has: page.locator(`.chapter-open[title=${JSON.stringify(titles[0])}]`) })
+      // 叠放按钮：悬停 / Tab 聚焦时按钮容器显示，但只压在标题尾部，章号前缀的 Range 右边界 ≤ 容器左边界；容器背景 = 行计算背景，左侧渐变由透明到同色
+      const measureRow = (selector, title) => page.evaluate(({ selector, title }) => {
+        const row = document.querySelector(selector)
+        const span = row.querySelector('.chapter-title'); const box = row.querySelector('.chapter-actions')
+        const t = title ?? row.querySelector('.chapter-open').getAttribute('title')
+        const prefixLen = t.indexOf('章') >= 0 ? t.indexOf('章') + 1 : Math.min(t.length, 3)
+        const range = document.createRange(); range.setStart(span.firstChild, 0); range.setEnd(span.firstChild, prefixLen)
+        const cs = getComputedStyle(box); const before = getComputedStyle(box, '::before')
+        const b = box.getBoundingClientRect(); const r = row.getBoundingClientRect(); const tree = document.querySelector('.manuscript-tree').getBoundingClientRect()
+        return { title: t, prefixRight: range.getBoundingClientRect().right, boxLeft: b.left, boxRight: b.right, rowRight: r.right, treeRight: tree.right, opacity: Number(cs.opacity), visibility: cs.visibility, boxBg: cs.backgroundColor, rowBg: getComputedStyle(row).backgroundColor, beforeBg: before.backgroundImage, rowLayoutW: span.clientWidth }
+      }, { selector, title })
+      const rowSel = (t) => `.chapter-row:has(> .chapter-open[title=${JSON.stringify(t)}])`
+      const restLayout = await measureRow(rowSel(titles[0]), titles[0])
+      await page.locator(rowSel(titles[0])).hover()
+      await page.waitForTimeout(100)
+      const hovered = await measureRow(rowSel(titles[0]), titles[0])
+      process.stdout.write(`P3 sidebar overlay hover ${process.platform}: ${JSON.stringify(hovered)}\n`)
+      assert.ok(hovered.opacity === 1 && hovered.visibility === 'visible', `悬停时按钮应可见：${JSON.stringify(hovered)}`)
+      assert.ok(hovered.prefixRight <= hovered.boxLeft, `悬停时章号不被按钮盖住：章号右 ${hovered.prefixRight} / 按钮左 ${hovered.boxLeft}`)
+      assert.ok(hovered.boxRight <= hovered.rowRight + 0.5 && hovered.boxRight <= hovered.treeRight + 0.5, `按钮在行内、不被章树裁掉：${JSON.stringify(hovered)}`)
+      assert.equal(hovered.rowLayoutW, restLayout.rowLayoutW, '悬停只改 opacity，不重排标题列')
+      assert.equal(hovered.boxBg, hovered.rowBg, '悬停行按钮背景 = 行背景')
+      assert.ok(hovered.beforeBg.includes('linear-gradient') && hovered.beforeBg.includes(hovered.rowBg), `渐变应过渡到行背景：${hovered.beforeBg}`)
+      // 选中行（.active）同理
+      await page.locator('.chapter-row.active').hover()
+      await page.waitForTimeout(100)
+      const active = await measureRow('.chapter-row.active')
+      process.stdout.write(`P3 sidebar overlay active ${process.platform}: ${JSON.stringify(active)}\n`)
+      assert.notEqual(active.rowBg, hovered.rowBg, '选中行背景应不同于普通行')
+      assert.equal(active.boxBg, active.rowBg, '选中行按钮背景 = 行背景')
+      assert.ok(active.beforeBg.includes(active.rowBg), `选中行渐变应过渡到行背景：${active.beforeBg}`)
+      // 键盘可达：Tab 聚焦到行内重命名按钮时按钮可见、宽 ≥20，仍不盖章号
+      await page.mouse.move(5, 790)
+      const row = page.locator(rowSel(titles[0]))
       await row.locator('.chapter-open').focus()
       await page.keyboard.press('Tab'); await page.keyboard.press('Tab')
-      const focused = await page.evaluate(() => { const el = document.activeElement; return { label: el?.getAttribute('aria-label'), width: el?.getBoundingClientRect().width } })
+      const focused = await page.evaluate(() => { const el = document.activeElement; const r = el?.getBoundingClientRect(); return { label: el?.getAttribute('aria-label'), width: r?.width, containerOpacity: Number(getComputedStyle(el.closest('.chapter-actions')).opacity) } })
+      const tabbed = await measureRow(rowSel(titles[0]), titles[0])
+      process.stdout.write(`P3 sidebar overlay tab ${process.platform}: ${JSON.stringify({ focused, tabbed })}\n`)
       assert.equal(focused.label, `重命名${titles[0]}`)
-      assert.ok(focused.width >= 20, `焦点进入后按钮应展开：${JSON.stringify(focused)}`)
+      assert.ok(focused.width >= 20 && focused.containerOpacity === 1, `焦点进入后按钮应可见：${JSON.stringify(focused)}`)
+      assert.ok(tabbed.prefixRight <= tabbed.boxLeft, `Tab 聚焦时章号不被按钮盖住：${JSON.stringify(tabbed)}`)
     } finally {
       await page.evaluate(async ({ projectId, created }) => { for (const id of created) await window.workspace.documents.delete(projectId, id) }, { projectId: ids.projectId, created })
       await page.setViewportSize(original ?? { width: 1600, height: 900 })
