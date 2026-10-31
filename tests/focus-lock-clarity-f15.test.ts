@@ -1,8 +1,8 @@
 /**
  * F15 锁定可见性 + 锁定期间拒绝的出站请求清单（每项一条测试）。
- * 用真实 registerIpc（electron 以内存桩替代），从「另一本书」发起请求，证明：
- * - 任一作品锁定 → 拒绝；报错带被锁作品书名，且不带「FocusLockError:」前缀；
- * - 底层 fetch 调用 0 次（零 API 调用）。
+ * 用真实 registerIpc（electron 以内存桩替代）。P3 起小黑屋只锁当前作品：
+ * - 被锁那本发起 → 拒绝；报错带被锁作品书名，且不带「FocusLockError:」前缀；底层 fetch 调用 0 次（零 API 调用）；
+ * - 另一本书发起 → 放行并出站；测试连接属「非作品」请求，锁定时放行。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -29,6 +29,7 @@ import { guardedFetch, installEgressGate, installFocusEgressLock, setRawFetchFor
 import { NetworkGate } from '../src/main/network-policy'
 import { shouldOpenExternal } from '../src/main/external-url'
 import { ProviderService } from '../src/main/ai/provider'
+import { ChatService } from '../src/main/services/chat-service'
 import { userErrorMessage } from '../src/shared/user-error'
 import { handleModalEscape } from '../src/renderer/src/services/modal-escape'
 
@@ -54,6 +55,7 @@ const setup = () => {
   const other = projects.create({ title: '另一本书', projectType: 'novel' })
   const docs = new DocumentService(db)
   const otherChapter = docs.listOrderedChapters(other.id)[0]
+  const lockedChapter = docs.listOrderedChapters(locked.id)[0]
   docs.saveContent({ projectId: other.id, documentId: otherChapter.id, editorJson: { type: 'doc', content: [{ type: 'paragraph' }] }, plainText: '雨落在港口。'.repeat(20) })
   const providers = new ProviderService(db, testCodec)
   providers.save({ id: 'p', providerType: 'openai-compatible', displayName: 'mock', baseUrl: 'http://localhost:11434/v1', apiKey: 'k' })
@@ -62,7 +64,13 @@ const setup = () => {
   installEgressGate({ decide: () => ({ allow: true }) })
   const focus = new FocusLockService(db)
   focus.start(locked.id, { mode: 'words', words: 100 })
-  return { db, focus, locked, other, otherChapter }
+  return { db, focus, locked, lockedChapter, other, otherChapter }
+}
+const notFocusLocked = async (channel: string, ...args: unknown[]): Promise<void> => {
+  try { await invoke(channel, ...args) } catch (error) {
+    expect((error as Error & { code?: string }).code, channel).not.toBe('FOCUS_LOCKED')
+    expect((error as Error).message, channel).not.toMatch(/小黑屋/)
+  }
 }
 const expectTitledNoPrefix = (error: Error): void => {
   expect(error.message).toContain('《雾港来信》')
@@ -83,7 +91,7 @@ describe('F15 锁定可见性：书名、无前缀', () => {
   })
   it('FocusLockError 序列化（Electron 的 `${error}`）只给文案，不带「FocusLockError:」', () => {
     const error = new FocusLockError('FOCUS_LOCKED', focusLockedMessage(['雾港来信']))
-    expect(String(error)).toBe('《雾港来信》正在小黑屋中：锁定期间所有作品的 AI 功能都已关闭，回到《雾港来信》出屋后可用。')
+    expect(String(error)).toBe('《雾港来信》正在小黑屋中：这本书的 AI 功能已关闭，出屋后可用；其他作品不受影响。')
     expect(userErrorMessage(new Error(`Error invoking remote method 'digests:run': FocusLockError: 旧文案`))).toBe('旧文案')
   })
   it('紧急出屋对话框：Esc 只调用关闭（不出屋），并阻止冒泡到工作区', () => {
@@ -97,49 +105,62 @@ describe('F15 锁定可见性：书名、无前缀', () => {
   })
 })
 
-describe('F15 锁定期间拒绝清单（从另一本书发起；全部拒绝是有意设计）', () => {
-  it('R1 ai:start（讨论/生成/编辑/读者/一致性共用）→ error 事件 FOCUS_LOCKED，带书名，fetch 0 次', async () => {
-    const { other, otherChapter } = setup()
+describe('F15 / P3 锁定期间出站清单（被锁那本拒绝且零出站；另一本书放行；测试连接属非作品放行）', () => {
+  it('R1 ai:start（讨论/生成/编辑/读者/一致性共用）：被锁那本 → error FOCUS_LOCKED，带书名，fetch 0 次；另一本书 → 放行并出站', async () => {
+    const { db, locked, lockedChapter, other, otherChapter } = setup()
+    const otherThread = new ChatService(db).createThread(other.id, '另一本书')
     const listener = ipc.listeners.get('ai:start')!
-    await listener(event, { requestId: 'r1', threadId: 't1', userMessageId: 'u1', assistantMessageId: 'a1', task: { mode: 'discussion', writePermission: 'none', userIntent: '聊聊', projectId: other.id, documentId: otherChapter.id } })
+    await listener(event, { requestId: 'r1', threadId: 't1', userMessageId: 'u1', assistantMessageId: 'a1', task: { mode: 'discussion', writePermission: 'none', userIntent: '聊聊', projectId: locked.id, documentId: lockedChapter.id } })
     expect(sent).toEqual([expect.objectContaining({ type: 'error', code: 'FOCUS_LOCKED', message: expect.stringContaining('《雾港来信》') })])
     expect(JSON.stringify(sent)).not.toMatch(/FocusLockError/)
     expect(rawFetchCalls).toBe(0)
-  })
-  it('R2 ai:preview-context（发送前的上下文预览）→ 拒绝', async () => {
-    const { other, otherChapter } = setup()
-    expectTitledNoPrefix(await rejection('ai:preview-context', { threadId: 't1', task: { mode: 'discussion', writePermission: 'none', userIntent: '聊聊', projectId: other.id, documentId: otherChapter.id } }))
-    expect(rawFetchCalls).toBe(0)
-  })
-  it('R3 digests:run（章节理解）→ 拒绝', async () => {
-    const { other, otherChapter } = setup()
-    expectTitledNoPrefix(await rejection('digests:run', other.id, otherChapter.id))
-    expect(rawFetchCalls).toBe(0)
-  })
-  it('R4 proofreading:run（AI 校对）→ 拒绝', async () => {
-    const { other, otherChapter } = setup()
-    expectTitledNoPrefix(await rejection('proofreading:run', other.id, otherChapter.id))
-    expect(rawFetchCalls).toBe(0)
-  })
-  it('R5 memories:extract-intent（记忆意图抽取）→ 拒绝', async () => {
-    const { other } = setup()
-    expectTitledNoPrefix(await rejection('memories:extract-intent', other.id, 'msg-1', '记住：主角怕水'))
-    expect(rawFetchCalls).toBe(0)
-  })
-  it('R6 providers:test（已保存服务测试连接）→ 拒绝', async () => {
-    setup()
-    expectTitledNoPrefix(await rejection('providers:test', 'p', 'mock'))
-    expect(rawFetchCalls).toBe(0)
-  })
-  it('R7 providers:test-url（未保存地址测试连接）→ 拒绝；出屋后同一调用确实会出站（对照）', async () => {
-    const { focus, locked } = setup()
-    expectTitledNoPrefix(await rejection('providers:test-url', { baseUrl: 'http://localhost:11434/v1', apiKey: 'k', modelId: 'mock' }))
-    expect(rawFetchCalls).toBe(0)
-    focus.emergencyExit(locked.id, FOCUS_EXIT_PHRASE)
-    await invoke('providers:test-url', { baseUrl: 'http://localhost:11434/v1', apiKey: 'k', modelId: 'mock', providerId: 'p' })
+    sent.length = 0
+    await listener(event, { requestId: 'r1b', threadId: otherThread.id, userMessageId: 'u1b', assistantMessageId: 'a1b', task: { mode: 'discussion', writePermission: 'none', userIntent: '聊聊', projectId: other.id, documentId: otherChapter.id } })
+    expect(JSON.stringify(sent)).not.toMatch(/FOCUS_LOCKED|小黑屋/)
     expect(rawFetchCalls).toBeGreaterThan(0)
   })
-  it('R8 主进程 guardedFetch（所有 Provider 适配器的唯一出口，兜底）→ EgressBlockedError focus-locked，带书名', async () => {
+  it('R2 ai:preview-context（发送前的上下文预览）：被锁那本 → 拒绝；另一本书 → 放行', async () => {
+    const { locked, lockedChapter, other, otherChapter } = setup()
+    expectTitledNoPrefix(await rejection('ai:preview-context', { threadId: 't1', task: { mode: 'discussion', writePermission: 'none', userIntent: '聊聊', projectId: locked.id, documentId: lockedChapter.id } }))
+    expect(rawFetchCalls).toBe(0)
+    await notFocusLocked('ai:preview-context', { threadId: 't1', task: { mode: 'discussion', writePermission: 'none', userIntent: '聊聊', projectId: other.id, documentId: otherChapter.id } })
+  })
+  it('R3 digests:run（章节理解）：被锁那本 → 拒绝、零出站；另一本书 → 放行并出站', async () => {
+    const { locked, lockedChapter, other, otherChapter } = setup()
+    expectTitledNoPrefix(await rejection('digests:run', locked.id, lockedChapter.id))
+    expect(rawFetchCalls).toBe(0)
+    await notFocusLocked('digests:run', other.id, otherChapter.id)
+    expect(rawFetchCalls).toBeGreaterThan(0)
+  })
+  it('R4 proofreading:run（AI 校对）：被锁那本 → 拒绝、零出站；另一本书 → 放行并出站', async () => {
+    const { locked, lockedChapter, other, otherChapter } = setup()
+    expectTitledNoPrefix(await rejection('proofreading:run', locked.id, lockedChapter.id))
+    expect(rawFetchCalls).toBe(0)
+    await notFocusLocked('proofreading:run', other.id, otherChapter.id)
+    expect(rawFetchCalls).toBeGreaterThan(0)
+  })
+  it('R5 memories:extract-intent（记忆意图抽取）：被锁那本 → 拒绝、零出站；另一本书 → 放行并出站', async () => {
+    const { locked, other } = setup()
+    expectTitledNoPrefix(await rejection('memories:extract-intent', locked.id, 'msg-1', '记住：主角怕水'))
+    expect(rawFetchCalls).toBe(0)
+    await notFocusLocked('memories:extract-intent', other.id, 'msg-1', '记住：主角怕水')
+    expect(rawFetchCalls).toBeGreaterThan(0)
+  })
+  it('R6 providers:test（已保存服务测试连接）：非作品请求 → 锁定时放行并出站', async () => {
+    setup()
+    await notFocusLocked('providers:test', 'p', 'mock')
+    expect(rawFetchCalls).toBeGreaterThan(0)
+  })
+  it('R7 providers:test-url（未保存地址测试连接）：非作品请求 → 锁定时放行并出站；出屋后同一调用同样出站（对照）', async () => {
+    const { focus, locked } = setup()
+    await notFocusLocked('providers:test-url', { baseUrl: 'http://localhost:11434/v1', apiKey: 'k', modelId: 'mock', providerId: 'p' })
+    expect(rawFetchCalls).toBeGreaterThan(0)
+    const during = rawFetchCalls
+    focus.emergencyExit(locked.id, FOCUS_EXIT_PHRASE)
+    await invoke('providers:test-url', { baseUrl: 'http://localhost:11434/v1', apiKey: 'k', modelId: 'mock', providerId: 'p' })
+    expect(rawFetchCalls).toBeGreaterThan(during)
+  })
+  it('R8 主进程 guardedFetch 无作品标记（兜底，按全局判断）→ EgressBlockedError focus-locked，带书名', async () => {
     setup()
     await expect(guardedFetch('http://localhost:11434/v1/models')).rejects.toMatchObject({ reason: 'focus-locked', message: expect.stringContaining('《雾港来信》') })
     expect(rawFetchCalls).toBe(0)
@@ -156,7 +177,7 @@ describe('F15 锁定期间拒绝清单（从另一本书发起；全部拒绝是
     locked = false
     expect(gate.filter('http://localhost:11434/v1/models')).toEqual({ cancel: false })
   })
-  it('R10 window.open 外链（shell.openExternal 交系统浏览器）→ 锁定期间不打开', () => {
+  it('R10 shouldOpenExternal 判定函数：第二参数为 true 时不打开（P3 起 index.ts 固定传 false，外链不受小黑屋影响，见 DR4-4）', () => {
     expect(shouldOpenExternal('https://example.com', true)).toBe(false)
     expect(shouldOpenExternal('https://example.com', false)).toBe(true)
     expect(shouldOpenExternal('javascript:alert(1)', false)).toBe(false)

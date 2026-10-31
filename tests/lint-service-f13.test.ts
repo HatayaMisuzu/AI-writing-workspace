@@ -131,19 +131,22 @@ describe('F13 ⑨ 导入（预览 → 确认只传 token）', () => {
   })
 })
 
-describe('F13 ⑩ 不联网、不调 AI；小黑屋中不运行', () => {
-  it('linter 路径 fetch 0 次、provider 0 次；锁定中 run 跳过，全书检查自动取消', async () => {
+describe('F13 ⑩ 不联网、不调 AI；P3 起小黑屋中照常运行', () => {
+  it('linter 路径 fetch 0 次、provider 0 次；锁定中 run 照常出结果，全书检查照常跑完（仍零出站）', async () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch')
     const db = createTestDb(); const { project, chapter } = seed(db)
     const focus = new FocusLockService(db)
-    const lint = new LintService(db, (id) => focus.isLocked(id))
+    const lint = new LintService(db)
     lint.saveGlobal('在坐=>在座')
     const providerCalls = vi.fn()
     expect(lint.run(project.id, chapter.id, '在坐').issues).toHaveLength(1)
     expect((await lint.checkBook(project.id)).total).toBe(2)
     focus.start(project.id, { mode: 'words', words: 100 })
-    expect(lint.run(project.id, chapter.id, '在坐')).toEqual({ issues: [], longChapter: false, skipped: 'focus-locked', elapsedMs: 0 })
-    expect((await lint.checkBook(project.id)).cancelled).toBe(true)
+    expect(focus.isLocked(project.id)).toBe(true)
+    const locked = lint.run(project.id, chapter.id, '在坐')
+    expect(locked.skipped).toBeUndefined(); expect(locked.issues).toHaveLength(1)
+    const lockedBook = await lint.checkBook(project.id)
+    expect(lockedBook.cancelled).toBe(false); expect(lockedBook.total).toBe(2)
     expect(fetchSpy).not.toHaveBeenCalled()
     expect(providerCalls).not.toHaveBeenCalled()
     expect(db.raw.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE name LIKE '%provider%'").get()).toBeDefined()

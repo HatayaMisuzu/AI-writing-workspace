@@ -673,7 +673,7 @@ try {
   await running.page.locator('.manuscript-editor').waitFor()
   watchRendererRequests(running.page)
 
-  await record('F15 ⑦ 小黑屋隐藏项全部消失、Esc 不退出、AI IPC 返回 FOCUS_LOCKED', async () => {
+  await record('F15 ⑦ 小黑屋隐藏项全部消失、作品栏保留、Esc 不退出、本书 AI IPC 返回 FOCUS_LOCKED；测试连接（非作品）放行', async () => {
     const page = running.page
     // 超限拒绝不修正
     await page.getByRole('button', { name: '小黑屋', exact: true }).click()
@@ -686,7 +686,23 @@ try {
     await enterBlackroom(page, async (d) => { await d.getByLabel('写满字数').check(); await d.getByLabel('目标字数').fill('8') })
     const before = await snapshotNetwork(page)
     for (const name of ['全文检索', '修改提案', '校对', '专注', '小黑屋', '退出专注']) assert.equal(await page.locator('button', { hasText: new RegExp(`^${name}`) }).count(), 0, `锁定期间不应出现「${name}」`)
-    for (const selector of ['.assistant-panel', '.project-sidebar', '.works-rail', '.manuscript-aside-stack', '.proofread-drawer']) assert.equal(await page.locator(selector).count(), 0, `锁定期间不应渲染 ${selector}`)
+    for (const selector of ['.assistant-panel', '.project-sidebar', '.manuscript-aside-stack', '.proofread-drawer']) assert.equal(await page.locator(selector).count(), 0, `锁定期间不应渲染 ${selector}`)
+    // P3 U5：小黑屋只锁当前作品，作品栏保留，可切换作品
+    assert.equal(await page.locator('.works-rail').count(), 1, '锁定期间应保留作品栏')
+    // P3 U1：整本检查入口；锁定时校对页只有「检查全书 / 本卷」，没有词表编辑与 AI 校对
+    await page.getByTestId('blackroom-book-check').click()
+    const proofing = page.getByTestId('proofing-view')
+    await proofing.waitFor()
+    assert.equal(await proofing.getByTestId('book-check-section').count(), 1)
+    assert.equal(await proofing.getByLabel('本作品词表').count(), 0, '锁定时不显示词表编辑')
+    assert.equal(await proofing.getByLabel('全局词表').count(), 0)
+    assert.equal(await page.locator('button', { hasText: /AI 校对/ }).count(), 0, '锁定时不显示 AI 校对')
+    assert.deepEqual(await proofing.getByLabel('检查范围').locator('option').first().innerText(), '全书')
+    await proofing.getByRole('button', { name: '开始检查' }).click()
+    await proofing.getByTestId('book-check-result').waitFor({ timeout: 10_000 })
+    assert.match(await proofing.getByTestId('book-check-result').innerText(), /检查完成/)
+    await page.getByTestId('blackroom-book-check').click()
+    await page.locator('.manuscript-editor').waitFor()
     assert.match(await page.getByTestId('blackroom-words').innerText(), /已写 0 \/ 8 字/)
     await page.keyboard.press('Escape')
     await page.keyboard.press('Control+Shift+F')
@@ -704,10 +720,6 @@ try {
       await capture('digest', () => window.workspace.digests.run(projectId, chapterId))
       await capture('proofread', () => window.workspace.proofreading.run(projectId, chapterId))
       await capture('extract', () => window.workspace.memories.extractIntent(projectId, chapterId, '记住：锁定中试探'))
-      const [provider] = await window.workspace.providers.list()
-      const [model] = await window.workspace.providers.models()
-      await capture('providerTest', () => window.workspace.providers.test(provider.id, model.modelId))
-      await capture('providerTestUrl', () => window.workspace.providers.testUrl({ baseUrl: provider.baseUrl, apiKey: 'x', modelId: model.modelId }))
       out.start = await new Promise((done) => {
         const requestId = crypto.randomUUID()
         window.workspace.ai.start({ requestId, threadId: crypto.randomUUID(), userMessageId: crypto.randomUUID(), assistantMessageId: crypto.randomUUID(), task }, (event) => { if (event.type === 'error') done(`${event.code}:${event.message}`); if (event.type === 'done') done('done') })
@@ -722,6 +734,20 @@ try {
       assert.doesNotMatch(message, /FocusLockError/, `${name} 报错不应带 FocusLockError 前缀`)
     }
     await addLockedDelta(page, before)
+    // P3：测试连接属「非作品」请求，锁定时放行并出站；单独计数，不计入「本书锁定期间网络 0」
+    const testHits = fixtureHits + anthropicRequests.length
+    const tests = await page.evaluate(async () => {
+      const out = {}
+      const capture = async (name, fn) => { try { const result = await fn(); out[name] = result?.ok === true ? 'ok' : `not-ok:${result?.message ?? ''}` } catch (error) { out[name] = String(error?.message ?? error) } }
+      const [provider] = await window.workspace.providers.list()
+      const [model] = await window.workspace.providers.models()
+      await capture('providerTest', () => window.workspace.providers.test(provider.id, model.modelId))
+      // 带 providerId、不填 Key：沿用已保存 Key、同一地址，不会弹 A·M1 确认框
+      await capture('providerTestUrl', () => window.workspace.providers.testUrl({ baseUrl: provider.baseUrl, modelId: model.modelId, providerId: provider.id }))
+      return out
+    })
+    for (const [name, message] of Object.entries(tests)) assert.doesNotMatch(message, /小黑屋|FocusLockError/, `${name} 不应因小黑屋被拒，实际 ${message}`)
+    assert.ok(fixtureHits + anthropicRequests.length > testHits, '锁定时测试连接应确实出站（命中 fixture）')
   })
 
   await record('F15 ⑧ 写够 N 字并保存后「出屋」出现，点击才退出', async () => {
@@ -759,7 +785,7 @@ try {
     await page.getByTestId('blackroom-bar').waitFor()
     assert.match(await page.getByTestId('blackroom-words').innerText(), /已写 [1-9]\d* \/ 500 字/)
     assert.equal(await page.locator('.assistant-panel').count(), 0)
-    assert.equal(await page.locator('.works-rail').count(), 0)
+    assert.equal(await page.locator('.works-rail').count(), 1, 'P3：锁定中作品栏保留')
     const persisted = await page.evaluate(async ({ projectId, chapterA, chapterB }) => (await Promise.all([chapterA, chapterB].map((id) => window.workspace.documents.get(projectId, id)))).map((doc) => doc.plainText).join('\n'), ids)
     assert.match(persisted, /强杀前已保存/, '强杀前已保存的正文应保留')
     await addLockedDelta(page, before)
@@ -1862,7 +1888,7 @@ try {
     }
   })
 
-  await record('F13 ⑬ 小黑屋内不自动校对、无校对入口与计数，网络 0；出屋后计数正确', async () => {
+  await record('F13 ⑬ 小黑屋内不自动校对、无校对抽屉与计数；手动 linter 照常出结果，网络 0；出屋后计数正确', async () => {
     const page = running.page
     await openChapter(page, '黑屋校对章')
     await page.locator('.manuscript-editor', { hasText: '干净的一段' }).waitFor()
@@ -1873,8 +1899,9 @@ try {
     assert.equal(await page.locator('button', { hasText: /^校对/ }).count(), 0, '锁定期间无校对按钮')
     assert.equal(await page.locator('.proofread-count').count(), 0, '锁定期间无校对计数')
     assert.equal(await page.locator('.proofread-drawer').count(), 0)
-    const skipped = await page.evaluate(({ projectId, documentId }) => window.workspace.linter.run(projectId, documentId, '甲,乙', 0), { projectId: ids.projectId, documentId: f13.locked })
-    assert.equal(skipped.skipped, 'focus-locked', '主进程锁定时跳过校对')
+    const lockedLint = await page.evaluate(({ projectId, documentId }) => window.workspace.linter.run(projectId, documentId, '甲,乙', 0), { projectId: ids.projectId, documentId: f13.locked })
+    assert.equal(lockedLint.skipped, undefined, 'P3：锁定时本地检查照常运行（纯本地、不出站）')
+    assert.ok(lockedLint.issues.length > 0, '锁定时 linter 应照常给出问题')
     const after = await snapshotNetwork(page)
     const delta = Object.fromEntries(Object.keys(before).map((key) => [key, after[key] - before[key]]))
     process.stdout.write(`F13 ⑬ locked lint network delta: ${JSON.stringify(delta)}\n`)
@@ -2920,7 +2947,7 @@ try {
     await page.locator('.manuscript-editor').waitFor()
   })
 
-  await record('F15 ⑫ 锁定可见性：作品库 / 其他作品显示被锁书名与回去入口；AI 报错带书名无前缀；Esc 只关紧急出口对话框', async () => {
+  await record('F15 ⑫ 锁定可见性：作品库轻提示与行内标记、回去入口；其他作品无全局提示且 AI 可用；锁定中可切换作品；Esc 只关紧急出口对话框', async () => {
     const page = running.page
     const other = await page.evaluate(() => window.workspace.projects.create({ title: '旁边的书', projectType: 'novel', description: '' }))
     const lockedTitle = await page.evaluate(async (projectId) => (await window.workspace.projects.list(true)).find((item) => item.id === projectId).title, ids.projectId)
@@ -2943,30 +2970,37 @@ try {
     // 回到作品库（重新载入界面 = 从作品库开始）
     await page.reload()
     before = await snapshotNetwork(page)
+    // P3 U2：作品库轻提示（不弹窗）+ 被锁那本的行内标记
     const libraryNotice = page.getByTestId('focus-lock-notice')
     await libraryNotice.waitFor()
-    assert.match(await libraryNotice.innerText(), new RegExp(`《${lockedTitle}》正在小黑屋中`))
-    // 打开另一本书：提示仍在，AI 报错带书名、无前缀
+    assert.match(await libraryNotice.innerText(), new RegExp(`《${lockedTitle}》正在小黑屋中：只锁这一本`))
+    assert.doesNotMatch(await libraryNotice.innerText(), /所有作品/)
+    assert.equal(await page.getByRole('dialog').count(), 0, '作品库不弹窗')
+    assert.equal(await page.locator('.work-row', { hasText: lockedTitle }).getByTestId('work-locked-badge').count(), 1)
+    assert.equal(await page.locator('.work-row', { hasText: '旁边的书' }).getByTestId('work-locked-badge').count(), 0)
+    await addLockedDelta(page, before)
+    // P3 U4 / U5：打开另一本书（锁定中可切换）：不显示全局锁提示，AI 照常可用（会出站，单独计数，不计入被锁那本的 0）
     await page.locator('.work-row', { hasText: '旁边的书' }).getByRole('button', { name: '继续写作' }).click()
-    await page.locator('.assistant-panel').waitFor()
-    await page.getByTestId('focus-lock-notice').waitFor()
-    assert.match(await page.getByTestId('focus-lock-notice').innerText(), new RegExp(`《${lockedTitle}》`))
-    await page.getByRole('button', { name: '理解本章' }).click()
-    const digestError = page.locator('.message-content', { hasText: '章节理解失败' })
-    await digestError.waitFor({ timeout: 5_000 })
-    const digestText = await digestError.innerText()
-    assert.ok(digestText.includes(`章节理解失败：《${lockedTitle}》正在小黑屋中`), `理解本章报错应带书名且无前缀，实际 ${digestText}`)
-    assert.doesNotMatch(digestText, /FocusLockError|Error invoking/)
+    await page.locator('.manuscript-editor').waitFor()
+    await page.waitForTimeout(2_500) // 跨过 App 2s 一次的锁状态轮询
+    assert.equal(await page.getByTestId('focus-lock-notice').count(), 0, '其他作品不显示全局锁提示')
+    assert.equal(await page.getByTestId('blackroom-bar').count(), 0)
+    const otherAi = await page.evaluate(async (projectId) => {
+      const [chapter] = (await window.workspace.documents.tree(projectId)).filter((node) => node.type === 'chapter')
+      try { await window.workspace.digests.run(projectId, chapter.id); return 'resolved' } catch (error) { return String(error?.message ?? error) }
+    }, other.id)
+    assert.doesNotMatch(otherAi, /小黑屋|FocusLockError|FOCUS_LOCKED/, `另一本书的 AI 不应受锁影响，实际 ${otherAi}`)
+    const otherHits = fixtureHits + anthropicRequests.length
     await page.getByPlaceholder('和同行者聊聊这部作品…').fill('锁定时在另一本书里提问')
     await page.getByRole('button', { name: '发送' }).click()
-    const chatError = page.locator('.message-content', { hasText: '正在小黑屋中' }).last()
-    await page.waitForFunction(() => [...document.querySelectorAll('.message-content')].filter((node) => node.textContent?.includes('正在小黑屋中')).length >= 2, null, { timeout: 5_000 })
-    const chatText = await chatError.innerText()
-    assert.ok(chatText.startsWith(`《${lockedTitle}》正在小黑屋中`), `对话报错应带书名且无前缀，实际 ${chatText}`)
-    assert.doesNotMatch(chatText, /FocusLockError|FOCUS_LOCKED/)
-    // 回去入口：跳回被锁那本书的小黑屋，在那里出屋
+    for (let waited = 0; fixtureHits + anthropicRequests.length <= otherHits && waited < 5_000; waited += 100) await page.waitForTimeout(100)
+    assert.ok(fixtureHits + anthropicRequests.length > otherHits, '另一本书的对话应确实出站')
+    assert.equal(await page.locator('.message-content', { hasText: '正在小黑屋中' }).count(), 0, '另一本书不应出现小黑屋报错')
+    // 回到被锁那本：经作品库切回，锁定照常
+    await page.locator('.works-rail button[title="作品库"]').click()
     await page.getByTestId('focus-lock-return').click()
     await page.getByTestId('blackroom-bar').waitFor()
+    before = await snapshotNetwork(page)
     assert.equal(await page.getByTestId('focus-lock-notice').count(), 0)
     assert.equal(await page.locator('.assistant-panel').count(), 0)
     await page.getByRole('button', { name: '紧急出口' }).click()
