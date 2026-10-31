@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { createProviderAdapter } from '../src/main/ai/provider'
 import { EgressBlockedError, guardedFetch, installEgressGate } from '../src/main/net/egress-guard'
 import { NetworkGate, originsFromProviderBaseUrls } from '../src/main/network-policy'
+import { stripComments } from './helpers/source-guard'
 
 // P3-1：主进程 Node fetch 不经 session.webRequest；验证 egress-guard 统一守门。仅本地假服务器。
 type Fake = { server: Server; base: string; origin: string; hits: number; handler: (url: string, res: import('node:http').ServerResponse) => void }
@@ -91,9 +92,10 @@ describe('P3-1 主进程出站守门', () => {
     const bad: string[] = []
     const patterns = [/(?<![\w.])fetch\s*\(/, /globalThis\.fetch/, /from ['"](node:)?(https?|net|http2|tls|dgram)['"]/, /require\(['"](node:)?(https?|net|http2|tls|dgram)['"]\)/, /\bnet\.request\b/, /\b(?:import|from)\b[^\n]*\bnet\b[^\n]*['"]electron['"]/]
     for (const file of files) {
-      readFileSync(file, 'utf8').split('\n').forEach((line, i) => {
-        if (/^\s*(\/\/|\*)/.test(line)) return
-        if (patterns.some((re) => re.test(line))) bad.push(`${file}:${i + 1}: ${line.trim()}`)
+      // 去掉注释后逐行匹配（行号与原文件一致）；不再按「行首 // 或 *」跳过，行尾注释与块注释也不算数
+      const original = readFileSync(file, 'utf8').split('\n')
+      stripComments(original.join('\n')).split('\n').forEach((line, i) => {
+        if (patterns.some((re) => re.test(line))) bad.push(`${file}:${i + 1}: ${original[i].trim()}`)
       })
     }
     expect(bad).toEqual([])

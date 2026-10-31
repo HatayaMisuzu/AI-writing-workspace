@@ -10,6 +10,7 @@ import { DocumentService } from '../src/main/services/document-service'
 import { WritingDailyService } from '../src/main/services/writing-daily-service'
 import { BackupService } from '../src/main/services/backup-service'
 import { chapterHashes } from './fixtures/wal-hash'
+import { readStripped } from './helpers/source-guard'
 
 // P3 PR-2b（组长 2026-10-30 批准方案 1）：批量提交暂停自动检查点 + 后台 worker PASSIVE 检查点。
 // 根因（exp-commit-profile run 41037852801）：产品库是 WAL + NORMAL；千章 COMMIT 本身约 70ms，慢在 COMMIT 内自动 WAL 检查点
@@ -133,7 +134,8 @@ describe('B：后台检查点策略（PASSIVE、重试、一直失败的上限�
     const last = s.db.checkpointer!.last!
     expect(last.ok).toBe(true); expect(last.attempts).toBe(1)
     expect(last.log).toBeGreaterThan(0); expect(last.checkpointed).toBe(last.log)
-    const source = readFileSync(resolve('src/main/database/wal-checkpointer.ts'), 'utf8')
+    // 只看真实代码（去掉注释，字符串与 worker 模板字面量保留），注释里的字样不算数
+    const source = readStripped(resolve('src/main/database/wal-checkpointer.ts'))
     expect(source).toContain("PRAGMA wal_checkpoint(PASSIVE)")
     expect(source).not.toMatch(/wal_checkpoint\((FULL|RESTART|TRUNCATE)\)/)
   })
@@ -276,7 +278,7 @@ describe('E / 3：备份在大 WAL、检查点未完成时导出 → 导入新�
   it('源码守卫：src/main 里没有拷贝 .sqlite 库文件的代码', () => {
     const walk = (dir: string): string[] => readdirSync(dir, { withFileTypes: true }).flatMap((e) => e.isDirectory() ? walk(join(dir, e.name)) : [join(dir, e.name)])
     for (const file of walk(resolve('src/main')).filter((f) => f.endsWith('.ts'))) {
-      const text = readFileSync(file, 'utf8')
+      const text = readStripped(file)
       expect(/copyFile|createReadStream\([^)]*sqlite|cp\([^)]*sqlite/.test(text), file).toBe(false)
     }
   })
