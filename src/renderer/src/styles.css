@@ -98,6 +98,8 @@ button.danger-button { color: #fff; background: var(--danger); border-color: var
 .project-sections button { border: 0; background: transparent; padding: 0; min-height: 32px; border-radius: 0; color: var(--muted); font-size: 13px; }
 .project-sections button.active { color: var(--accent); border-bottom: 2px solid var(--accent); }
 .manuscript-tree { flex: 1; overflow: auto; padding: 10px 8px 68px; position: relative; }
+/* P3：章树作为布局边界。高度来自侧栏 flex 列（flex: 1 + 父级 min-height: 0），宽度来自 grid 列；不用 paint/strict，避免裁剪焦点环等溢出绘制。千章书每次按键的整页 Layout 从 ~40ms 降到 ~1ms（diag run 41143605473） */
+.manuscript-tree { contain: layout size; }
 .volume-row { height: 38px; display: grid; grid-template-columns: 18px minmax(0, auto) 1fr repeat(3, 28px); align-items: center; padding: 0 6px; }
 .volume-row strong { font-size: 13px; }
 .chapter-row { width: 100%; height: 36px; padding: 0 5px 0 24px; background: transparent; display: grid; grid-template-columns: minmax(0, 1fr) auto 0 0; align-items: center; font-size: 13px; }

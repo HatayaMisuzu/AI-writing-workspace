@@ -235,7 +235,9 @@ const undoSaveControl = async (page, label, restoredText) => {
   }
   return sentMs
 }
-const openChapter = (page, title) => page.locator('.chapter-row', { hasText: title }).locator('.chapter-open').click()
+// 按章名精确匹配（hasText 是子串匹配：「长章」会误中「单段长章」，「第50章」会误中「第500章」）
+const chapterOpen = (page, title) => page.locator(`.chapter-open[title=${JSON.stringify(title)}]`)
+const openChapter = (page, title) => chapterOpen(page, title).click()
 
 let running
 try {
@@ -2147,6 +2149,102 @@ try {
     assert.equal(await chapterText('第2章'), ch2, '未参与的章不变')
     // 收尾：归档千章书，回到主作品
     await page.evaluate((id) => window.workspace.projects.archive(id, true), book.id)
+    await page.reload()
+    await page.locator('.work-row', { hasText: mainTitle }).getByRole('button', { name: '继续写作' }).click()
+    await page.locator('.manuscript-editor').waitFor()
+  })
+
+  await record('P3 千章书按键：章树 contain 后键→rAF p50 ≤16ms、p95 ≤50ms、p50 ≤ 小书 p50×3+10ms；章树高度、滚动、重命名弹窗不受 contain 影响', async () => {
+    const page = running.page
+    const mainTitle = await page.evaluate(async (projectId) => (await window.workspace.projects.list(true)).find((item) => item.id === projectId).title, ids.projectId)
+    // 造书（与 diag-thousand-chapter-keystroke 相同：每章 88 句 × 26 字，单段）
+    const seedBook = (title, chapters) => page.evaluate(async ({ title, chapters }) => {
+      const seg = '夜色沉沉，远处灯火一盏盏亮起，她把旧信折好收进怀里。'
+      const project = await window.workspace.projects.create({ title, projectType: 'novel', description: '' })
+      const volume = (await window.workspace.documents.tree(project.id)).find((item) => item.type === 'volume')
+      const text = Array.from({ length: 88 }, () => seg).join('')
+      for (let n = 1; n <= chapters; n += 1) {
+        const node = await window.workspace.documents.create({ projectId: project.id, parentId: volume.id, type: 'chapter', title: `第${n}章` })
+        await window.workspace.documents.save({ projectId: project.id, documentId: node.id, editorJson: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text }] }] }, plainText: text, expectedRevision: 0 })
+      }
+      return project.id
+    }, { title, chapters })
+    const openBook = async (title, chapterTitle) => {
+      await page.reload()
+      await page.locator('.work-row', { hasText: title }).getByRole('button', { name: '继续写作' }).click()
+      await page.locator('.manuscript-editor').waitFor()
+      await openChapter(page, chapterTitle)
+      await page.waitForFunction((t) => document.querySelector('.chapter-row.active .chapter-open')?.getAttribute('title') === t, chapterTitle)
+      await page.waitForTimeout(1000)
+    }
+    // 口径同诊断：keydown.timeStamp → 下一个 rAF；预热 20 键后每 60ms 一键共 120 键
+    const keystrokes = async () => {
+      await page.locator('.manuscript-editor p').first().click(); await page.keyboard.press('End')
+      await page.evaluate(() => { if (window.__treeKeys) return; window.__treeKeys = []; window.addEventListener('keydown', (event) => { const start = event.timeStamp; requestAnimationFrame(() => window.__treeKeys.push(performance.now() - start)) }, true) })
+      for (let i = 0; i < 20; i += 1) { await page.keyboard.press('a'); await page.waitForTimeout(60) }
+      await page.waitForTimeout(1000)
+      await page.evaluate(() => { window.__treeKeys = [] })
+      for (let i = 0; i < 120; i += 1) { await page.keyboard.press('a'); await page.waitForTimeout(60) }
+      await page.waitForTimeout(800)
+      const s = await page.evaluate(() => window.__treeKeys.toSorted((a, b) => a - b))
+      assert.ok(s.length >= 118, `采样 ${s.length} 应接近 120`)
+      const q = (p) => s[Math.min(s.length - 1, Math.ceil(s.length * p) - 1)]
+      return { p50: q(0.5), p95: q(0.95), max: s.at(-1), n: s.length }
+    }
+    const smallId = await seedBook('按键对照三章', 3)
+    await openBook('按键对照三章', '第2章')
+    const small = await keystrokes()
+    const bigId = await seedBook('按键千章', 1000)
+    await openBook('按键千章', '第500章')
+    // ① 高度：size 容器不塌成 0，且约等于侧栏扣掉书名和分区导航后的可用高度
+    const geo = await page.evaluate(() => {
+      const tree = document.querySelector('.manuscript-tree'); const sidebar = document.querySelector('.project-sidebar')
+      const others = [...sidebar.children].filter((el) => el !== tree).reduce((sum, el) => sum + el.getBoundingClientRect().height, 0)
+      const row = document.querySelector('.chapter-row.active').getBoundingClientRect(); const box = tree.getBoundingClientRect()
+      return { tree: box.height, available: sidebar.clientHeight - others, contain: getComputedStyle(tree).contain, scrollHeight: tree.scrollHeight, scrollTop: tree.scrollTop, rowVisible: row.top >= box.top && row.bottom <= box.bottom }
+    })
+    process.stdout.write(`P3 manuscript-tree geometry: ${JSON.stringify(geo)}\n`)
+    assert.ok(/size/.test(geo.contain) && /layout/.test(geo.contain) && !/paint|strict/.test(geo.contain), `章树 contain 应为 layout size，实际 ${geo.contain}`)
+    assert.ok(geo.tree > 100, `章树高度 ${geo.tree} 应 > 0`)
+    assert.ok(Math.abs(geo.tree - geo.available) <= 2, `章树高度 ${geo.tree} 应接近侧栏可用高度 ${geo.available}`)
+    // ② 滚动：千章可滚，打开的第 500 章行在可视区内；滚到底能看到最后一章
+    assert.ok(geo.scrollHeight > geo.tree * 10, '千章章树应可滚动')
+    assert.ok(geo.scrollTop > 0 && geo.rowVisible, '当前章（第 500 章）行应在章树可视区内')
+    await page.evaluate(() => { const tree = document.querySelector('.manuscript-tree'); tree.scrollTop = tree.scrollHeight })
+    await chapterOpen(page, '第1000章').waitFor()
+    assert.ok(await page.evaluate(() => { const tree = document.querySelector('.manuscript-tree').getBoundingClientRect(); const r = document.querySelector('.chapter-open[title="第1000章"]').getBoundingClientRect(); return r.top >= tree.top && r.bottom <= tree.bottom }), '滚到底后第 1000 章可见')
+    await chapterOpen(page, '第500章').scrollIntoViewIfNeeded()
+    // ③ 不被裁：章树内没有自绘菜单/提示（只有原生 title），重命名弹窗挂在 WorkspaceScreen（章树外）；弹窗宽于章树、中心点命中弹窗本身
+    await page.getByRole('button', { name: '重命名第500章', exact: true }).click()
+    const dialog = page.getByRole('dialog', { name: '重命名章节' })
+    await dialog.waitFor()
+    const modal = await page.evaluate(() => { const m = document.querySelector('.modal'); const r = m.getBoundingClientRect(); const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2); return { insideTree: !!m.closest('.manuscript-tree'), width: r.width, treeWidth: document.querySelector('.manuscript-tree').getBoundingClientRect().width, hitInModal: m.contains(hit) } })
+    assert.deepEqual({ insideTree: modal.insideTree, hitInModal: modal.hitInModal }, { insideTree: false, hitInModal: true })
+    assert.ok(modal.width > modal.treeWidth, `重命名弹窗 ${modal.width}px 不应被限制在章树宽度 ${modal.treeWidth}px 内`)
+    await dialog.getByRole('button', { name: '取消' }).click()
+    // ④ 窄侧栏（1024 宽，侧栏列 250px）：章树仍占满可用高度、行宽等于章树内容宽、章名不溢出到行外
+    const viewport = page.viewportSize()
+    await page.setViewportSize({ width: 1024, height: 800 }); await page.waitForTimeout(300)
+    const narrow = await page.evaluate(() => {
+      const tree = document.querySelector('.manuscript-tree'); const sidebar = document.querySelector('.project-sidebar')
+      const others = [...sidebar.children].filter((el) => el !== tree).reduce((sum, el) => sum + el.getBoundingClientRect().height, 0)
+      const row = document.querySelector('.chapter-row.active').getBoundingClientRect(); const title = document.querySelector('.chapter-row.active .chapter-title').getBoundingClientRect()
+      return { sidebarWidth: sidebar.getBoundingClientRect().width, tree: tree.getBoundingClientRect().height, available: sidebar.clientHeight - others, rowWidth: row.width, treeInner: tree.clientWidth, titleInRow: title.left >= row.left && title.right <= row.right }
+    })
+    process.stdout.write(`P3 manuscript-tree narrow: ${JSON.stringify(narrow)}
+`)
+    assert.ok(narrow.tree > 100 && Math.abs(narrow.tree - narrow.available) <= 2, `窄屏章树高度 ${narrow.tree} 应接近 ${narrow.available}`)
+    assert.ok(narrow.rowWidth > 0 && narrow.rowWidth <= narrow.treeInner, `窄屏章行宽 ${narrow.rowWidth} 应在章树内容宽 ${narrow.treeInner} 内`)
+    assert.ok(narrow.titleInRow, '窄屏章名不溢出到行外')
+    if (viewport) await page.setViewportSize(viewport); else await page.setViewportSize({ width: 1400, height: 860 })
+    await page.waitForTimeout(300)
+    const big = await keystrokes()
+    process.stdout.write(`P3 1000-chapter keystroke key→rAF: p50 ${big.p50.toFixed(1)}ms p95 ${big.p95.toFixed(1)}ms max ${big.max.toFixed(1)}ms (n=${big.n}; limits p50 ≤16, p95 ≤50, max record only); 3-chapter p50 ${small.p50.toFixed(1)} p95 ${small.p95.toFixed(1)} max ${small.max.toFixed(1)}\n`)
+    assert.ok(big.p50 <= 16, `千章书按键 p50 ${big.p50.toFixed(1)}ms 应 ≤16ms`)
+    assert.ok(big.p95 <= 50, `千章书按键 p95 ${big.p95.toFixed(1)}ms 应 ≤50ms`)
+    assert.ok(big.p50 <= small.p50 * 3 + 10, `千章书 p50 ${big.p50.toFixed(1)}ms 应 ≤ 小书 p50 ${small.p50.toFixed(1)}×3+10`)
+    // 收尾：归档两本书，回到主作品
+    for (const id of [smallId, bigId]) await page.evaluate((id) => window.workspace.projects.archive(id, true), id)
     await page.reload()
     await page.locator('.work-row', { hasText: mainTitle }).getByRole('button', { name: '继续写作' }).click()
     await page.locator('.manuscript-editor').waitFor()
