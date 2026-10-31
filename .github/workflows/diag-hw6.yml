@@ -1,0 +1,22 @@
+name: Diag HW6
+on:
+  push:
+    branches: [diag-hw6-autocheckpoint]
+  workflow_dispatch:
+jobs:
+  bench:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+        rep: [1, 2]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx vitest run tests/hw6-diag.test.ts --project hw6

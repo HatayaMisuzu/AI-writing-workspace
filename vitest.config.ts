@@ -11,7 +11,7 @@ export default defineConfig({
     projects: [
       {
         extends: true,
-        test: { name: 'default', include: ['tests/**/*.test.ts'], exclude: walSerial, sequence: { groupOrder: 0 } }
+        test: { name: 'default', include: ['tests/**/*.test.ts'], exclude: [...walSerial, 'tests/hw6-diag.test.ts'], sequence: { groupOrder: 0 } }
       },
       {
         extends: true,
@@ -20,6 +20,11 @@ export default defineConfig({
       {
         extends: true,
         test: { name: 'wal-serial-2', include: [walSerial[1]], sequence: { groupOrder: 2 } }
+      },
+      {
+        extends: true,
+        // H-W6 诊断（仅诊断分支）
+        test: { name: 'hw6', include: ['tests/hw6-diag.test.ts'] }
       }
     ]
   }
