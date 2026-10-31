@@ -161,7 +161,7 @@ describe('P3 PR-53：待回写量口径的边界（进程内）', () => {
 
   it('-wal 文件约 45MB 但已回写完（待回写量 0）：退出快（< 预留），-wal 截断到 0，数据完整', async () => {
     const path = join(tempDir(), 'big.sqlite')
-    const db = new AppDatabase(path, { walMaintenance: false }); dbs.push(db)
+    const db = new AppDatabase(path); dbs.push(db)
     const { projectId, chapterId, text } = fill(db, 45)
     const outcome = await db.checkpointer!.request()
     expect(outcome.ok).toBe(true)
@@ -181,7 +181,7 @@ describe('P3 PR-53：待回写量口径的边界（进程内）', () => {
 
   it('读事务一直占着、PASSIVE 回写不完：退出不超预算（检查点 BUSY 只记录，close 非最后连接不回写），重开数据完整', async () => {
     const path = join(tempDir(), 'pinned.sqlite')
-    const db = new AppDatabase(path, { walMaintenance: false }); dbs.push(db)
+    const db = new AppDatabase(path); dbs.push(db)
     const project = new ProjectService(db).create({ title: '钉住', projectType: 'novel', description: '' })
     const docs = new DocumentService(db)
     const chapterId = docs.listTree(project.id).find((n) => n.type === 'chapter')!.id

@@ -14,14 +14,13 @@ export const QUIT_CLOSE_LIMIT_MS = 5_000
  * - 预留段耗时与「待回写量」成正比（(mxFrame − nBackfill) × 帧大小，即 WAL 里还没回写进主库的帧；已回写完的大 -wal 文件
  *   退出时只截断、不回写）。db.close() / 检查点是同步调用、无法中途超时：只有待回写量 ≤ WAL_QUIT_BOUND_BYTES（CI 两平台实测取慢者
  *   再留余量）时保证总时长 < QUIT_CLOSE_LIMIT_MS；超过则不保证 5s，但照常回写、已提交数据安全。
- * - 平时把待回写量控制得很小：定期后台 PASSIVE 写回（WAL_MAINTENANCE_*，只在空闲时）。不设 journal_size_limit（PR-53 实测：
- *   它让 WAL 复用后第一次 COMMIT 内截断 -wal，拖慢释放后首存）；-wal 文件靠复用不再增长，退出时 TRUNCATE 截断到 0。
+ * - 平时的待回写量沿用 main 的维护方式：普通保存由 SQLite 自身 wal_autocheckpoint（1000 页）在 COMMIT 后做 PASSIVE，
+ *   批量写由 WalCheckpointer 后台 PASSIVE（暂停 / 释放）。PR-51 不另加定期写回（与 autocheckpoint 功能重复，且与保存重叠时
+ *   Windows 保存变慢）。不设 journal_size_limit（实测拖慢释放后首存）；-wal 靠复用不再增长，退出时 TRUNCATE 截断到 0。
  */
 export const QUIT_FINAL_RESERVE_MS = 1_500
 export const QUIT_WORKER_LIMIT_MS = QUIT_CLOSE_LIMIT_MS - QUIT_FINAL_RESERVE_MS
 export const WAL_QUIT_BOUND_BYTES = 8 * 1024 * 1024
-export const WAL_MAINTENANCE_INTERVAL_MS = 10_000
-export const WAL_MAINTENANCE_THRESHOLD_BYTES = 1024 * 1024
 
 export interface QuitSegments {
   /** 进入 closeForQuit → worker 段结束（≤ limit − reserve） */
@@ -42,8 +41,6 @@ export interface AppDatabaseOptions {
   checkpointer?: WalCheckpointerOptions | false
   /** P3 PR-44：批量提交后等「安静的完整检查点」释放暂停的上限；超过则降级（恢复 autocheckpoint）并告警 */
   release?: { maxRounds?: number; maxMs?: number }
-  /** P3 PR-53：定期后台写回（-wal 文件超过 thresholdBytes 且无批量暂停时请求一轮 PASSIVE）；false = 关闭（基准对照用） */
-  walMaintenance?: { intervalMs?: number; thresholdBytes?: number } | false
 }
 
 /** P3 PR-44：一次暂停释放过程的结果（诊断与测试用） */
@@ -76,13 +73,6 @@ export class AppDatabase {
   readonly releases: ReleaseRecord[] = []
   /** 最近的写事务提交记录（最多 50 条） */
   readonly commits: CommitRecord[] = []
-  private maintenanceTimer?: ReturnType<typeof setInterval>
-  /** P3 PR-53：定期写回请求次数（诊断用） */
-  maintenanceRequests = 0
-  /** 因上一间隔内有写入而跳过的次数（诊断 / 测试：证明只在空闲时跑） */
-  maintenanceSkippedActive = 0
-  private maintenanceSeenGeneration = -1
-  private maintenanceDoneGeneration = -1
 
   constructor(path: string, options: AppDatabaseOptions = {}) {
     this.path = path
@@ -101,37 +91,6 @@ export class AppDatabase {
     if (path !== ':memory:' && options.checkpointer !== false) {
       this.checkpointer = new WalCheckpointer(path, { ...(options.checkpointer ?? {}), generation: () => this.writeGeneration() })
     }
-    if (this.checkpointer && options.walMaintenance !== false) {
-      const intervalMs = options.walMaintenance?.intervalMs ?? WAL_MAINTENANCE_INTERVAL_MS
-      const thresholdBytes = options.walMaintenance?.thresholdBytes ?? WAL_MAINTENANCE_THRESHOLD_BYTES
-      this.maintenanceTimer = setInterval(() => this.maintainWal(thresholdBytes), intervalMs)
-      this.maintenanceTimer.unref?.()
-    }
-  }
-
-  /**
-   * 定期写回：后台 worker PASSIVE，不挡主连接。只在空闲时跑：
-   * - 上一个间隔到这一个间隔之间主连接有写入（写入代数变了）→ 本轮不跑，等下一轮（不与连续保存抢 I/O）；
-   * - checkpointer 忙 / 批量暂停期间（交给释放循环）→ 不跑；
-   * - 上次完整回写后没有新写入 → 不跑（-wal 文件大但已回写完时不空转）。
-   */
-  private maintainWal(thresholdBytes: number): void {
-    const cp = this.checkpointer
-    if (this.isClosed || !cp || cp.closed) return
-    const generation = this.writeGeneration()
-    const active = generation !== this.maintenanceSeenGeneration
-    this.maintenanceSeenGeneration = generation
-    if (active) { this.maintenanceSkippedActive += 1; return }
-    if (cp.busy || this.autoCheckpointHolds > 0) return
-    if (generation === this.maintenanceDoneGeneration) return
-    if (cp.walBytes() <= thresholdBytes) return
-    this.maintenanceRequests += 1
-    void cp.request().then((outcome) => { if (outcome.ok) this.maintenanceDoneGeneration = generation })
-  }
-
-  private stopMaintenance(): void {
-    if (this.maintenanceTimer) clearInterval(this.maintenanceTimer)
-    this.maintenanceTimer = undefined
   }
 
   private walFileBytes(): number {
@@ -144,7 +103,6 @@ export class AppDatabase {
   close(): void {
     if (this.isClosed) return
     this.isClosed = true
-    this.stopMaintenance()
     void this.checkpointer?.close()
     this.raw.close()
   }
@@ -160,12 +118,11 @@ export class AppDatabase {
    * 应用退出用（will-quit，在所有窗口关窗握手——渲染进程 flush 最后一次保存并提交——之后）。P3 PR-53：
    * 1) worker 段：等后台检查点 worker 关闭，硬上限 limitMs − reserveMs，到点 terminate（未完成的回写留在 WAL）。
    * 2) 预留段：主连接主动 wal_checkpoint(TRUNCATE)（失败/BUSY 只记录），再 close（照常回写剩余部分）。
-   * WAL ≤ WAL_QUIT_BOUND_BYTES 时总时长 < limitMs；更大的 WAL 不保证时限，但不跳过回写、不丢已提交数据。
+   * 待回写量 ≤ WAL_QUIT_BOUND_BYTES 时总时长 < limitMs；更多不保证时限，但不跳过回写、不丢已提交数据。
    */
   async closeForQuit(limitMs = QUIT_CLOSE_LIMIT_MS, reserveMs = QUIT_FINAL_RESERVE_MS): Promise<QuitResult> {
     const started = performance.now()
     if (this.isClosed) return { timedOut: false, ms: 0 }
-    this.stopMaintenance()
     const workerLimitMs = Math.max(0, limitMs - reserveMs)
     let timer: ReturnType<typeof setTimeout> | undefined
     const timedOut = await Promise.race([
