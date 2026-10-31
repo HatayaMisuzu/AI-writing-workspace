@@ -900,6 +900,22 @@ try {
       await logDiag9(page, 'card-opened', diagPoint)
     } catch (error) {
       await logDiag9(page, 'card-not-opened', diagPoint)
+      // [GAPDIAG] 只记录：超时后才采集卡片可见性相关状态，不改断言/时序/失败信息，出错只记日志
+      await page.evaluate(() => {
+        const el = document.querySelector('[data-testid="character-hover-card"]')
+        const vw = window.innerWidth; const vh = window.innerHeight; const now = performance.now()
+        const firstShown = (window.__f14Diag9?.card ?? []).find((c) => c.shown)?.t
+        if (!el) return { present: false, viewport: { w: vw, h: vh }, firstShownT: firstShown ?? null, now }
+        const r = el.getBoundingClientRect(); const cs = getComputedStyle(el)
+        const cx = r.left + r.width / 2; const cy = r.top + r.height / 2
+        const at = document.elementFromPoint(cx, cy)
+        const hidden = []
+        for (let a = el.parentElement; a; a = a.parentElement) { const s = getComputedStyle(a); if (s.display === 'none' || s.visibility === 'hidden' || s.opacity === '0') hidden.push({ tag: a.tagName, cls: typeof a.className === 'string' ? a.className.slice(0, 40) : null, display: s.display, visibility: s.visibility, opacity: s.opacity }) }
+        return { present: true, rect: { x: r.x, y: r.y, w: r.width, h: r.height }, style: { visibility: cs.visibility, display: cs.display, opacity: cs.opacity },
+          viewport: { w: vw, h: vh }, inViewport: r.width > 0 && r.height > 0 && r.right > 0 && r.bottom > 0 && r.left < vw && r.top < vh,
+          center: { x: cx, y: cy }, centerElement: at ? { tag: at.tagName, cls: typeof at.className === 'string' ? at.className.slice(0, 60) : null, testid: at.closest('[data-testid]')?.getAttribute('data-testid') ?? null, inCard: el.contains(at), text: (at.textContent ?? '').slice(0, 12) } : null,
+          hiddenAncestors: hidden, firstShownT: firstShown ?? null, sinceFirstShownMs: firstShown === undefined ? null : now - firstShown, now }
+      }).then((d) => process.stdout.write(`[GAPDIAG] ${process.platform} card-not-opened ${JSON.stringify(d)}\n`), (e) => process.stdout.write(`[GAPDIAG] ${process.platform} error ${e.message}\n`)).catch(() => undefined)
       const point = box ? { x: box.x + box.width / 2, y: box.y + box.height / 2 } : undefined
       const diag = await page.evaluate((point) => {
         const at = point ? document.elementFromPoint(point.x, point.y) : null
