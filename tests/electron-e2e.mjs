@@ -1312,6 +1312,81 @@ try {
     }
   })
 
+  // F14 间隙红证 2（小数底边）：验收发现第 2 段人名命中底边为小数（如 338.4375）时，鼠标在底边以上已落到 <P>、
+  // 而 bridge 纵向空带从 rect.bottom 起算，卡被关。本用例临时新增人物「顾言」（第 2 段，沿用删除卡用例的临时人物做法，finally 删除），
+  // 先记录命中底边是否为小数，再与上一用例同样逐像素（每步 1px）从命中中心竖直移到卡片内部，期望全程卡不关。
+  // [GAPDIAG] 只记录：发给 page.mouse.move 的 y、页面内 pointermove/mouseout 收到的 clientY/offsetY/screenY；诊断出错只记日志。
+  await record('F14 小数底边人名：鼠标逐像素从命中移入悬停卡，途经间隙卡片不关闭', async () => {
+    const page = running.page
+    const card = page.getByTestId('character-hover-card')
+    await page.mouse.move(5, 5)
+    await card.waitFor({ state: 'detached', timeout: 2_000 })
+    assert.equal(await card.count(), 0, '开始前无残留卡片')
+    const tempId = await page.evaluate(async ({ projectId }) => {
+      const saved = await window.workspace.characters.save({ projectId, name: '顾言', aliases: [], notes: 'F14-gap-fractional' })
+      window.dispatchEvent(new CustomEvent('workspace:characters-changed', { detail: { projectId } }))
+      return saved.id
+    }, { projectId: ids.projectId })
+    try {
+      const hit = hitLocator(page, '顾言').first()
+      await hit.waitFor({ timeout: 2_000 })
+      await waitHitStable(page, '顾言')
+      const hitBox = await hit.boundingBox()
+      assert.ok(hitBox, '顾言命中有 boundingBox')
+      const hitBottom = hitBox.y + hitBox.height
+      process.stdout.write(`[GAPDIAG] ${process.platform} frac-edge ${JSON.stringify({ name: '顾言', hitBox, hitBottom, fractional: !Number.isInteger(hitBottom) })}\n`)
+      await hit.hover()
+      await page.waitForFunction(() => document.querySelector('[data-testid="character-hover-card"]')?.getAttribute('aria-label') === '人物卡 · 顾言', undefined, { timeout: 2_000 })
+      const cardBox = await card.boundingBox()
+      assert.ok(cardBox, '卡片有 boundingBox')
+      const x = Math.round(Math.min(Math.max(hitBox.x + hitBox.width / 2, cardBox.x + 4), cardBox.x + cardBox.width - 4))
+      const startY = Math.round(hitBox.y + hitBox.height / 2)
+      const endY = Math.round(cardBox.y + Math.min(12, cardBox.height / 2))
+      const gap = { hitBottom, cardTop: cardBox.y, width: cardBox.y - hitBottom }
+      try {
+        await page.evaluate(() => {
+          const w = /** @type {any} */ (window)
+          w.__gapEv = []
+          const rec = (e) => { try { const t = e.target; w.__gapEv.push({ t: e.type, cy: e.clientY, oy: e.offsetY, sy: e.screenY, el: `${typeof t?.className === 'string' ? t.className.slice(0, 20) : ''}/${t?.tagName ?? ''}` }) } catch { /* 只记录 */ } }
+          w.__gapRec = rec
+          document.addEventListener('pointermove', rec, true)
+          document.addEventListener('mouseout', rec, true)
+        })
+      } catch (e) { process.stdout.write(`[GAPDIAG] ${process.platform} frac-ev-install-error ${e.message}\n`) }
+      const steps = []
+      let closedAt
+      await page.mouse.move(x, startY)
+      for (let y = startY + 1; y <= endY; y += 1) {
+        try { await page.evaluate(() => { const w = /** @type {any} */ (window); if (w.__gapEv) w.__gapEv.length = 0 }) } catch { /* 只记录 */ }
+        await page.mouse.move(x, y)
+        const at = await page.evaluate(({ x, y }) => {
+          const el = document.elementFromPoint(x, y)
+          return { tag: el?.tagName ?? null, cls: typeof el?.className === 'string' ? el.className.slice(0, 40) : null, inHit: Boolean(el?.closest?.('.character-hit')), inCard: Boolean(el?.closest?.('.character-hover-card')),
+            cardOpen: Boolean(document.querySelector('[data-testid="character-hover-card"]')) }
+        }, { x, y })
+        let ev = null
+        try { ev = await page.evaluate(() => /** @type {any} */ (window).__gapEv?.slice(0, 6) ?? null) } catch (e) { ev = `error ${e.message}` }
+        steps.push({ sentY: y, ...at, ev })
+        if (!at.cardOpen && closedAt === undefined) closedAt = { y, ...at, ev }
+      }
+      try {
+        await page.evaluate(() => { const w = /** @type {any} */ (window); if (w.__gapRec) { document.removeEventListener('pointermove', w.__gapRec, true); document.removeEventListener('mouseout', w.__gapRec, true) } delete w.__gapEv; delete w.__gapRec })
+      } catch (e) { process.stdout.write(`[GAPDIAG] ${process.platform} frac-ev-cleanup-error ${e.message}\n`) }
+      process.stdout.write(`[GAPDIAG] ${process.platform} frac ${JSON.stringify({ name: '顾言', x, startY, endY, gap, closedAt: closedAt ?? null, steps })}\n`)
+      const final = steps[steps.length - 1]
+      assert.equal(await card.count(), 1, `小数底边：逐像素移入卡片途中卡片被关闭：首次关闭于 y=${closedAt?.y}（间隙 ${gap.hitBottom}→${gap.cardTop}，宽 ${gap.width.toFixed(2)}px），鼠标下 ${JSON.stringify(closedAt)}`)
+      assert.ok(final?.inCard, `终点应在卡片内部：${JSON.stringify(final)}`)
+    } finally {
+      await page.mouse.move(5, 5)
+      await page.evaluate(async ({ projectId, tempId }) => {
+        await window.workspace.characters.delete(projectId, tempId)
+        window.dispatchEvent(new CustomEvent('workspace:characters-changed', { detail: { projectId } }))
+      }, { projectId: ids.projectId, tempId })
+      await hitLocator(page, '顾言').first().waitFor({ state: 'detached', timeout: 2_000 }).catch(() => undefined)
+      await card.waitFor({ state: 'detached', timeout: 2_000 }).catch(() => undefined)
+    }
+  })
+
   await record('F14 ⑩ 「此别名不提示」后下划线消失，重启后仍不提示', async () => {
     let page = running.page
     const card = page.getByTestId('character-hover-card')
