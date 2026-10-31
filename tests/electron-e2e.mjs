@@ -859,6 +859,7 @@ try {
     // 单字别名「栀」默认不参与：全文只有「林栀」「阿栀」两处下划线
     assert.deepEqual(await page.locator('.manuscript-editor .character-hit').allInnerTexts(), ['林栀', '阿栀'])
     const before = await docState(page, f14.hover)
+    // NR-1：临时绕开悬停与防抖重建的竞态，等产品修复（F14 产品 B+：cardAt 用 isConnected/posAtCoords 重取命中，带复现用例；见团队 hygiene.md NR-1）。
     // 用例前提：下划线节点稳定后再悬停。匹配器重设 / 500ms 防抖 recompute 会重建 .character-hit；
     // 同一节点连续 700ms（> HOVER_DEBOUNCE_MS）未被替换且 isConnected 才 hover。卡片 2000ms 上限不变。
     await waitHitStable(page, '林栀')
