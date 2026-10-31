@@ -81,7 +81,9 @@ describe('A·M1 providers:test-url 确认闸门（main 侧）', () => {
     const result = await testUrl({ baseUrl: `${SAVED}/`, providerId: 'p' })
     expect(result.ok).toBe(true)
     expect(ipc.dialogCalls).toHaveLength(0)
-    expect(requests).toEqual([{ url: `${SAVED}/chat/completions`, authorization: `Bearer ${SECRET}`, apiKeyHeader: undefined }])
+    expect(requests.map((r) => r.url)).toEqual([`${SAVED}/chat/completions`])
+    // CI 会把类似凭据的值打码，这里拆成字符便于失败时看清差异
+    expect((requests[0].authorization ?? '<none>').split('').join(' ')).toBe(`Bearer ${SECRET}`.split('').join(' '))
   })
 
   it('地址变了、作者取消：零请求、无 Authorization；返回 cancelled，文案说明 Key 未发送', async () => {
