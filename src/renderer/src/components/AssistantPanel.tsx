@@ -9,6 +9,7 @@ import { ConsistencyReportView } from './ConsistencyReportView'
 import type { EditorSelection } from './EditorSurface'
 import { OVERFLOW_TRUNCATED_NOTE, overflowSummary, basisLabel, PIN_SCOPE_HINT, isPinnable, isRowChecked, omittedLabel, toContextSourceRows, toggleExcludedId, toggleIncludedId, emptyPinsByScope, pinScopeOf, pinsByScopeAfterRequest, updatePinsByScope, scopeContextLabel, type ContextSourceRow, type PinsByScope, type RowsByScope } from '../services/context-sources'
 import { activeCandidateText, canProposeGenerationPatch, mapChatHistory, resolveDisplayedModelMode, resolveModelDisplayName, retryInputForMessage, type AssistantHistoryMessage } from '../services/assistant-history'
+import { displayProjectTitle } from '../services/project-title'
 
 type ContextSummary = { count: number; tokens: number; items: ContextSourceRow[] }
 type ViewMessage = AssistantHistoryMessage & { selection?: EditorSelection; proposals?: MemoryProposal[]; proposalError?: string; recorded?: boolean; context?: ContextSummary }
@@ -262,7 +263,7 @@ export function AssistantPanel({ project, documentId, documentText, documentRevi
           : proposals?.length !== item.proposals?.length ? { ...item, proposals } : item
       }))
     } catch (error) { setMessages((current) => current.map((item) => item.id === messageId
-      ? { ...item, proposalError: `记忆提案处理失败：${error instanceof Error ? error.message : String(error)}` } : item)) }
+      ? { ...item, proposalError: `记忆提案处理失败：${userErrorMessage(error)}` } : item)) }
   }
 
   const proposeSelectedCandidate = async (message: ViewMessage): Promise<void> => {
@@ -305,7 +306,7 @@ export function AssistantPanel({ project, documentId, documentText, documentRevi
   const openButton = <button ref={openButtonRef} className="assistant-collapsed" aria-label={narrow ? '打开同行者' : undefined} aria-expanded={narrow ? drawer : undefined} onClick={onCollapse}><Bot size={18} /><span>同行者</span></button>
   if (collapsed) return openButton
   const panel = <aside ref={drawerRef} className={drawer ? 'assistant-panel assistant-drawer' : 'assistant-panel'} {...(drawer ? { role: 'dialog', 'aria-modal': true, 'aria-label': '同行者', tabIndex: -1 } : {})}>
-    <header><div><h2>同行者</h2><span className="scope-notice">{modelName} · 仅使用《{project.title}》</span></div><div className="assistant-head-actions"><button className="icon-button" disabled={Boolean(runningId)} title="新对话" onClick={() => void newThread()}><MessageSquarePlus size={17} /></button><button className="icon-button" title={drawer ? '关闭同行者' : '收起同行者'} aria-label={drawer ? '关闭同行者' : undefined} onClick={onCollapse}><ChevronRight size={18} /></button></div></header>
+    <header><div><h2>同行者</h2><span className="scope-notice">{modelName} · 仅使用《{displayProjectTitle(project.title)}》</span></div><div className="assistant-head-actions"><button className="icon-button" disabled={Boolean(runningId)} title="新对话" onClick={() => void newThread()}><MessageSquarePlus size={17} /></button><button className="icon-button" title={drawer ? '关闭同行者' : '收起同行者'} aria-label={drawer ? '关闭同行者' : undefined} onClick={onCollapse}><ChevronRight size={18} /></button></div></header>
     <div className="thread-picker"><label htmlFor="assistant-thread">对话</label><select id="assistant-thread" value={threadId ?? ''} disabled={Boolean(runningId) || loadingHistory} onChange={(event) => void loadThread(event.target.value)}>{threads.map((thread) => <option key={thread.id} value={thread.id}>{thread.title} · {new Date(thread.updatedAt).toLocaleDateString()}</option>)}</select></div>
     <div className="assistant-tools"><button disabled={!documentId || digestBusy} onClick={() => void runDigest()}><FileSearch size={14} />{digestBusy ? '理解中…' : '理解本章'}</button><button disabled={!documentId || Boolean(runningId) || !threadId} title="只读冲突报告：本章正文 vs 已确认设定、人物卡、时间线" onClick={() => void submit({ mode: 'consistency_check', text: CONSISTENCY_DEFAULT_INTENT })}><FileSearch size={14} />检查一致性{scopeContextLabel('consistency', exclusionsByScope, pinsByScope, rowsByScope) !== '上下文' && <small data-testid="consistency-context-count">{scopeContextLabel('consistency', exclusionsByScope, pinsByScope, rowsByScope).replace(/^上下文/, '')}</small>}</button><span className={digestStatus?.state === 'stale' ? 'stale' : ''}>{digestLabel(digestStatus)}</span></div>
     <div className="chat-scroll" ref={chatScroll} onScroll={(event) => {

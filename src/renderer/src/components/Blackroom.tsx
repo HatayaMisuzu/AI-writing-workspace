@@ -1,3 +1,4 @@
+import { displayProjectTitle } from '../services/project-title'
 import { useState } from 'react'
 import type { DocumentNode, FocusLockCombine, FocusLockInput, FocusLockMode, FocusLockStatus, FocusLockedProject } from '../../../shared/domain'
 import { userErrorMessage } from '../../../shared/user-error'
@@ -75,9 +76,9 @@ export function BlackroomEmergencyDialog({ onClose, onConfirm }: { onClose(): vo
 /** 作品库 / 其他作品里的锁定提示：写明哪本书被锁，并给出回到该书小黑屋的入口（出屋只能在那本书里完成）。 */
 export function FocusLockNotice({ locked, onReturn }: { locked: FocusLockedProject[]; onReturn(projectId: string): void }): React.JSX.Element | null {
   if (!locked.length) return null
-  const names = locked.map((item) => `《${item.title}》`).join('、')
+  const names = locked.map((item) => `《${displayProjectTitle(item.title)}》`).join('、')
   return <div className="focus-lock-notice" role="status" data-testid="focus-lock-notice">
     <span><strong>{names}</strong>正在小黑屋中。锁定期间所有作品的 AI 与联网请求都已关闭，出屋需回到该书。</span>
-    {locked.map((item) => <button key={item.projectId} className="primary" data-testid="focus-lock-return" onClick={() => onReturn(item.projectId)}>回到《{item.title}》的小黑屋</button>)}
+    {locked.map((item) => <button key={item.projectId} className="primary" data-testid="focus-lock-return" onClick={() => onReturn(item.projectId)}>回到《{displayProjectTitle(item.title)}》的小黑屋</button>)}
   </div>
 }
