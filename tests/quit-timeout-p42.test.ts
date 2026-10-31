@@ -43,7 +43,8 @@ describe('closeForQuit 上限（进程内）', () => {
 
   it('worker 关闭永不完成：到上限即 terminate worker、关闭主连接，重开 integrity_check ok、数据完整', async () => {
     const path = join(tempDir(), 'inkstone.sqlite')
-    const db = new AppDatabase(path, { checkpointer: { inject: { delayMs: 60_000 }, retries: 0 } }); dbs.push(db)
+    // H-W6 方案①后：worker 卡在尝试里会被立即 terminate（见 backfill-bound-hw6 / p42 子进程用例）；本用例改测「worker 空闲但 close 永不完成」的超时分支
+    const db = new AppDatabase(path, { checkpointer: { retries: 0 } }); dbs.push(db)
     const project = new ProjectService(db).create({ title: '退出书', projectType: 'novel', description: '' })
     const docs = new DocumentService(db)
     const chapter = docs.listTree(project.id).find((n) => n.type === 'chapter')!
@@ -53,7 +54,8 @@ describe('closeForQuit 上限（进程内）', () => {
     const replaced = text.replaceAll('正文', '内容')
     docs.replaceBatch({ projectId: project.id, items: [{ documentId: chapter.id, expectedRevision: current.revision, editorJson: doc(replaced), plainText: replaced, hits: 50 }], query: '正文', replacement: '内容', regex: false, caseSensitive: false })
     const cp = db.checkpointer!
-    expect(cp.busy).toBe(true)
+    await db.checkpointIdle()
+    expect(cp.attemptInFlight).toBe(false)
     const expected = chapterHashes(db.raw, project.id)
     const terminate = vi.spyOn(cp, 'terminate')
     cp.close = () => new Promise<void>(() => { /* 模拟 worker 永不回 closed */ })
@@ -118,10 +120,12 @@ describe('closeForQuit 上限（子进程，产品源码不打包）', () => {
     expect(r.closed.limitMs).toBe(5_000)
     expect(r.closed.mainClosed).toBe(true)
     log(`${mode} ${bound} segments: ${JSON.stringify(r.closed.segments)}`)
-    // worker 段硬上限（设计保证）：limit − reserve；stuck 走内部 2s terminate，dead 立即完成，都不走超时
+    // worker 段硬上限（设计保证）：limit − reserve；stuck 立即 terminate（H-W6 方案①），dead 立即完成，都不走超时
     expect(r.closed.timedOut).toBe(false)
     expect(r.closed.segments.workerLimitMs).toBe(QUIT_WORKER_LIMIT_MS)
     expect(r.closed.segments.workerMs).toBeLessThan(QUIT_WORKER_LIMIT_MS)
+    // H-W6 方案①：worker 卡在尝试里时立即 terminate，等 worker 段 < 100ms（不再等 close() 的 2s）
+    expect(r.closed.segments.workerMs).toBeLessThan(100)
     if (bound === 'within') {
       // 前提：退出时待回写量在 N 以内
       expect(r.closed.segments.pendingBytesAtQuit).toBeGreaterThan(0)

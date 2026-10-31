@@ -10,7 +10,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { DatabaseSync } from 'node:sqlite'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { AppDatabase, QUIT_CLOSE_LIMIT_MS, QUIT_WORKER_LIMIT_MS, type AppDatabaseOptions } from '../src/main/database/database'
+import { AppDatabase, QUIT_CLOSE_LIMIT_MS, type AppDatabaseOptions } from '../src/main/database/database'
 import { BACKFILL_BOUND_BYTES, autoCheckpointPagesFor, readPendingBackfillBytes, type WalCheckpointerOptions } from '../src/main/database/wal-checkpointer'
 import { ProjectService } from '../src/main/services/project-service'
 import { DocumentService } from '../src/main/services/document-service'
@@ -120,10 +120,11 @@ describe('H-W6 2：退出不与进行中的 PASSIVE 互卡（#51 closeForQuit �
     const result = await s.db.closeForQuit()
     log('HW6FIX-QUIT', { delayMs, peak: r.peak, result })
     expect(result.ms).toBeLessThan(QUIT_CLOSE_LIMIT_MS)
-    // WalCheckpointer.close() 自带 2s terminate：worker 卡住时在 worker 段硬上限（3500ms）之前就被结束，closeForQuit 不必走超时分支
+    // H-W6 方案①：worker 卡在尝试里（JS 层）→ closeForQuit 立即 terminate，等 worker 段 < 100ms
     expect(result.timedOut).toBe(false)
-    expect(result.segments!.workerMs).toBeLessThan(QUIT_WORKER_LIMIT_MS)
-    if (delayMs > 2_000) expect(result.segments!.workerMs).toBeGreaterThanOrEqual(1_900)
+    expect(result.segments!.terminatedInFlight).toBe(true)
+    expect(result.segments!.workerMs).toBeLessThan(100)
+    expect(result.segments!.checkpointOk).toBe(true)
     const reopened = new AppDatabase(s.path, { checkpointer: false }); dbs.push(reopened)
     expect(integrity(reopened)).toBe('ok')
     expect(new DocumentService(reopened).getContent(s.project.id, s.chapter.id).plainText).toBe(text(19))
@@ -195,5 +196,67 @@ describe('H-W6 4：保底页数按实际 page_size 计算', () => {
     const reopened = new AppDatabase(s.path, { checkpointer: false }); dbs.push(reopened)
     expect(integrity(reopened)).toBe('ok')
     expect(new DocumentService(reopened).getContent(s.project.id, s.chapter.id).plainText).toBe(text(119))
+  })
+})
+
+describe('H-W6 5：退出时 worker 卡在原生 SQLite 调用里（terminate 打断不了）', () => {
+  it('worker 正在执行耗时的原生语句（持 WAL 读快照）：立即 terminate，退出 < 5s；TRUNCATE 若 busy 只记录（checkpointOk=false），close 不做检查点、WAL 保留；重开 integrity_check ok、最后一次保存在', async () => {
+    const s = open({ checkpointer: { inject: { nativeSpinRows: 30_000_000 }, retries: 0, backfill: false } })
+    // 主连接 busy_timeout = 0：TRUNCATE 遇到 CKPT 锁 / 读者不会等待
+    expect(Number((s.db.raw.prepare('PRAGMA busy_timeout').get() as { timeout: number }).timeout)).toBe(0)
+    for (let i = 0; i < 20; i += 1) s.docs.saveContent({ projectId: s.project.id, documentId: s.chapter.id, editorJson: doc(text(i)), plainText: text(i) })
+    const cp = s.db.checkpointer!
+    const worker = () => (cp as unknown as { worker?: { once(e: 'exit', f: () => void): void } }).worker
+    void cp.request()
+    // 等 worker 起来并进入原生语句（线程启动 + 开连接）
+    await sleep(500)
+    expect(cp.attemptInFlight).toBe(true)
+    const w = worker()!
+    let exitedAt = 0
+    const exited = new Promise<void>((r) => w.once('exit', () => { exitedAt = performance.now(); r() }))
+    const quitStarted = performance.now()
+    const result = await s.db.closeForQuit()
+    const quitEnded = performance.now()
+    // 最后一次保存在：重开（worker 线程可能仍在原生语句里、连接未关）
+    const reopened = new AppDatabase(s.path, { checkpointer: false }); dbs.push(reopened)
+    const integrityResult = integrity(reopened)
+    const lastText = new DocumentService(reopened).getContent(s.project.id, s.chapter.id).plainText
+    reopened.close()
+    // 等 worker 线程真正退出再清理目录（Windows 上打开的文件删不掉）
+    await Promise.race([exited, sleep(60_000)])
+    log('HW6FIX-QUIT-NATIVE', { result, workerExitAfterQuitMs: exitedAt ? Math.round(exitedAt - quitStarted) : null, quitMs: Math.round(quitEnded - quitStarted) })
+    expect(result.segments!.terminatedInFlight).toBe(true)
+    expect(result.timedOut).toBe(false)
+    expect(result.segments!.workerMs).toBeLessThan(100)
+    expect(result.ms).toBeLessThan(QUIT_CLOSE_LIMIT_MS)
+    expect(integrityResult).toBe('ok')
+    expect(lastText).toBe(text(19))
+  })
+
+  it('真实耗时 PASSIVE 进行中退出（千章级大 WAL，按量回写关闭、立即请求后退出）：退出 < 5s；记录 TRUNCATE 是否 busy；重开 integrity_check ok、最后一次保存在', async () => {
+    const s = open({ checkpointer: { retries: 0, backfill: false } })
+    // 约 60MB 待回写：批量写入期间暂停自动检查点（同全书替换路径）
+    s.db.raw.exec('PRAGMA wal_autocheckpoint = 0')
+    for (let i = 0; i < 240; i += 1) s.docs.saveContent({ projectId: s.project.id, documentId: s.chapter.id, editorJson: doc(text(i)), plainText: text(i) })
+    const pending = readPendingBackfillBytes(s.path)
+    const cp = s.db.checkpointer!
+    void cp.request()
+    // worker 起线程、开连接后开始 PASSIVE；在它回写途中退出
+    await new Promise<void>((r) => { const t0 = performance.now(); const poll = () => { const p = readPendingBackfillBytes(s.path); if ((p !== undefined && pending !== undefined && p < pending) || performance.now() - t0 > 3_000) r(); else setTimeout(poll, 1) }; poll() })
+    const inFlight = cp.attemptInFlight
+    const w = (cp as unknown as { worker?: { once(e: 'exit', f: () => void): void } }).worker
+    const exited = w ? new Promise<void>((r) => w.once('exit', () => r())) : Promise.resolve()
+    const result = await s.db.closeForQuit()
+    const reopened = new AppDatabase(s.path, { checkpointer: false }); dbs.push(reopened)
+    const integrityResult = integrity(reopened)
+    const lastText = new DocumentService(reopened).getContent(s.project.id, s.chapter.id).plainText
+    reopened.close()
+    await Promise.race([exited, sleep(60_000)])
+    log('HW6FIX-QUIT-PASSIVE', { pendingAtStart: pending, inFlightAtQuit: inFlight, result })
+    expect(result.timedOut).toBe(false)
+    expect(result.segments!.workerMs).toBeLessThan(100)
+    expect(result.ms).toBeLessThan(QUIT_CLOSE_LIMIT_MS)
+    expect(integrityResult).toBe('ok')
+    expect(lastText).toBe(text(239))
   })
 })

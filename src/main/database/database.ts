@@ -33,6 +33,8 @@ export interface QuitSegments {
   walBytesBeforeClose: number
   checkpointOk: boolean
   workerLimitMs: number
+  /** H-W6：进入退出时 worker 正卡在一次尝试里 → 已立即 terminate（不等 close） */
+  terminatedInFlight?: boolean
 }
 export interface QuitResult { timedOut: boolean; ms: number; segments?: QuitSegments }
 
@@ -134,12 +136,21 @@ export class AppDatabase {
     if (this.isClosed) return { timedOut: false, ms: 0 }
     const workerLimitMs = Math.max(0, limitMs - reserveMs)
     let timer: ReturnType<typeof setTimeout> | undefined
-    const timedOut = await Promise.race([
-      (this.checkpointer?.close() ?? Promise.resolve()).then(() => false, () => false),
-      new Promise<boolean>((resolve) => { timer = setTimeout(() => resolve(true), workerLimitMs) })
-    ])
-    if (timer) clearTimeout(timer)
-    if (timedOut) this.checkpointer?.terminate()
+    let timedOut = false
+    // H-W6 方案①：worker 正卡在一次尝试里（未回消息）→ 立即 terminate，不再等 close() 的 2s；
+    // 没回写完的部分由下面的 TRUNCATE 重做。terminate 打断不了正在执行的原生 SQLite 调用：若 worker 仍在底层检查点里持 CKPT 锁，
+    // TRUNCATE 立即返回 busy=1（不调 busy handler，主连接 busy_timeout=0），只记录；随后 close 因 worker 连接仍在而不做检查点，
+    // 已提交数据留在 WAL，下次打开由 SQLite 恢复。
+    const terminatedInFlight = Boolean(this.checkpointer?.attemptInFlight)
+    if (terminatedInFlight) this.checkpointer?.terminate()
+    else {
+      timedOut = await Promise.race([
+        (this.checkpointer?.close() ?? Promise.resolve()).then(() => false, () => false),
+        new Promise<boolean>((resolve) => { timer = setTimeout(() => resolve(true), workerLimitMs) })
+      ])
+      if (timer) clearTimeout(timer)
+      if (timedOut) this.checkpointer?.terminate()
+    }
     const workerEnd = performance.now()
     const walBytesBeforeCheckpoint = this.walFileBytes()
     let checkpointOk = false
@@ -155,7 +166,7 @@ export class AppDatabase {
     const closeEnd = performance.now()
     const segments: QuitSegments = {
       workerMs: Math.round(workerEnd - started), checkpointMs: Math.round(checkpointEnd - workerEnd), mainCloseMs: Math.round(closeEnd - checkpointEnd),
-      walBytesBeforeCheckpoint, walBytesBeforeClose, checkpointOk, workerLimitMs
+      walBytesBeforeCheckpoint, walBytesBeforeClose, checkpointOk, workerLimitMs, terminatedInFlight
     }
     return { timedOut, ms: Math.round(closeEnd - started), segments }
   }

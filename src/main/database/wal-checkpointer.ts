@@ -122,7 +122,7 @@ export interface WalCheckpointerOptions {
   /** H-W6：调用方判断此刻能否按量请求（如批量暂停期间、主库已关闭时返回 false） */
   shouldTrigger?: () => boolean
   /** 仅测试：注入 worker 内失败 / 延迟 / 崩溃；delaySchedule[i] = 该 worker 第 i 次尝试的延迟（超出部分为 0）；crash = 每个 worker 第一次尝试时线程直接退出 */
-  inject?: { failWith?: string; delayMs?: number; delaySchedule?: number[]; crash?: boolean }
+  inject?: { failWith?: string; delayMs?: number; delaySchedule?: number[]; crash?: boolean; nativeSpinRows?: number }
 }
 
 const WORKER_SOURCE = `
@@ -147,6 +147,8 @@ parentPort.on('message', (message) => {
   try {
     if (inject.failWith) throw new Error(inject.failWith)
     if (!db) { db = new DatabaseSync(workerData.path); db.exec('PRAGMA busy_timeout = 0') }
+    // 仅测试：在 PASSIVE 前跑一条耗时的原生 SQLite 语句（递归 CTE × 读表，执行期间持 WAL 读快照）；terminate 打断不了原生调用
+    if (inject.nativeSpinRows) db.prepare('WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c WHERE x < ?) SELECT count(*) AS n FROM c, (SELECT 1 FROM app_settings LIMIT 1)').get(inject.nativeSpinRows)
     const row = db.prepare('PRAGMA wal_checkpoint(PASSIVE)').get()
     parentPort.postMessage({ type: 'done', ok: true, ms: performance.now() - started, busy: row.busy, log: row.log, checkpointed: row.checkpointed })
   } catch (error) {
@@ -224,6 +226,8 @@ export class WalCheckpointer {
   }
 
   get busy(): boolean { return Boolean(this.running || this.queued) }
+  /** 是否有一次尝试已发给 worker、还没回消息（worker 可能卡在 JS 里，也可能在原生 SQLite 调用里） */
+  get attemptInFlight(): boolean { return Boolean(this.pendingAttempt) }
   get closed(): boolean { return Boolean(this.closing) }
 
   /** 请求一次后台检查点：空闲则立即开始；运行中则排队一次（多次请求合并）。永不 reject。 */
