@@ -12,6 +12,8 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { AppDatabase, QUIT_CLOSE_LIMIT_MS, QUIT_FINAL_RESERVE_MS, QUIT_WORKER_LIMIT_MS, WAL_QUIT_BOUND_BYTES } from '../src/main/database/database'
+import { WalCheckpointer } from '../src/main/database/wal-checkpointer'
+import type { Worker } from 'node:worker_threads'
 import { ProjectService } from '../src/main/services/project-service'
 import { DocumentService } from '../src/main/services/document-service'
 import { chapterHashes } from './fixtures/wal-hash'
@@ -19,14 +21,24 @@ import { pendingBackfillBytes } from './helpers/wal-index'
 import { DatabaseSync } from 'node:sqlite'
 import { statSync } from 'node:fs'
 
-vi.setConfig({ testTimeout: 120_000 })
+vi.setConfig({ testTimeout: 120_000, hookTimeout: 60_000 })
 // P3 PR-53：WAL 约 47KB/章（#48 记录 200 章 ≈ 9.4MB）
 const CHAPTERS_WITHIN = 120
 const CHAPTERS_OVER = 400
 const dirs: string[] = []
 const dbs: AppDatabase[] = []
-afterEach(() => {
-  for (const db of dbs.splice(0)) { try { db.close() } catch { /* 已关闭 */ } }
+/** 测试侧记录检查点 worker（含被 terminate 的）：删临时目录前等它们真正 'exit'（Windows 上 worker 连接未关时 unlink 会 EBUSY） */
+const workers = new Set<Worker>()
+const workerOf = (cp: WalCheckpointer | undefined): Worker | undefined => (cp as unknown as { worker?: Worker } | undefined)?.worker
+const originalTerminate = WalCheckpointer.prototype.terminate
+WalCheckpointer.prototype.terminate = function (this: WalCheckpointer) { const w = workerOf(this); if (w) workers.add(w); originalTerminate.call(this) }
+const exited = (w: Worker): Promise<void> => new Promise((resolve) => { if (w.threadId < 0) resolve(); else { w.once('exit', () => resolve()); if (w.threadId < 0) resolve() } })
+afterEach(async () => {
+  for (const db of dbs.splice(0)) {
+    const w = workerOf(db.checkpointer); if (w) workers.add(w)
+    await db.closeAsync()
+  }
+  for (const w of [...workers]) { await exited(w); workers.delete(w) }
   dirs.splice(0).forEach((dir) => rmSync(dir, { recursive: true, force: true }))
 })
 const tempDir = (): string => { const dir = mkdtempSync(join(tmpdir(), 'inkstone-quit-')); dirs.push(dir); return dir }

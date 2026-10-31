@@ -841,6 +841,14 @@ try {
   await running.page.getByRole('button', { name: '继续写作' }).click()
   await running.page.locator('.manuscript-editor').waitFor()
   const hitLocator = (page, text) => page.locator('.manuscript-editor .character-hit', { hasText: text })
+  // 同一个 .character-hit（含 text）节点在 stableMs 内未被替换、仍 isConnected 才返回
+  const waitHitStable = (page, text, stableMs = 700) => page.waitForFunction(({ text, stableMs }) => {
+    const el = [...document.querySelectorAll('.manuscript-editor .character-hit')].find((node) => node.textContent.includes(text))
+    const seen = window.__f14Stable
+    if (!el) { window.__f14Stable = undefined; return false }
+    if (!seen || seen.el !== el || !el.isConnected) { window.__f14Stable = { el, since: performance.now() }; return false }
+    return performance.now() - seen.since >= stableMs
+  }, { text, stableMs }, { timeout: 10_000, polling: 50 })
   const docState = (page, documentId) => page.evaluate(async ({ projectId, documentId }) => { const doc = await window.workspace.documents.get(projectId, documentId); return { json: JSON.stringify(doc.editorJson), revision: doc.revision } }, { projectId: ids.projectId, documentId })
 
   await record('F14 ⑨ 悬停「林栀」弹出只读卡片；Esc 关闭；Ctrl+Shift+K 打开；editor_json 与 revision 不变', async () => {
@@ -851,9 +859,34 @@ try {
     // 单字别名「栀」默认不参与：全文只有「林栀」「阿栀」两处下划线
     assert.deepEqual(await page.locator('.manuscript-editor .character-hit').allInnerTexts(), ['林栀', '阿栀'])
     const before = await docState(page, f14.hover)
-    await hitLocator(page, '林栀').first().hover()
+    // NR-1：临时绕开悬停与防抖重建的竞态，等产品修复（F14 产品 B+：cardAt 用 isConnected/posAtCoords 重取命中，带复现用例；见团队 hygiene.md NR-1）。
+    // 用例前提：下划线节点稳定后再悬停。匹配器重设 / 500ms 防抖 recompute 会重建 .character-hit；
+    // 同一节点连续 700ms（> HOVER_DEBOUNCE_MS）未被替换且 isConnected 才 hover。卡片 2000ms 上限不变。
+    await waitHitStable(page, '林栀')
+    const tracing = page.context().tracing
+    const traced = await tracing.start({ screenshots: true, snapshots: true }).then(() => true, (error) => { process.stdout.write(`F14 trace unavailable (${error.message})\n`); return false })
+    const hit = hitLocator(page, '林栀').first()
+    const box = await hit.boundingBox()
+    await hit.hover()
     const card = page.getByTestId('character-hover-card')
-    await card.waitFor({ timeout: 2_000 })
+    try {
+      await card.waitFor({ timeout: 2_000 })
+    } catch (error) {
+      const point = box ? { x: box.x + box.width / 2, y: box.y + box.height / 2 } : undefined
+      const diag = await page.evaluate((point) => {
+        const at = point ? document.elementFromPoint(point.x, point.y) : null
+        const stable = window.__f14Stable?.el
+        return { point, elementFromPoint: at ? { tag: at.tagName, class: at.className, testid: at.closest('[data-testid]')?.getAttribute('data-testid') ?? null } : null,
+          stableHitIsConnected: stable ? stable.isConnected : null, hits: [...document.querySelectorAll('.manuscript-editor .character-hit')].map((el) => ({ text: el.textContent, isConnected: el.isConnected, same: el === stable })) }
+      }, point).catch((e) => ({ error: e.message }))
+      process.stdout.write(`F14 hover diag ${process.platform} ${JSON.stringify(diag)}\n`)
+      if (traced) {
+        const file = join(process.cwd(), 'e2e-artifacts', `f14-hover-trace-${process.platform}.zip`)
+        try { mkdirSync(dirname(file), { recursive: true }); await tracing.stop({ path: file }); process.stdout.write(`F14 trace saved ${file}\n`) } catch (e) { process.stdout.write(`F14 trace save failed (${e.message})\n`) }
+      }
+      throw error
+    }
+    if (traced) await tracing.stop().catch(() => undefined)
     const text = await card.innerText()
     assert.match(text, /林栀/)
     assert.match(text, /药铺学徒/)
