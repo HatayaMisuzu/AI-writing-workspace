@@ -57,25 +57,38 @@ export interface WalIndexHeader { mxFrame: number; nBackfill: number; pageSize: 
  * 读不到 / 副本不一致 / 校验和不符时重试，仍失败返回 undefined。不开连接、不发 PRAGMA、不碰 120..135 的锁字节（见下）。
  */
 export function readWalIndexHeader(dbPath: string, tries = 3): WalIndexHeader | undefined {
-  const little = endianness() === 'LE'
   for (let i = 0; i < tries; i += 1) {
-    let fd: number | undefined
-    let buf: Buffer | undefined
-    try {
-      fd = openSync(`${dbPath}-shm`, 'r')
-      const b = Buffer.alloc(SHM_READ_BYTES)
-      buf = b.subarray(0, readSync(fd, b, 0, SHM_READ_BYTES, 0))
-    } catch { buf = undefined } finally { if (fd !== undefined) try { closeSync(fd) } catch { /* ignore */ } }
-    if (!buf || buf.length < SHM_READ_BYTES) continue
-    const u32 = (o: number): number => (little ? buf!.readUInt32LE(o) : buf!.readUInt32BE(o))
-    if (!buf.subarray(0, 48).equals(buf.subarray(48, 96))) continue
-    if (u32(0) !== SQLITE_WAL_VERSION || buf[12] !== 1) continue
-    const [c1, c2] = shmChecksum(buf.subarray(0, 40), !little)
-    if (c1 !== u32(40) || c2 !== u32(44)) continue
-    const sz = little ? buf.readUInt16LE(14) : buf.readUInt16BE(14)
-    return { mxFrame: u32(16), nBackfill: u32(96), pageSize: sz === 1 ? 65536 : sz }
+    const h = parseWalIndexHeader(readShmHead(dbPath))
+    if (h) return h
   }
   return undefined
+}
+
+/** 读 -shm 前 SHM_READ_BYTES（100）字节；文件不存在 / 读错 / 不足 100 字节 → undefined。只读，不开连接，不碰 120..135 的锁字节。 */
+export function readShmHead(dbPath: string): Buffer | undefined {
+  let fd: number | undefined
+  try {
+    fd = openSync(`${dbPath}-shm`, 'r')
+    const b = Buffer.alloc(SHM_READ_BYTES)
+    const buf = b.subarray(0, readSync(fd, b, 0, SHM_READ_BYTES, 0))
+    return buf.length < SHM_READ_BYTES ? undefined : buf
+  } catch { return undefined } finally { if (fd !== undefined) try { closeSync(fd) } catch { /* ignore */ } }
+}
+
+/**
+ * 校验并解析 -shm 头（readShmHead 的结果）：两份 WalIndexHdr 副本逐字节一致、iVersion == 3007000、isInit == 1、校验和正确；
+ * 任一不过 → undefined。
+ */
+export function parseWalIndexHeader(buf: Buffer | undefined): WalIndexHeader | undefined {
+  if (!buf || buf.length < SHM_READ_BYTES) return undefined
+  const little = endianness() === 'LE'
+  const u32 = (o: number): number => (little ? buf.readUInt32LE(o) : buf.readUInt32BE(o))
+  if (!buf.subarray(0, 48).equals(buf.subarray(48, 96))) return undefined
+  if (u32(0) !== SQLITE_WAL_VERSION || buf[12] !== 1) return undefined
+  const [c1, c2] = shmChecksum(buf.subarray(0, 40), !little)
+  if (c1 !== u32(40) || c2 !== u32(44)) return undefined
+  const sz = little ? buf.readUInt16LE(14) : buf.readUInt16BE(14)
+  return { mxFrame: u32(16), nBackfill: u32(96), pageSize: sz === 1 ? 65536 : sz }
 }
 
 /**

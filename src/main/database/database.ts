@@ -2,7 +2,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { mkdirSync, statSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { schema } from './schema'
-import { WalCheckpointer, autoCheckpointPagesFor, readWalIndexHeader, type WalCheckpointerOptions, type WalIndexHeader } from './wal-checkpointer'
+import { WalCheckpointer, autoCheckpointPagesFor, parseWalIndexHeader, readShmHead, readWalIndexHeader, type WalCheckpointerOptions, type WalIndexHeader } from './wal-checkpointer'
 
 export const CURRENT_SCHEMA_VERSION = 10
 /** 退出时等后台检查点 worker 关闭的上限（ms）；超时则 terminate worker、直接关主连接后退出（P3 PR-42）。 */
@@ -43,6 +43,30 @@ export interface AppDatabaseOptions {
   checkpointer?: WalCheckpointerOptions | false
   /** P3 PR-44：批量提交后等「安静的完整检查点」释放暂停的上限；超过则降级（恢复 autocheckpoint）并告警 */
   release?: { maxRounds?: number; maxMs?: number }
+  /** P3（wal-restart ④）仅测试：注入 -shm 头读取（喂坏头）与时钟（兜底超时），见 RestartWaitDiagnostics */
+  restartWait?: {
+    readShmHead?: () => Buffer | undefined
+    now?: () => number
+    timers?: { set: (fn: () => void, ms: number) => unknown; clear: (handle: unknown) => void }
+  }
+}
+
+/** P3（wal-restart ④）：等待态下待回写超过此值 → 兜底恢复 wal_autocheckpoint */
+export const RESTART_WAIT_MAX_PENDING_BYTES = 6 * 1024 * 1024
+/** P3（wal-restart ④）：等待态持续 ≥ 此值（在下一次提交时判断）→ 兜底恢复 wal_autocheckpoint */
+export const RESTART_WAIT_MAX_MS = 30_000
+
+/**
+ * P3（wal-restart ④）诊断：批量释放时 WAL 未回文件头 → 进入等待态（wal_autocheckpoint 保持 0，普通写由 worker 1MB 触发 PASSIVE），
+ * 之后某次普通写自然走 walRestartLog（wal.c:3976）回到文件头（-shm mxFrame 变小）才恢复。
+ * - waits：进入等待态次数；restored：因 WAL 回文件头而恢复的次数；
+ * - fallbackCount / fallbacks：兜底恢复次数与原因（pending = 待回写 > 6MB；timeout = 等待 ≥ 30s；bad-header = -shm 头读取/校验失败；
+ *   worker = 后台检查点关闭/缺席/失败）。正常路径 fallbackCount 应为 0。
+ */
+export interface RestartWaitDiagnostics {
+  waits: number; restored: number; fallbackCount: number
+  fallbacks: Array<{ reason: RestartWaitFallbackReason; at: number; pendingBytes?: number; waitedMs?: number }>
+  waiting: boolean
 }
 
 /** P3 PR-44：一次暂停释放过程的结果（诊断与测试用） */
@@ -53,7 +77,15 @@ export interface ReleaseRecord {
   ms: number
   writesDuringHold: number
   at: number
+  /**
+   * P3（wal-restart ④）：wal_autocheckpoint 何时真正恢复。'restored-now' = 释放时立即恢复（非 quiet / WAL 已在文件头 / 无 checkpointer）；
+   * 'waiting' = 进入等待态（WAL 未回文件头）；之后改写为 'restored-after-restart'（某次普通写回到文件头）或 'fallback-<原因>'（兜底）
+   * 或 'superseded'（新的批量暂停接管）。释放完成的明确信号 = autoCheckpointRestore ≠ 'waiting'（e2e 用）。
+   */
+  autoCheckpointRestore?: 'restored-now' | 'waiting' | 'restored-after-restart' | 'superseded' | `fallback-${RestartWaitFallbackReason}`
 }
+
+export type RestartWaitFallbackReason = 'pending' | 'timeout' | 'bad-header' | 'worker'
 
 /**
  * 主连接最近的写事务 COMMIT 耗时（墙钟 ms），诊断与测试用。
@@ -90,9 +122,21 @@ export class AppDatabase {
   readonly releases: ReleaseRecord[] = []
   /** 最近的写事务提交记录（最多 50 条） */
   readonly commits: CommitRecord[] = []
+  /** P3（wal-restart ④）：等待 WAL 回文件头（since = 进入时刻，lastMxFrame = 最近一次读到的 mxFrame）；undefined = 不在等待态 */
+  private restartWait?: { since: number; lastMxFrame: number; record?: ReleaseRecord; timer?: unknown; token?: object }
+  private readonly timers: { set: (fn: () => void, ms: number) => unknown; clear: (handle: unknown) => void }
+  private readonly shmHeadReader: () => Buffer | undefined
+  private readonly clock: () => number
+  readonly restartWaitDiag: RestartWaitDiagnostics = { waits: 0, restored: 0, fallbackCount: 0, fallbacks: [], waiting: false }
 
   constructor(path: string, options: AppDatabaseOptions = {}) {
     this.path = path
+    this.shmHeadReader = options.restartWait?.readShmHead ?? (() => readShmHead(path))
+    this.clock = options.restartWait?.now ?? (() => Date.now())
+    this.timers = options.restartWait?.timers ?? {
+      set: (fn, ms) => { const t = setTimeout(fn, ms); t.unref?.(); return t },
+      clear: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>)
+    }
     if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true })
     this.raw = new DatabaseSync(path)
     this.raw.exec('PRAGMA foreign_keys = ON')
@@ -135,6 +179,7 @@ export class AppDatabase {
   close(): void {
     if (this.isClosed) return
     this.isClosed = true
+    this.endRestartWait()
     void this.checkpointer?.close()
     this.raw.close()
   }
@@ -231,7 +276,9 @@ export class AppDatabase {
       return result
     }
     if (this.autoCheckpointHolds === 0) {
-      this.autoCheckpointSaved = this.autoCheckpoint
+      // ④ 等待态中 wal_autocheckpoint 已是 0，原值仍在 autoCheckpointSaved：不覆盖；新的暂停接管，等待态结束（由新的释放重新判断）
+      if (this.restartWait) this.endRestartWait('superseded')
+      else this.autoCheckpointSaved = this.autoCheckpoint
       this.raw.exec('PRAGMA wal_autocheckpoint = 0')
     }
     this.autoCheckpointHolds += 1
@@ -285,15 +332,90 @@ export class AppDatabase {
     }
     const holds = this.committedHolds
     this.committedHolds = 0
-    this.releaseAutoCheckpoint(holds)
+    // ④：只有安静释放才可能进入等待态；failed / closed / limit-* 照旧立即恢复
+    this.releaseAutoCheckpoint(holds, reason === 'quiet', record)
   }
 
-  private releaseAutoCheckpoint(count: number): void {
+  /**
+   * waitForRestart（④，仅安静释放）：WAL 还没回到文件头（-shm mxFrame > 0）时不恢复 wal_autocheckpoint，进入等待态；
+   * 恢复后第一次保存的 mxFrame 会接在旧帧之后、超过阈值，COMMIT 里同步回写（run 41188304434 save2 commitMs 183ms）。
+   * -shm 头读不到 / 校验不过 → 立即恢复（退回原行为）并记日志。
+   */
+  private releaseAutoCheckpoint(count: number, waitForRestart = false, record?: ReleaseRecord): void {
     this.autoCheckpointHolds = Math.max(0, this.autoCheckpointHolds - count)
     if (this.autoCheckpointHolds > 0 || this.isClosed) return
+    if (waitForRestart && this.path !== ':memory:') {
+      const h = parseWalIndexHeader(this.shmHeadReader())
+      if (!h) { this.restartWait = { since: this.clock(), lastMxFrame: 0, record }; this.restartWaitFallback('bad-header'); return }
+      if (h.mxFrame > 0) {
+        // 30s 兜底定时器：没有任何写入时也会到点恢复；unref 不拖住进程退出；close / 结束等待时清掉
+        const token = {}
+        const timer = this.timers.set(() => {
+          const w = this.restartWait
+          if (w && w.token === token && !this.isClosed) this.restartWaitFallback('timeout', { waitedMs: this.clock() - w.since })
+        }, RESTART_WAIT_MAX_MS)
+        this.restartWait = { since: this.clock(), lastMxFrame: h.mxFrame, record, timer, token }
+        if (record) record.autoCheckpointRestore = 'waiting'
+        this.restartWaitDiag.waits += 1
+        this.restartWaitDiag.waiting = true
+        return
+      }
+    }
+    if (record) record.autoCheckpointRestore = 'restored-now'
+    this.restoreAutoCheckpoint()
+  }
+
+  /** 仅诊断/测试：等待态 30s 兜底定时器是否存在 */
+  get restartWaitTimerActive(): boolean { return this.restartWait?.timer !== undefined }
+
+  private restoreAutoCheckpoint(outcome?: ReleaseRecord['autoCheckpointRestore']): void {
+    this.endRestartWait(outcome)
+    if (this.isClosed) return
     try { this.raw.exec(`PRAGMA wal_autocheckpoint = ${Math.trunc(this.autoCheckpointSaved)}`) } catch (error) {
       console.warn(`[wal-checkpoint] restore wal_autocheckpoint failed: ${(error as Error).message}`)
     }
+  }
+
+  private endRestartWait(outcome?: ReleaseRecord['autoCheckpointRestore']): void {
+    const wait = this.restartWait
+    if (wait?.timer !== undefined) this.timers.clear(wait.timer)
+    if (wait?.record && outcome) wait.record.autoCheckpointRestore = outcome
+    this.restartWait = undefined
+    this.restartWaitDiag.waiting = false
+  }
+
+  /** ④ 兜底：恢复 wal_autocheckpoint 并记日志；下一次 COMMIT 可能在主线程同步回写 ≤ 6MB + fsync（可能超过 50ms）。 */
+  private restartWaitFallback(reason: RestartWaitFallbackReason, extra: { pendingBytes?: number; waitedMs?: number } = {}): void {
+    this.restartWaitDiag.fallbackCount += 1
+    this.restartWaitDiag.fallbacks.push({ reason, at: Date.now(), ...extra })
+    if (this.restartWaitDiag.fallbacks.length > 50) this.restartWaitDiag.fallbacks.splice(0, this.restartWaitDiag.fallbacks.length - 50)
+    const message = `[wal-checkpoint] restart-wait fallback (${reason}) ${JSON.stringify(extra)}; restoring wal_autocheckpoint, next save may run a synchronous checkpoint`
+    this.checkpointer?.warnings.push(message)
+    console.warn(message)
+    this.restoreAutoCheckpoint(`fallback-${reason}`)
+  }
+
+  /**
+   * ④：等待态下每次普通写 COMMIT 之后调用（在 COMMIT 计时之外，主线程同步，只读 -shm 头 100 字节）。
+   * mxFrame 变小 = 本次写走了 walRestartLog、WAL 已回文件头 → 恢复；否则检查兜底（待回写 > 6MB / 等待 ≥ 30s / worker 不可用）。
+   */
+  private checkRestartWait(): void {
+    const wait = this.restartWait
+    if (!wait || this.isClosed) return
+    const cp = this.checkpointer
+    if (!cp || cp.closed || cp.consecutiveFailures > 0) { this.restartWaitFallback('worker'); return }
+    const h = parseWalIndexHeader(this.shmHeadReader())
+    if (!h) { this.restartWaitFallback('bad-header'); return }
+    if (h.mxFrame < wait.lastMxFrame) {
+      this.restartWaitDiag.restored += 1
+      this.restoreAutoCheckpoint('restored-after-restart')
+      return
+    }
+    wait.lastMxFrame = h.mxFrame
+    const pendingBytes = Math.max(0, h.mxFrame - h.nBackfill) * (h.pageSize + 24)
+    if (pendingBytes > RESTART_WAIT_MAX_PENDING_BYTES) { this.restartWaitFallback('pending', { pendingBytes }); return }
+    const waitedMs = this.clock() - wait.since
+    if (waitedMs >= RESTART_WAIT_MAX_MS) this.restartWaitFallback('timeout', { waitedMs, pendingBytes })
   }
 
   transaction<T>(fn: () => T): T {
@@ -312,7 +434,10 @@ export class AppDatabase {
       if (before && after) {
         Object.assign(record, {
           mxFrameBefore: before.mxFrame, mxFrameAfter: after.mxFrame, nBackfillBefore: before.nBackfill, nBackfillAfter: after.nBackfill,
-          walRestarted: after.mxFrame < before.mxFrame, backfilledInCommit: after.nBackfill !== before.nBackfill, checkpointerBusy
+          walRestarted: after.mxFrame < before.mxFrame,
+          // restart 时 walRestartHdr 把 nBackfill 清 0（wal.c:2235），不算回写；此时只有 nBackfill > 0 才说明提交后又做了回写
+          backfilledInCommit: after.mxFrame < before.mxFrame ? after.nBackfill > 0 : after.nBackfill !== before.nBackfill,
+          checkpointerBusy
         })
       }
       this.commits.push(record)
@@ -323,6 +448,8 @@ export class AppDatabase {
         void this.checkpointer.request()
       }
       // H-W6：普通写入后按待回写量请求后台 PASSIVE（批量暂停期间由释放循环负责）
+      // ④ 等待态：COMMIT 已结束、计时之外，读 -shm 头判断是否已回文件头 / 是否兜底
+      if (!held && this.restartWait) this.checkRestartWait()
       if (!held) this.checkpointer?.noteCommit()
       return result
     } catch (error) {
