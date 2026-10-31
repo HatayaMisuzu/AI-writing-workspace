@@ -2520,8 +2520,12 @@ try {
       const items = []
       for (const node of tree.filter((item) => item.type === 'chapter' && item.title !== '第500章')) {
         const doc = await window.workspace.documents.get(projectId, node.id)
+        // 只放真实命中数 > 0 的章：projects.create 自带一个空的「第一章」（project-service.ts:65），它没有命中；
+        // bookReplaceSchema 要求 hits 为正整数（schemas.ts:31 positive()）
+        const hits = (doc.plainText.match(/旧信/g) ?? []).length
+        if (hits === 0) continue
         const text = doc.plainText.replaceAll('旧信', '新信')
-        items.push({ documentId: node.id, expectedRevision: doc.revision, editorJson: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text }] }] }, plainText: text, hits: (doc.plainText.match(/旧信/g) ?? []).length })
+        items.push({ documentId: node.id, expectedRevision: doc.revision, editorJson: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text }] }] }, plainText: text, hits })
       }
       const t = performance.now()
       await window.workspace.documents.replaceBatch({ projectId, items, query: '旧信', replacement: '新信', regex: false, caseSensitive: false })
