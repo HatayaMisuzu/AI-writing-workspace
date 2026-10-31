@@ -2,6 +2,7 @@ import { Check, Plus, Save, Server, TestTube2, XCircle } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { ModelConfig, ProviderConfig, ProviderType, RoutedTask } from '../../../shared/domain'
 import { SETTINGS_PROJECT_HINTS } from '../services/settings-hints'
+import { baseUrlAfterProviderSave, isProviderSaveCancelledMessage } from '../services/provider-save-revert'
 import { userErrorMessage } from '../../../shared/user-error'
 import { BASE_URL_QUERY_SECRET_HINT, checkBaseUrl, hasSecretQuery } from '../../../shared/base-url'
 import {
@@ -89,7 +90,13 @@ export function SettingsScreen(): React.JSX.Element {
       })
     } catch (error) {
       // A·M1：作者在确认框里点了「取消」——不是故障，配置保持原样
-      if (userErrorMessage(error).includes('已取消保存')) { setNotice({ ok: false, text: '已取消保存，服务配置未改动。' }); return }
+      if (isProviderSaveCancelledMessage(userErrorMessage(error))) {
+        // 配置没变：地址栏回到已保存的值（只回滚地址栏，其他字段保持作者输入）
+        const savedBaseUrl = selected?.baseUrl
+        setForm((current) => ({ ...current, baseUrl: baseUrlAfterProviderSave('cancelled', current.baseUrl, savedBaseUrl) }))
+        setNotice({ ok: false, text: '已取消保存，服务配置未改动。' }); return
+      }
+      // 其他失败：地址栏保持作者新填的值（baseUrlAfterProviderSave('failed', …) 即原值），方便修改
       throw error
     }
     setSelectedId(id)

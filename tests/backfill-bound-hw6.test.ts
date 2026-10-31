@@ -104,6 +104,8 @@ describe('H-W6 1：连续保存的待回写上界', () => {
     expect(cp.pendingPeakBytes).toBeLessThanOrEqual(BACKFILL_BOUND_BYTES)
     expect(cp.backfillRequests).toBeGreaterThan(0)
     expect(s.docs.getContent(s.project.id, s.chapter.id).plainText).toBe(text(299))
+    console.log(`[fallback] hw6 test1-300saves ${process.platform} fallbackCount=${s.db.restartWaitDiag.fallbackCount} waits=${s.db.restartWaitDiag.waits} restored=${s.db.restartWaitDiag.restored}`)
+    expect(s.db.restartWaitDiag.fallbackCount).toBe(0) // P3 ④ 新增：正常路径兜底未触发
   })
 
   it('间隔 250ms 的 120 次大章保存：待回写峰值 ≤ 8MB（记录 COMMIT 分布）', async () => {
@@ -126,13 +128,27 @@ describe('H-W6 1：连续保存的待回写上界', () => {
 })
 
 describe('H-W6 2：退出不与进行中的 PASSIVE 互卡（#51 closeForQuit 三段预算）', () => {
-  for (const delayMs of [1_500, 8_000]) it(`按量 PASSIVE 进行中退出（worker 内延迟 ${delayMs}ms）：总时长 < ${QUIT_CLOSE_LIMIT_MS}ms，重开 integrity_check ok、正文完整`, async () => {
+  // 前置：检查点请求已发出、worker 尚未回复（attemptInFlight）。逐章保存并在每章后检查，检测到后同一同步段内断言 busy 并调 closeForQuit（中间不 await），不再与注入延迟赛跑
+  for (const delayMs of [1_500, 8_000]) it(`检查点请求已发出未回复时退出（worker 内延迟 ${delayMs}ms）：总时长 < ${QUIT_CLOSE_LIMIT_MS}ms，重开 integrity_check ok、正文完整`, async () => {
     const s = open({ checkpointer: { inject: { delayMs }, retries: 0 } })
-    const r = await saveRun(s, 20)
     const cp = s.db.checkpointer!
+    let peak = 0
+    let last = -1
+    let inFlight = false
+    for (let i = 0; i < 40 && !inFlight; i += 1) {
+      s.docs.saveContent({ projectId: s.project.id, documentId: s.chapter.id, editorJson: doc(text(i)), plainText: text(i) })
+      last = i
+      const pending = readPendingBackfillBytes(s.path)
+      if (pending !== undefined && pending > peak) peak = pending
+      await tick()
+      inFlight = cp.attemptInFlight
+    }
+    if (!inFlight) throw new Error(`HW6-2 前置未满足：40 章保存后仍无已发出未回复的检查点请求（backfillRequests=${cp.backfillRequests}, runs=${cp.runs}, busy=${cp.busy}, last=${JSON.stringify(cp.last)}）`)
     expect(cp.backfillRequests).toBeGreaterThan(0)
     expect(cp.busy).toBe(true)
-    const result = await s.db.closeForQuit()
+    const quit = s.db.closeForQuit() // 与上面的检测同一同步段：closeForQuit 在首个 await 前同步读取 attemptInFlight
+    const result = await quit
+    const r = { peak }
     log('HW6FIX-QUIT', { delayMs, peak: r.peak, result })
     expect(result.ms).toBeLessThan(QUIT_CLOSE_LIMIT_MS)
     // H-W6 方案①：worker 卡在尝试里（JS 层）→ closeForQuit 立即 terminate，等 worker 段 < 100ms
@@ -142,7 +158,7 @@ describe('H-W6 2：退出不与进行中的 PASSIVE 互卡（#51 closeForQuit �
     expect(result.segments!.checkpointOk).toBe(true)
     const reopened = new AppDatabase(s.path, { checkpointer: false }); dbs.push(reopened)
     expect(integrity(reopened)).toBe('ok')
-    expect(new DocumentService(reopened).getContent(s.project.id, s.chapter.id).plainText).toBe(text(19))
+    expect(new DocumentService(reopened).getContent(s.project.id, s.chapter.id).plainText).toBe(text(last))
   })
 
   it('无注入：300 次连续保存后立刻退出（PASSIVE 可能正在 SQLite 里回写）：总时长 < 上限，数据完整', async () => {

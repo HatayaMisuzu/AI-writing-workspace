@@ -1009,13 +1009,37 @@ try {
   await running.page.locator('.manuscript-editor').waitFor()
   const hitLocator = (page, text) => page.locator('.manuscript-editor .character-hit', { hasText: text })
   // 同一个 .character-hit（含 text）节点在 stableMs 内未被替换、仍 isConnected 才返回
+  // [F14DIAG9] 只记录：每次计时重置（节点出现/被替换/断开）的时刻记入 window.__f14StableResets，不改判定
   const waitHitStable = (page, text, stableMs = 700) => page.waitForFunction(({ text, stableMs }) => {
     const el = [...document.querySelectorAll('.manuscript-editor .character-hit')].find((node) => node.textContent.includes(text))
     const seen = window.__f14Stable
     if (!el) { window.__f14Stable = undefined; return false }
-    if (!seen || seen.el !== el || !el.isConnected) { window.__f14Stable = { el, since: performance.now() }; return false }
+    if (!seen || seen.el !== el || !el.isConnected) { (window.__f14StableResets ??= []).push({ t: performance.now(), why: !seen ? 'first' : seen.el !== el ? 'replaced' : 'disconnected' }); window.__f14Stable = { el, since: performance.now() }; return false }
     return performance.now() - seen.since >= stableMs
   }, { text, stableMs }, { timeout: 10_000, polling: 50 })
+  // [F14DIAG9] 诊断探针：只记录、不断言，失败一律吞掉不影响用例
+  const installDiag9 = (page) => page.evaluate(() => {
+    const d = { t0: performance.now(), mouseovers: [], hitReplacements: [], card: [] }
+    window.__f14Diag9 = d
+    const firstHit = () => [...document.querySelectorAll('.manuscript-editor .character-hit')].find((node) => node.textContent.includes('林栀'))
+    let hit = firstHit(); let cardOn = Boolean(document.querySelector('[data-testid="character-hover-card"]'))
+    const onOver = (event) => { const t = event.target; d.mouseovers.push({ t: performance.now(), tag: t?.tagName, cls: t?.className ?? null, text: (t?.textContent ?? '').slice(0, 8) }) }
+    document.addEventListener('mouseover', onOver, true)
+    const observer = new MutationObserver(() => {
+      const now = performance.now(); const next = firstHit()
+      if (next !== hit) { d.hitReplacements.push({ t: now, oldConnected: hit ? hit.isConnected : null, hasNew: Boolean(next) }); hit = next }
+      const on = Boolean(document.querySelector('[data-testid="character-hover-card"]'))
+      if (on !== cardOn) { d.card.push({ t: now, shown: on }); cardOn = on }
+    })
+    observer.observe(document.body, { childList: true, subtree: true })
+    // 记录完即卸载，避免影响后续用例（如 ⑫ 性能）
+    window.__f14Diag9Stop = () => { observer.disconnect(); document.removeEventListener('mouseover', onOver, true) }
+  }).catch(() => undefined)
+  const logDiag9 = (page, label, point) => page.evaluate((point) => {
+    const at = point ? document.elementFromPoint(point.x, point.y) : null
+    window.__f14Diag9Stop?.(); window.__f14Diag9Stop = undefined
+    return { ...window.__f14Diag9, stableResets: window.__f14StableResets ?? [], elementFromPoint: at ? { tag: at.tagName, cls: at.className, text: (at.textContent ?? '').slice(0, 8) } : null, now: performance.now() }
+  }, point).then((d) => process.stdout.write(`[F14DIAG9] ${process.platform} ${label} ${JSON.stringify(d)}\n`), (e) => process.stdout.write(`[F14DIAG9] ${process.platform} ${label} error ${e.message}\n`))
   const docState = (page, documentId) => page.evaluate(async ({ projectId, documentId }) => { const doc = await window.workspace.documents.get(projectId, documentId); return { json: JSON.stringify(doc.editorJson), revision: doc.revision } }, { projectId: ids.projectId, documentId })
 
   await record('F14 ⑨ 悬停「林栀」弹出只读卡片；Esc 关闭；Ctrl+Shift+K 打开；editor_json 与 revision 不变', async () => {
@@ -1026,6 +1050,7 @@ try {
     // 单字别名「栀」默认不参与：全文只有「林栀」「阿栀」两处下划线
     assert.deepEqual(await page.locator('.manuscript-editor .character-hit').allInnerTexts(), ['林栀', '阿栀'])
     const before = await docState(page, f14.hover)
+    await installDiag9(page)
     // NR-1：临时绕开悬停与防抖重建的竞态，等产品修复（F14 产品 B+：cardAt 用 isConnected/posAtCoords 重取命中，带复现用例；见团队 hygiene.md NR-1）。
     // 用例前提：下划线节点稳定后再悬停。匹配器重设 / 500ms 防抖 recompute 会重建 .character-hit；
     // 同一节点连续 700ms（> HOVER_DEBOUNCE_MS）未被替换且 isConnected 才 hover。卡片 2000ms 上限不变。
@@ -1036,9 +1061,12 @@ try {
     const box = await hit.boundingBox()
     await hit.hover()
     const card = page.getByTestId('character-hover-card')
+    const diagPoint = box ? { x: box.x + box.width / 2, y: box.y + box.height / 2 } : undefined
     try {
       await card.waitFor({ timeout: 2_000 })
+      await logDiag9(page, 'card-opened', diagPoint)
     } catch (error) {
+      await logDiag9(page, 'card-not-opened', diagPoint)
       const point = box ? { x: box.x + box.width / 2, y: box.y + box.height / 2 } : undefined
       const diag = await page.evaluate((point) => {
         const at = point ? document.elementFromPoint(point.x, point.y) : null
@@ -1078,11 +1106,324 @@ try {
     assert.deepEqual(await docState(page, f14.hover), before, '悬停/快捷键前后 editor_json 和 revision 不变')
   })
 
+  // F14：卡片开着时鼠标不离开编辑区，从「阿栀」直接移到「林栀」，卡片应切换为林栀的命中
+  await record('F14 卡片开着时鼠标从阿栀直接移到林栀', async () => {
+    const page = running.page
+    const card = page.getByTestId('character-hover-card')
+    await page.mouse.move(5, 5)
+    await card.waitFor({ state: 'detached', timeout: 2_000 })
+    assert.equal(await card.count(), 0, '开始前无残留卡片')
+    await hitLocator(page, '阿栀').hover()
+    await card.waitFor({ timeout: 2_000 })
+    assert.equal(await card.getAttribute('aria-label'), '人物卡 · 阿栀')
+    assert.match(await card.innerText(), /匹配别名：阿栀/)
+    // 不移到空白处：直接悬停另一处命中
+    await hitLocator(page, '林栀').first().hover()
+    await page.waitForFunction(() => document.querySelector('[data-testid="character-hover-card"]')?.getAttribute('aria-label') === '人物卡 · 林栀', undefined, { timeout: 2_000 })
+    const text = await card.innerText()
+    assert.match(text, /林栀/)
+    assert.ok(!text.includes('匹配别名：阿栀'), `卡片应切换为林栀，实为：${text}`)
+    await page.mouse.move(5, 5)
+    await card.waitFor({ state: 'detached', timeout: 2_000 })
+    assert.equal(await card.count(), 0, '结束后无残留卡片')
+  })
+
+  // F14 产品 B+ 主动复现（悬停掉卡）：卡已打开后触发 matcher 更换，断言卡仍在或短时再现。
+  // 人物设置页会切走 section 卸载 EditorSurface，无法在真 UI 上「边悬停边改人物」；
+  // 故用与 ProjectViews.flush 相同的产物路径：IPC save + 派发 workspace:characters-changed（renderer 内部事件，不改 main/preload/IPC）。
+  await record('F14 悬停卡：characters-changed 更换 matcher 后卡片仍在或短时再现', async () => {
+    const page = running.page
+    await openChapter(page, '悬停章')
+    const hit = hitLocator(page, '林栀').first()
+    await hit.waitFor()
+    await hit.hover()
+    const card = page.getByTestId('character-hover-card')
+    await card.waitFor({ timeout: 2_000 })
+    assert.match(await card.innerText(), /林栀/)
+    // 新增正文已有的「顾言」→ 匹配器项变化且可观测新下划线，证明 hoverMatcher effect / setMatcher 已执行
+    const extraId = await page.evaluate(async ({ projectId }) => {
+      const saved = await window.workspace.characters.save({ projectId, name: '顾言', aliases: [], notes: 'F14b-matcher-bump' })
+      window.dispatchEvent(new CustomEvent('workspace:characters-changed', { detail: { projectId } }))
+      return saved.id
+    }, { projectId: ids.projectId })
+    try {
+      await hitLocator(page, '顾言').waitFor({ timeout: 2_000 })
+      // 未修时 EditorSurface.tsx:347 无条件关卡；鼠标仍在「林栀」上但 mouseover 不重燃 → 期望此处红
+      await card.waitFor({ timeout: 2_000 })
+      assert.match(await card.innerText(), /林栀/)
+    } finally {
+      await page.evaluate(async ({ projectId, extraId }) => {
+        await window.workspace.characters.delete(projectId, extraId)
+        window.dispatchEvent(new CustomEvent('workspace:characters-changed', { detail: { projectId } }))
+      }, { projectId: ids.projectId, extraId })
+      await page.waitForFunction(() => ![...document.querySelectorAll('.manuscript-editor .character-hit')].some((el) => el.textContent.includes('顾言')), undefined, { timeout: 2_000 }).catch(() => undefined)
+    }
+  })
+
+  // F14 B+：人物被删除 → 命中消失 → 期望卡片关闭（不靠旧引用硬撑）
+  await record('F14 悬停卡：删除卡片所示人物后卡片关闭', async () => {
+    const page = running.page
+    const card = page.getByTestId('character-hover-card')
+    await page.mouse.move(5, 5)
+    const tempId = await page.evaluate(async ({ projectId }) => {
+      const saved = await window.workspace.characters.save({ projectId, name: '顾言', aliases: [], notes: 'F14b-delete' })
+      window.dispatchEvent(new CustomEvent('workspace:characters-changed', { detail: { projectId } }))
+      return saved.id
+    }, { projectId: ids.projectId })
+    const hit = hitLocator(page, '顾言')
+    await hit.waitFor({ timeout: 2_000 })
+    await hit.hover()
+    await card.waitFor({ timeout: 2_000 })
+    assert.match(await card.innerText(), /顾言/)
+    await page.evaluate(async ({ projectId, tempId }) => {
+      await window.workspace.characters.delete(projectId, tempId)
+      window.dispatchEvent(new CustomEvent('workspace:characters-changed', { detail: { projectId } }))
+    }, { projectId: ids.projectId, tempId })
+    await hit.waitFor({ state: 'detached', timeout: 2_000 })
+    await card.waitFor({ state: 'detached', timeout: 2_000 })
+    await page.mouse.move(5, 5)
+  })
+
+  // F14 B+：改名（经别名「阿栀」命中仍在）→ 期望卡片保留并刷新为新名字，不再显示旧名
+  await record('F14 悬停卡：改名卡片所示人物后卡片刷新为新名', async () => {
+    const page = running.page
+    const card = page.getByTestId('character-hover-card')
+    await page.mouse.move(5, 5)
+    await card.waitFor({ state: 'detached', timeout: 2_000 })
+    const rename = (name) => page.evaluate(async ({ projectId, characterId, name }) => {
+      const current = (await window.workspace.characters.list(projectId)).find((item) => item.id === characterId)
+      await window.workspace.characters.save({ id: current.id, projectId, name, aliases: current.aliases, notes: current.notes, fields: current.fields })
+      window.dispatchEvent(new CustomEvent('workspace:characters-changed', { detail: { projectId } }))
+    }, { projectId: ids.projectId, characterId: f14.characterId, name })
+    const hit = hitLocator(page, '阿栀')
+    const hitHandle = await hit.elementHandle()
+    const hitBox = await hit.boundingBox()
+    await hit.hover()
+    await card.waitFor({ timeout: 2_000 })
+    assert.match(await card.innerText(), /林栀/)
+    try {
+      await rename('林雪')
+      await hitLocator(page, '林栀').waitFor({ state: 'detached', timeout: 2_000 })
+      await page.waitForFunction(() => { const el = document.querySelector('[data-testid="character-hover-card"]'); return Boolean(el && el.textContent.includes('林雪') && !el.textContent.includes('林栀')) }, undefined, { timeout: 2_000 })
+      assert.match(await card.innerText(), /匹配别名：阿栀/)
+    } finally {
+      await rename('林栀')
+      await hitLocator(page, '林栀').first().waitFor({ timeout: 2_000 })
+      // [F14DIAG2] 只记录不断言：悬停时的 hit 节点是否仍在 DOM、当前鼠标点下的 hit 是否同一节点
+      const diag2 = await page.evaluate(({ old, point }) => {
+        const at = point ? document.elementFromPoint(point.x, point.y) : null
+        const hitNow = at?.closest?.('.character-hit') ?? null
+        return { oldIsConnected: old ? old.isConnected : null, point, hitAtPoint: Boolean(hitNow), sameNode: hitNow ? hitNow === old : null, hitText: hitNow?.textContent ?? null }
+      }, { old: hitHandle, point: hitBox ? { x: hitBox.x + hitBox.width / 2, y: hitBox.y + hitBox.height / 2 } : null }).catch((error) => ({ error: error.message }))
+      process.stdout.write(`[F14DIAG2] ${process.platform} ${JSON.stringify(diag2)}\n`)
+      await page.mouse.move(5, 5)
+      await card.waitFor({ state: 'detached', timeout: 2_000 })
+    }
+  })
+
+  // F14 B+ 红证（cardAt 用 mouseover 时的旧 span 取命中）：悬停「阿栀」，在 300ms 开卡窗口内让装饰重建替换该 span，卡片仍应打开。
+  // 确定性构造：先 IPC 保存改名（林栀→林雪，阿栀仍是别名、命中范围不变；林栀命中消失使段落装饰结构变化，改名用例的 [F14DIAG2] 已证实阿栀 span 会被替换），
+  // 但不广播；由页面内 mouseover 捕获监听在鼠标进入阿栀 span 的同一时刻同步派发 characters-changed，避开 IPC 保存往返。
+  // 前置（mouseover→旧 span isConnected=false 的时间差须落在 (0, 300ms)，300 = EditorSurface onOver 的开卡延时）不满足时报「前置未命中窗口」；满足后才断言卡开，失败报「卡未开」。
+  // 放在改名用例之后、⑩ 之前：需要「林栀」命中仍在（⑩ 之后林栀不再提示），且不遮挡 ⑨～改名这几条 F14 用例。
+  await record('F14 悬停开卡窗口内装饰重建替换命中节点，卡片仍打开', async () => {
+    const page = running.page
+    const card = page.getByTestId('character-hover-card')
+    const OPEN_DELAY_MS = 300
+    await page.mouse.move(5, 5)
+    await card.waitFor({ state: 'detached', timeout: 2_000 })
+    assert.equal(await card.count(), 0, '开始前无残留卡片')
+    const saveName = (name) => page.evaluate(async ({ projectId, characterId, name }) => {
+      const current = (await window.workspace.characters.list(projectId)).find((item) => item.id === characterId)
+      await window.workspace.characters.save({ id: current.id, projectId, name, aliases: current.aliases, notes: current.notes, fields: current.fields })
+    }, { projectId: ids.projectId, characterId: f14.characterId, name })
+    const currentName = () => page.evaluate(async ({ projectId, characterId }) => (await window.workspace.characters.list(projectId)).find((item) => item.id === characterId).name, { projectId: ids.projectId, characterId: f14.characterId })
+    await hitLocator(page, '阿栀').waitFor({ timeout: 2_000 })
+    await hitLocator(page, '林栀').first().waitFor({ timeout: 2_000 })
+    try {
+      await saveName('林雪')
+      assert.equal(await currentName(), '林雪', '改名已保存（尚未广播）')
+      await page.evaluate(({ projectId }) => {
+        const probe = { over: undefined, replaced: undefined }
+        window.__f14Probe = probe
+        const dom = document.querySelector('.manuscript-editor') // editorProps.attributes 的 class 即 ProseMirror 根节点
+        const onOver = (event) => {
+          const span = event.target?.closest?.('.character-hit')
+          if (!span || span.textContent !== '阿栀' || probe.over !== undefined) return
+          probe.over = performance.now()
+          dom.removeEventListener('mouseover', onOver, true)
+          const observer = new MutationObserver(() => { if (!span.isConnected && probe.replaced === undefined) { probe.replaced = performance.now(); observer.disconnect() } })
+          observer.observe(dom, { childList: true, subtree: true })
+          window.dispatchEvent(new CustomEvent('workspace:characters-changed', { detail: { projectId } }))
+        }
+        dom.addEventListener('mouseover', onOver, true)
+      }, { projectId: ids.projectId })
+      await hitLocator(page, '阿栀').hover()
+      await page.waitForFunction(() => window.__f14Probe?.replaced !== undefined, undefined, { timeout: 2_000 })
+        .catch(() => undefined)
+      const probe = await page.evaluate(() => ({ ...window.__f14Probe }))
+      const delta = probe.over !== undefined && probe.replaced !== undefined ? probe.replaced - probe.over : undefined
+      process.stdout.write(`[F14WINDOW] ${process.platform} ${JSON.stringify({ over: probe.over, replaced: probe.replaced, replacedMinusOverMs: delta, openDelayMs: OPEN_DELAY_MS })}\n`)
+      if (!(delta > 0 && delta < OPEN_DELAY_MS)) throw new Error(`前置未命中窗口：mouseover=${probe.over} 旧阿栀 span 断开=${probe.replaced} 差=${delta}ms，要求 (0, ${OPEN_DELAY_MS})ms`)
+      await card.waitFor({ timeout: 2_000 }).catch((error) => { throw new Error(`卡未开：前置已命中窗口（差=${delta.toFixed(1)}ms），2000ms 内卡片未出现：${error.message}`) })
+      assert.equal(await card.getAttribute('aria-label'), '人物卡 · 阿栀')
+    } finally {
+      await page.evaluate(() => { delete window.__f14Probe })
+      await saveName('林栀')
+      await page.evaluate(({ projectId }) => window.dispatchEvent(new CustomEvent('workspace:characters-changed', { detail: { projectId } })), { projectId: ids.projectId })
+      assert.equal(await currentName(), '林栀', 'finally 已恢复原名')
+      await hitLocator(page, '林栀').first().waitFor({ timeout: 2_000 })
+      await page.mouse.move(5, 5)
+      await card.waitFor({ state: 'detached', timeout: 2_000 })
+    }
+  })
+
+  // U03 选区 B+：全选 → 点编辑区（DOM 选区折叠，chip 可能仍在）→ 再 Ctrl+A，应恢复 DOM 选区 / chip /「修改」可用。
+  // 诊断事实（run-41198233326）：1150 宽下该顺序后 DOM 选区空、chip 消失、「修改」disabled；全程无人名装饰节点替换。
+  // 对照：不点编辑区、直接 Ctrl+A 则选区保持正常。本用例只复现，不修产品。
+  await record('U03 点编辑区后再全选', async () => {
+    const page = running.page
+    const viewport = page.viewportSize()
+    try {
+      await openChapter(page, '悬停章')
+      const editor = page.locator('.manuscript-editor')
+      await editor.waitFor()
+      await page.locator('.manuscript-editor', { hasText: '林栀推门进来' }).waitFor()
+      await page.setViewportSize({ width: 1150, height: viewport?.height ?? 860 })
+      const diag = () => page.evaluate(() => {
+        const sel = window.getSelection()
+        return {
+          domLen: sel?.toString().length ?? 0,
+          collapsed: sel?.isCollapsed ?? null,
+          chip: document.querySelector('.selection-chip')?.textContent ?? null,
+          active: document.activeElement?.className ?? document.activeElement?.tagName ?? null
+        }
+      })
+
+      // 首次全选：确认 chip 与 DOM 选区正常（对照路径的前置）
+      await editor.click()
+      await editor.press('Control+A')
+      await page.locator('.assistant-panel .selection-chip').waitFor({ timeout: 3_000 })
+      const afterFirst = await diag()
+      process.stdout.write(`e2e U03 click-then-select-all ${process.platform} after first Ctrl+A: ${JSON.stringify(afterFirst)}\n`)
+      assert.ok(afterFirst.domLen > 0, `首次全选后 DOM 选区应非空：${JSON.stringify(afterFirst)}`)
+      assert.match(afterFirst.chip ?? '', /已选择 \d+ 字/, `首次全选后应出现选区 chip：${JSON.stringify(afterFirst)}`)
+
+      // 点击编辑区：DOM 选区折叠（chip 可能仍显示——诊断事实如此）
+      await editor.click()
+      const afterClick = await diag()
+      process.stdout.write(`e2e U03 click-then-select-all ${process.platform} after editor.click: ${JSON.stringify(afterClick)}\n`)
+
+      // 再全选：期望恢复 DOM 选区、chip、「修改」可用（未修产品时应红）
+      await editor.press('Control+A')
+      const afterSecond = await diag()
+      const modifyEnabled = await page.getByRole('button', { name: '修改', exact: true }).isEnabled()
+      process.stdout.write(`e2e U03 click-then-select-all ${process.platform} after second Ctrl+A: ${JSON.stringify({ ...afterSecond, modifyEnabled })}\n`)
+      assert.ok(afterSecond.domLen > 0, `点编辑区后再全选：DOM 选区应非空：${JSON.stringify(afterSecond)}`)
+      assert.match(afterSecond.chip ?? '', /已选择 \d+ 字/, `点编辑区后再全选：chip 应仍在：${JSON.stringify(afterSecond)}`)
+      assert.equal(modifyEnabled, true, `点编辑区后再全选：「修改」应可用：${JSON.stringify({ ...afterSecond, modifyEnabled })}`)
+    } finally {
+      if (viewport) await page.setViewportSize(viewport)
+      else await page.setViewportSize({ width: 1400, height: 860 })
+      await page.locator('.assistant-panel').waitFor().catch(() => undefined)
+      await openChapter(page, '悬停章').catch(() => undefined)
+    }
+  })
+
+  // U03 前置变体：复刻诊断轮 d8bf523 (b)：1093 宽先跑一轮（全选 → 点编辑区 → 查找 → Escape），再切 1150 走 Ctrl+A → 点编辑区 → Ctrl+A。不勾「正则」。
+  await record('U03 前置变体：1093 查找 Escape 后切 1150，点编辑区后再全选', async () => {
+    const page = running.page
+    const viewport = page.viewportSize()
+    const height = viewport?.height ?? 860
+    try {
+      await openChapter(page, '悬停章')
+      const editor = page.locator('.manuscript-editor')
+      await page.locator('.manuscript-editor', { hasText: '林栀推门进来' }).waitFor()
+      const diag = () => page.evaluate(() => {
+        const sel = window.getSelection()
+        return { domLen: sel?.toString().length ?? 0, collapsed: sel?.isCollapsed ?? null, chip: document.querySelector('.selection-chip')?.textContent ?? null,
+          active: document.activeElement?.className ?? document.activeElement?.tagName ?? null }
+      })
+      const log = async (label) => { const d = await diag(); process.stdout.write(`e2e U03 variant ${process.platform} ${label}: ${JSON.stringify(d)}\n`); return d }
+
+      // 1093 轮
+      await page.setViewportSize({ width: 1093, height })
+      await editor.click()
+      await page.keyboard.press('Control+A')
+      await page.locator('.assistant-panel .selection-chip').waitFor({ timeout: 3_000 })
+      await log('1093 after Ctrl+A')
+      await editor.click()
+      await page.keyboard.press('Control+Home')
+      await page.keyboard.press('Control+f')
+      await page.getByLabel('查找', { exact: true }).fill('林栀')
+      await page.getByTestId('find-count').filter({ hasText: '共' }).waitFor({ timeout: 2_000 })
+      await page.getByLabel('查找', { exact: true }).press('Escape')
+      await page.getByTestId('find-panel').waitFor({ state: 'detached', timeout: 2_000 })
+      await log('1093 after find Escape')
+
+      // 1150 轮
+      await page.setViewportSize({ width: 1150, height })
+      await editor.press('Control+A')
+      const afterFirst = await log('1150 after first Ctrl+A')
+      assert.ok(afterFirst.domLen > 0, `前置变体 1150 首次全选后 DOM 选区应非空：${JSON.stringify(afterFirst)}`)
+      await editor.click()
+      await log('1150 after editor.click')
+      await editor.press('Control+A')
+      const afterSecond = await diag()
+      const modifyEnabled = await page.getByRole('button', { name: '修改', exact: true }).isEnabled()
+      process.stdout.write(`e2e U03 variant ${process.platform} 1150 after second Ctrl+A: ${JSON.stringify({ ...afterSecond, modifyEnabled })}\n`)
+      assert.ok(afterSecond.domLen > 0, `前置变体：点编辑区后再全选，DOM 选区应非空：${JSON.stringify(afterSecond)}`)
+      assert.match(afterSecond.chip ?? '', /已选择 \d+ 字/, `前置变体：点编辑区后再全选，chip 应仍在：${JSON.stringify(afterSecond)}`)
+      assert.equal(modifyEnabled, true, `前置变体：点编辑区后再全选，「修改」应可用：${JSON.stringify({ ...afterSecond, modifyEnabled })}`)
+    } finally {
+      if (viewport) await page.setViewportSize(viewport)
+      else await page.setViewportSize({ width: 1400, height: 860 })
+      await page.locator('.assistant-panel').waitFor().catch(() => undefined)
+      await openChapter(page, '悬停章').catch(() => undefined)
+    }
+  })
+
+  // U03 兜底：Mod-a 由编辑器 priority 1000 扩展接管；焦点在查找框时 Ctrl+A 只选输入框文字，不选正文、不出 chip。
+  // 选择器沿用：查找框 getByLabel('查找')（:991、:1769），find-panel testid（:994），chip（:986）。
+  await record('U03 兜底：查找框内 Ctrl+A 只选输入框文字、正文不被选中', async () => {
+    const page = running.page
+    const editor = page.locator('.manuscript-editor')
+    await openChapter(page, '悬停章')
+    await page.locator('.manuscript-editor', { hasText: '林栀推门进来' }).waitFor()
+    // 开头不留全选：光标折叠到正文开头
+    await editor.click()
+    await page.keyboard.press('Control+Home')
+    await page.locator('.assistant-panel .selection-chip').waitFor({ state: 'detached', timeout: 2_000 })
+    await page.keyboard.press('Control+f')
+    const input = page.getByLabel('查找', { exact: true })
+    await input.fill('林栀推门')
+    await page.getByTestId('find-count').filter({ hasText: '共' }).waitFor({ timeout: 2_000 })
+    await input.press('Control+A')
+    const state = await input.evaluate((el) => {
+      const sel = window.getSelection()
+      const editorEl = document.querySelector('.manuscript-editor')
+      const inEditor = !!sel?.anchorNode && !!editorEl?.contains(sel.anchorNode)
+      return { value: el.value, start: el.selectionStart, end: el.selectionEnd, focused: document.activeElement === el,
+        domInEditor: inEditor, domLen: inEditor ? sel.toString().length : 0, chip: document.querySelector('.assistant-panel .selection-chip')?.textContent ?? null }
+    })
+    process.stdout.write(`e2e U03 find-input Ctrl+A ${process.platform}: ${JSON.stringify(state)}\n`)
+    assert.equal(state.start, 0, `查找框 Ctrl+A：selectionStart 应为 0：${JSON.stringify(state)}`)
+    assert.equal(state.end, state.value.length, `查找框 Ctrl+A：selectionEnd 应覆盖全部文字：${JSON.stringify(state)}`)
+    assert.ok(!state.domInEditor || state.domLen === 0, `查找框 Ctrl+A：正文 DOM 选区不应在编辑器内或应为空：${JSON.stringify(state)}`)
+    assert.equal(state.chip, null, `查找框 Ctrl+A：不应出现选区 chip：${JSON.stringify(state)}`)
+    await input.press('Escape')
+    await page.getByTestId('find-panel').waitFor({ state: 'detached', timeout: 2_000 })
+    // 结尾不留全选
+    await editor.click()
+    await page.keyboard.press('Control+Home')
+  })
+
   await record('F14 ⑩ 「此别名不提示」后下划线消失，重启后仍不提示', async () => {
     let page = running.page
-    await hitLocator(page, '林栀').first().hover()
     const card = page.getByTestId('character-hover-card')
-    await card.waitFor()
+    assert.equal(await card.count(), 0, '悬停前无残留卡片')
+    await hitLocator(page, '林栀').first().hover()
+    await page.waitForFunction(() => document.querySelector('[data-testid="character-hover-card"]')?.getAttribute('aria-label') === '人物卡 · 林栀', undefined, { timeout: 2_000 })
     await card.getByRole('button', { name: '此别名不提示' }).click()
     await card.waitFor({ state: 'detached' })
     await page.waitForFunction(() => document.querySelectorAll('.manuscript-editor .character-hit').length === 1)
@@ -2321,14 +2662,31 @@ try {
       t = performance.now(); await window.workspace.documents.get(projectId, ch500.id); const switchMs = performance.now() - t
       const during = await d.walCheckpoint()
       const started = performance.now(); let after = during
-      while ((after.busy || after.autoCheckpoint === 0) && performance.now() - started < 60_000) { await new Promise((resolve) => setTimeout(resolve, 20)); after = await d.walCheckpoint() }
-      return { busyBefore: before.busy, busyAfterProbe: during.busy, walMB: +(before.walBytes / 1048576).toFixed(1), autoCheckpointDuring: before.autoCheckpoint, ipcMs: Math.round(ipcMs), saveMs: Math.round(saveMs), switchMs: Math.round(switchMs), checkpoint: after.last, autoCheckpointAfter: after.autoCheckpoint, waitedMs: Math.round(performance.now() - started), release: after.releases?.[after.releases.length - 1] ?? null }
+      // 释放完成的同步点：出现本次批量之后的新释放记录（releases[].at 晚于探测开始时的最后一条）且后台检查点空闲；
+      // P3 ④ 下释放后 wal_autocheckpoint 可能仍为 0（等 WAL 回文件头），不再以「autocheckpoint 变非 0」作同步点
+      const lastAt = (diag) => diag.releases?.[diag.releases.length - 1]?.at ?? 0
+      const beforeAt = lastAt(before)
+      while ((after.busy || lastAt(after) <= beforeAt) && performance.now() - started < 60_000) { await new Promise((resolve) => setTimeout(resolve, 20)); after = await d.walCheckpoint() }
+      const release = after.releases?.[after.releases.length - 1] ?? null
+      // 释放后一次小保存（第2章）：等待态下这次写从 WAL 文件头写起并恢复 autocheckpoint；记录这次 COMMIT 的诊断
+      const cur2 = await window.workspace.documents.get(projectId, ch2.id)
+      const text2 = `${cur2.plainText}·${label}释放后保存`
+      await window.workspace.documents.save({ projectId, documentId: ch2.id, editorJson: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: text2 }] }] }, plainText: text2, expectedRevision: cur2.revision })
+      const afterSave = await d.walCheckpoint()
+      const restoreCommit = afterSave.commits?.[afterSave.commits.length - 1] ?? null
+      const releaseAfterSave = afterSave.releases?.[afterSave.releases.length - 1] ?? null
+      return { busyBefore: before.busy, busyAfterProbe: during.busy, walMB: +(before.walBytes / 1048576).toFixed(1), autoCheckpointDuring: before.autoCheckpoint, ipcMs: Math.round(ipcMs), saveMs: Math.round(saveMs), switchMs: Math.round(switchMs), checkpoint: after.last, autoCheckpointAtRelease: after.autoCheckpoint, autoCheckpointAfter: afterSave.autoCheckpoint, waitedMs: Math.round(performance.now() - started), release, releaseAfterSave, restoreCommit }
     }, { projectId: book.id, label })
     const assertProbe = (label, probe) => {
       process.stdout.write(`P3 book-${label} background checkpoint: ${JSON.stringify(probe)}\n`)
       for (const [name, ms] of [['IPC 往返', probe.ipcMs], ['普通保存', probe.saveMs], ['切章读取', probe.switchMs]]) assert.ok(ms <= 300, `${label} 后台检查点期间 ${name} ${ms}ms 应 ≤300ms；${JSON.stringify(probe)}`)
       assert.equal(probe.checkpoint?.ok, true, `${label} 后台检查点应成功：${JSON.stringify(probe)}`)
-      assert.ok(probe.autoCheckpointAfter > 0, '检查点结束后自动检查点恢复原值')
+      assert.ok(probe.release && probe.release.at > 0, `${label} 应出现本次批量的释放记录：${JSON.stringify(probe)}`)
+      assert.ok(probe.autoCheckpointAfter > 0, '检查点结束后自动检查点恢复原值（释放后一次小保存之后）')
+      // P3 ④ 新增：释放后那次小保存 COMMIT 内 nBackfill 不变（无同步回写）；兜底未触发
+      const rc = probe.restoreCommit
+      assert.ok(rc && rc.nBackfillAfter !== undefined && (rc.walRestarted ? rc.nBackfillAfter === 0 : rc.nBackfillAfter === rc.nBackfillBefore), `${label} 释放后小保存 COMMIT 内不应同步回写（nBackfill 不变；restart 时清 0）：${JSON.stringify(rc)}`)
+      assert.ok(!String(probe.releaseAfterSave?.autoCheckpointRestore ?? '').startsWith('fallback'), `${label} 等待态兜底不应触发：${JSON.stringify(probe.releaseAfterSave)}`)
     }
     assertProbe('replace', await probeCheckpoint('替换'))
     const ch1 = await chapterText('第1章'); let ch2 = await chapterText('第2章'); const ch997 = await chapterText('第997章')
@@ -2427,24 +2785,86 @@ try {
       await page.waitForTimeout(1000)
     }
     // 口径同诊断：keydown.timeStamp → 下一个 rAF；预热 20 键后每 60ms 一键共 120 键
-    const keystrokes = async () => {
+    // [KEYDIAG-R] 只记不断言：焦点 / 可见性 / BrowserWindow 状态（e2e 主进程侧 electronApp.evaluate 读取，不改 src），以及 rAF 间隔分布
+    const rafStats = (ts) => {
+      const gaps = ts.slice(1).map((t, i) => t - ts[i]).toSorted((a, b) => a - b)
+      const q = (p) => gaps.length ? +gaps[Math.min(gaps.length - 1, Math.ceil(gaps.length * p) - 1)].toFixed(1) : null
+      return { n: gaps.length, p50: q(0.5), p95: q(0.95), max: gaps.length ? +gaps.at(-1).toFixed(1) : null }
+    }
+    // [KEYDIAG-R] 整段诊断包 try/catch：出错只记日志，永不影响用例结果。
+    // Linux 下 running.app 不是 ElectronApplication（见 stopApp 的 running.app.kill 分支），无 .evaluate 时窗口项记 NOT_AVAILABLE。
+    const keyDiagR = async (stage, sampleRaf = true) => {
+      try {
+        const r = await page.evaluate((sampleRaf) => new Promise((resolve) => {
+          const info = { hasFocus: document.hasFocus(), visibility: document.visibilityState }
+          if (!sampleRaf) { resolve({ ...info, ts: [] }); return }
+          // 仅按键段外（段前/段后）采样 rAF 间隔 1s
+          const ts = []; const end = performance.now() + 1000
+          const loop = (t) => { ts.push(t); if (t < end) requestAnimationFrame(loop); else resolve({ ...info, ts }) }
+          requestAnimationFrame(loop)
+        }), sampleRaf)
+        let win = 'NOT_AVAILABLE'
+        if (typeof running.app?.evaluate === 'function') {
+          try { win = await running.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map((w) => ({ focused: w.isFocused(), minimized: w.isMinimized(), visible: w.isVisible() }))) } catch (error) { win = { error: String(error) } }
+        }
+        process.stdout.write(`[KEYDIAG-R] ${JSON.stringify({ stage, hasFocus: r.hasFocus, visibility: r.visibility, windows: win, rafOutside: rafStats(r.ts) })}\n`)
+      } catch (error) {
+        process.stdout.write(`[KEYDIAG-R] ${JSON.stringify({ stage, diagError: String(error) })}\n`)
+      }
+    }
+    const keystrokes = async (label = 'keys') => {
       await page.locator('.manuscript-editor p').first().click(); await page.keyboard.press('End')
-      await page.evaluate(() => { if (window.__treeKeys) return; window.__treeKeys = []; window.addEventListener('keydown', (event) => { const start = event.timeStamp; requestAnimationFrame(() => window.__treeKeys.push(performance.now() - start)) }, true) })
+      await page.evaluate(() => { if (window.__treeKeys) return; window.__treeKeys = []; window.addEventListener('keydown', (event) => { const start = event.timeStamp; requestAnimationFrame((t) => { window.__treeKeys.push(performance.now() - start); if (window.__treeKeyRafTs) window.__treeKeyRafTs.push(t) }) }, true) })
       for (let i = 0; i < 20; i += 1) { await page.keyboard.press('a'); await page.waitForTimeout(60) }
       await page.waitForTimeout(1000)
-      await page.evaluate(() => { window.__treeKeys = [] })
+      // [KEYDIAG-R] 段内不挂独立 rAF 循环；只复用测量本身的 keydown→rAF 回调时间戳（window.__treeKeyRafTs），事后推间隔
+      await page.evaluate(() => { window.__treeKeys = []; window.__treeKeyRafTs = [] })
       for (let i = 0; i < 120; i += 1) { await page.keyboard.press('a'); await page.waitForTimeout(60) }
       await page.waitForTimeout(800)
       const s = await page.evaluate(() => window.__treeKeys.toSorted((a, b) => a - b))
+      try {
+        const rafTs = await page.evaluate(() => { const ts = window.__treeKeyRafTs || []; window.__treeKeyRafTs = null; return ts })
+        // 回调约每 60ms 一次（每键一个），间隔 ≈ 按键间隔 + 帧对齐抖动，非逐帧间隔
+        process.stdout.write(`[KEYDIAG-R] ${JSON.stringify({ stage: `${label}-during`, keyRafCallbackGaps: rafStats(rafTs) })}\n`)
+      } catch (error) { process.stdout.write(`[KEYDIAG-R] ${JSON.stringify({ stage: `${label}-during`, diagError: String(error) })}\n`) }
       assert.ok(s.length >= 118, `采样 ${s.length} 应接近 120`)
       const q = (p) => s[Math.min(s.length - 1, Math.ceil(s.length * p) - 1)]
       return { p50: q(0.5), p95: q(0.95), max: s.at(-1), n: s.length }
     }
+    // [KEYDIAG] 各阶段记录后台检查点状态（busy / WAL 文件字节 / 最近一次 PASSIVE 结果），便于 grep 对照
+    const keyDiag = async (stage) => {
+      const d = await page.evaluate(() => window.workspace.diagnostics.walCheckpoint())
+      const info = { stage, busy: d.busy, walBytes: d.walBytes, runs: d.runs, autoCheckpoint: d.autoCheckpoint, last: d.last && { ok: d.last.ok, ms: d.last.ms, log: d.last.log, checkpointed: d.last.checkpointed } }
+      process.stdout.write(`[KEYDIAG] ${JSON.stringify(info)}\n`)
+      return d
+    }
+    // 测按键前确定性等后台安静：worker 空闲（busy=false）且 WAL 文件连续 1s 不再增长；最近一次 PASSIVE 的 log/checkpointed 只记录不作门槛
+    // （待回写 ≤1MB 时不会再触发 PASSIVE，last 可能长期停在未完成，作门槛会假超时）。WAL 文件本身不缩（未设 journal_size_limit，见 wal-checkpointer.ts 头注释），所以「回落」按待回写量判断。
+    // 上限 60s（沿用本文件 book-replace 等检查点结束的 60_000 上限）；超时直接失败并带上 busy/walBytes。
+    const waitQuiet = async (label) => {
+      const started = Date.now(); let stableSince = Date.now(); let prev = -1; let d
+      for (;;) {
+        d = await page.evaluate(() => window.workspace.diagnostics.walCheckpoint())
+        if (d.walBytes !== prev) { prev = d.walBytes; stableSince = Date.now() }
+        if (!d.busy && Date.now() - stableSince >= 1000) break
+        if (Date.now() - started > 60_000) assert.fail(`${label} 等后台安静超时 60s：busy=${d.busy} walBytes=${d.walBytes} last=${JSON.stringify(d.last)}`)
+        await new Promise((resolve) => setTimeout(resolve, 100))
+      }
+      const waitMs = Date.now() - started
+      process.stdout.write(`[KEYDIAG] quiet ${label}: waited ${waitMs}ms busy=${d.busy} walBytes=${d.walBytes} lastOk=${d.last?.ok ?? null} log=${d.last?.log ?? null} checkpointed=${d.last?.checkpointed ?? null}\n`)
+      return waitMs
+    }
+    await keyDiag('start')
     const smallId = await seedBook('按键对照三章', 3)
     await openBook('按键对照三章', '第2章')
+    await waitQuiet('small')
+    await keyDiag('small-before-keys')
     const small = await keystrokes()
+    await keyDiag('small-after-keys')
     const bigId = await seedBook('按键千章', 1000)
+    await keyDiag('big-after-seed')
     await openBook('按键千章', '第500章')
+    await keyDiag('big-after-open')
     // ① 高度：size 容器不塌成 0，且约等于侧栏扣掉书名和分区导航后的可用高度
     const geo = await page.evaluate(() => {
       const tree = document.querySelector('.manuscript-tree'); const sidebar = document.querySelector('.project-sidebar')
@@ -2486,8 +2906,38 @@ try {
     assert.ok(narrow.titleInRow, '窄屏章名不溢出到行外')
     await page.setViewportSize(baseline)
     await page.waitForTimeout(300)
-    const big = await keystrokes()
+    await keyDiag('big-before-quiet')
+    await waitQuiet('big')
+    await keyDiag('big-before-keys')
+    await keyDiagR('big-before-keys')
+    const big = await keystrokes('big')
+    await keyDiagR('big-after-keys')
+    await keyDiag('big-after-keys')
     process.stdout.write(`P3 1000-chapter keystroke key→rAF: p50 ${big.p50.toFixed(1)}ms p95 ${big.p95.toFixed(1)}ms max ${big.max.toFixed(1)}ms (n=${big.n}; limits p50 ≤16, p95 ≤50, max record only); 3-chapter p50 ${small.p50.toFixed(1)} p95 ${small.p95.toFixed(1)} max ${small.max.toFixed(1)}\n`)
+    // 只记数、不断言：全书替换（IPC replaceBatch，除当前第 500 章外 999 章）返回后不等安静，马上打字
+    const replaced = await page.evaluate(async (projectId) => {
+      const tree = await window.workspace.documents.tree(projectId)
+      const items = []
+      for (const node of tree.filter((item) => item.type === 'chapter' && item.title !== '第500章')) {
+        const doc = await window.workspace.documents.get(projectId, node.id)
+        // 只放真实命中数 > 0 的章：projects.create 自带一个空的「第一章」（project-service.ts:65），它没有命中；
+        // bookReplaceSchema 要求 hits 为正整数（schemas.ts:31 positive()）
+        const hits = (doc.plainText.match(/旧信/g) ?? []).length
+        if (hits === 0) continue
+        const text = doc.plainText.replaceAll('旧信', '新信')
+        items.push({ documentId: node.id, expectedRevision: doc.revision, editorJson: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text }] }] }, plainText: text, hits })
+      }
+      const t = performance.now()
+      await window.workspace.documents.replaceBatch({ projectId, items, query: '旧信', replacement: '新信', regex: false, caseSensitive: false })
+      return { chapters: items.length, ms: Math.round(performance.now() - t) }
+    }, bigId)
+    process.stdout.write(`[KEYDIAG] immediate replaceBatch: ${JSON.stringify(replaced)}\n`)
+    await keyDiag('immediate-before-keys')
+    await keyDiagR('immediate-before-keys', false) // 立即打字段不插 1s rAF 采样，避免改变「不等」语义
+    const immediate = await keystrokes('immediate')
+    await keyDiagR('immediate-after-keys')
+    await keyDiag('immediate-after-keys')
+    process.stdout.write(`[KEYDIAG] P3 1000-chapter keystroke right after replace (record only, no wait): p50 ${immediate.p50.toFixed(1)}ms p95 ${immediate.p95.toFixed(1)}ms max ${immediate.max.toFixed(1)}ms (n=${immediate.n})\n`)
     assert.ok(big.p50 <= 16, `千章书按键 p50 ${big.p50.toFixed(1)}ms 应 ≤16ms`)
     assert.ok(big.p95 <= 50, `千章书按键 p95 ${big.p95.toFixed(1)}ms 应 ≤50ms`)
     assert.ok(big.p50 <= small.p50 * 3 + 10, `千章书 p50 ${big.p50.toFixed(1)}ms 应 ≤ 小书 p50 ${small.p50.toFixed(1)}×3+10`)

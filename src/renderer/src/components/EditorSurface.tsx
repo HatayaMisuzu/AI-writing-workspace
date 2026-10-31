@@ -18,6 +18,7 @@ import { docEdgeNavigationPlugin, revealDocEdge } from '../services/doc-edge-nav
 import { revealPos } from '../services/find-highlight'
 import { isStaleContent } from '../services/content-adoption'
 import { createFrameCoalescer } from '../services/frame-coalescer'
+import { syncSelectionToDom } from '../services/select-all-dom-sync'
 import { NameMatcher, termsFromCharacters } from '../../../shared/name-matcher'
 import { CHARACTERS_CHANGED_EVENT, HOVER_DEGRADE_NOTICE, characterHoverPlugin, hitAt, ignoreHoverAt, isHoverDegraded, setHoverMatcher, type DecoratedHit } from '../services/character-hover'
 import { CharacterHoverCard } from './CharacterHoverCard'
@@ -124,10 +125,16 @@ export function EditorSurface({ node, content, focusMode, onFocusMode, onSaved, 
   const [hoverPrefs, setHoverPrefs] = useState<CharacterHoverPrefs>()
   const [hoverCard, setHoverCard] = useState<{ hit: Pick<DecoratedHit, 'term' | 'characterIds' | 'pmFrom' | 'pmTo'>; position: { left: number; top: number } }>()
   const [hoverDegraded, setHoverDegraded] = useState(false)
+  const openTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const shortcutRef = useRef<(() => void) | undefined>(undefined)
   const chunkExtension = useMemo(() => Extension.create({ name: 'longParagraphChunks', addProseMirrorPlugins: () => [longParagraphChunksPlugin()] }), [])
   const docEdgeExtension = useMemo(() => Extension.create({ name: 'docEdgeNavigation',
     addProseMirrorPlugins: () => [docEdgeNavigationPlugin({ reveal: (_view, _pos, edge) => { void revealDocEdge(writingPageRef.current?.parentElement, edge) } })] }), [])
+  // U03：全选后不管 PM 是否认为选区「没变」，都把当前非空 PM 选区写回 DOM（见 select-all-dom-sync.ts）
+  const selectAllExtension = useMemo(() => Extension.create({ name: 'selectAllDomSync', priority: 1000,
+    addKeyboardShortcuts() {
+      return { 'Mod-a': () => { const handled = this.editor.commands.selectAll(); syncSelectionToDom(this.editor.view); return handled } }
+    } }), [])
   const hoverExtension = useMemo(() => Extension.create({ name: 'characterHover',
     addProseMirrorPlugins: () => [characterHoverPlugin({ onShortcut: () => shortcutRef.current?.() })] }), [])
   useEffect(() => {
@@ -143,7 +150,7 @@ export function EditorSurface({ node, content, focusMode, onFocusMode, onSaved, 
     { ignoredTerms: hoverPrefs.ignoredTerms, enabledSingleTerms: hoverPrefs.enabledSingleTerms }) : null, [characters, hoverPrefs])
 
   const editor = useEditor({
-    extensions: [StarterKit, CharacterCount, Placeholder.configure({ placeholder: '从这里开始写……' }), hoverExtension, chunkExtension, docEdgeExtension],
+    extensions: [StarterKit, CharacterCount, Placeholder.configure({ placeholder: '从这里开始写……' }), hoverExtension, chunkExtension, docEdgeExtension, selectAllExtension],
     content: content.editorJson,
     editorProps: { attributes: { class: 'manuscript-editor', spellcheck: 'false' } },
     onUpdate: ({ editor: activeEditor }) => {
@@ -344,7 +351,14 @@ export function EditorSurface({ node, content, focusMode, onFocusMode, onSaved, 
   useEffect(() => {
     if (!editor || editor.isDestroyed) return
     setHoverMatcher(editor.view, hoverMatcher)
-    setHoverCard(undefined)
+    // F14 B+：匹配器更换（人物/偏好变化）不再无条件关卡。按新装饰在原位置重取命中：
+    // 同一 term 仍命中 → 用新命中刷新（人物 ids 以新数据为准，卡片内容由当前 characters 渲染）；否则关闭。
+    setHoverCard((previous) => {
+      if (!previous) return previous
+      const next = hitAt(editor.state, previous.hit.pmFrom)
+      if (!next || next.term !== previous.hit.term || next.pmFrom !== previous.hit.pmFrom) return undefined
+      return { hit: next, position: previous.position }
+    })
     setHoverDegraded(isHoverDegraded(editor.state))
     const onTransaction = (): void => setHoverDegraded(isHoverDegraded(editor.state))
     editor.on('transaction', onTransaction)
@@ -354,7 +368,6 @@ export function EditorSurface({ node, content, focusMode, onFocusMode, onSaved, 
   useEffect(() => {
     if (!editor) return
     const dom = editor.view.dom as HTMLElement
-    let openTimer: ReturnType<typeof setTimeout> | undefined
     const cardAt = (target: HTMLElement): void => {
       const hit = hitAt(editor.state, editor.view.posAtDOM(target, 0))
       if (!hit) return
@@ -364,13 +377,13 @@ export function EditorSurface({ node, content, focusMode, onFocusMode, onSaved, 
     const onOver = (event: MouseEvent): void => {
       const target = (event.target as HTMLElement).closest<HTMLElement>('.character-hit')
       if (!target) return
-      if (openTimer) clearTimeout(openTimer)
-      openTimer = setTimeout(() => cardAt(target), 300)
+      if (openTimerRef.current) clearTimeout(openTimerRef.current)
+      openTimerRef.current = setTimeout(() => cardAt(target), 300)
     }
     const onOut = (event: MouseEvent): void => {
       const target = (event.target as HTMLElement).closest('.character-hit')
       if (!target || target.contains(event.relatedTarget as Node | null)) return
-      if (openTimer) { clearTimeout(openTimer); openTimer = undefined }
+      if (openTimerRef.current) { clearTimeout(openTimerRef.current); openTimerRef.current = undefined }
       if (!(event.relatedTarget as HTMLElement | null)?.closest?.('.character-hover-card')) setHoverCard(undefined)
     }
     dom.addEventListener('mouseover', onOver)
@@ -381,8 +394,25 @@ export function EditorSurface({ node, content, focusMode, onFocusMode, onSaved, 
       const coords = editor.view.coordsAtPos(hit.pmFrom)
       setHoverCard({ hit, position: { left: coords.left, top: coords.bottom + 6 } })
     }
-    return () => { if (openTimer) clearTimeout(openTimer); dom.removeEventListener('mouseover', onOver); dom.removeEventListener('mouseout', onOut); shortcutRef.current = undefined }
+    return () => { if (openTimerRef.current) { clearTimeout(openTimerRef.current); openTimerRef.current = undefined }; dom.removeEventListener('mouseover', onOver); dom.removeEventListener('mouseout', onOut); shortcutRef.current = undefined }
   }, [editor])
+
+  // F14 B+：卡片开着时的离开检测。人物/偏好变化会重建装饰，替换鼠标下的 .character-hit span；
+  // 被替换的旧节点已脱离 DOM，之后鼠标移开时 mouseout 冒泡不到 editor dom，上面的 onOut 收不到，卡片就关不掉。
+  // 所以卡片打开期间在 document 上看 pointermove：目标既不在命中也不在卡片里就关卡（判定与 onOut 一致：
+  // 落在卡片上保留）。卡片关闭或组件卸载时 cleanup 卸掉监听。
+  const hoverCardOpen = hoverCard !== undefined
+  useEffect(() => {
+    if (!hoverCardOpen) return
+    const onMove = (event: PointerEvent): void => {
+      const target = event.target as HTMLElement | null
+      if (target?.closest?.('.character-hit') || target?.closest?.('.character-hover-card')) return
+      if (openTimerRef.current) { clearTimeout(openTimerRef.current); openTimerRef.current = undefined }
+      setHoverCard(undefined)
+    }
+    document.addEventListener('pointermove', onMove, true)
+    return () => document.removeEventListener('pointermove', onMove, true)
+  }, [hoverCardOpen])
 
   useEffect(() => {
     if (!hoverCard) return
