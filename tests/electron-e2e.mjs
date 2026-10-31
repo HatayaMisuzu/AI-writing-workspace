@@ -2156,14 +2156,31 @@ try {
       t = performance.now(); await window.workspace.documents.get(projectId, ch500.id); const switchMs = performance.now() - t
       const during = await d.walCheckpoint()
       const started = performance.now(); let after = during
-      while ((after.busy || after.autoCheckpoint === 0) && performance.now() - started < 60_000) { await new Promise((resolve) => setTimeout(resolve, 20)); after = await d.walCheckpoint() }
-      return { busyBefore: before.busy, busyAfterProbe: during.busy, walMB: +(before.walBytes / 1048576).toFixed(1), autoCheckpointDuring: before.autoCheckpoint, ipcMs: Math.round(ipcMs), saveMs: Math.round(saveMs), switchMs: Math.round(switchMs), checkpoint: after.last, autoCheckpointAfter: after.autoCheckpoint, waitedMs: Math.round(performance.now() - started), release: after.releases?.[after.releases.length - 1] ?? null }
+      // 释放完成的同步点：出现本次批量之后的新释放记录（releases[].at 晚于探测开始时的最后一条）且后台检查点空闲；
+      // P3 ④ 下释放后 wal_autocheckpoint 可能仍为 0（等 WAL 回文件头），不再以「autocheckpoint 变非 0」作同步点
+      const lastAt = (diag) => diag.releases?.[diag.releases.length - 1]?.at ?? 0
+      const beforeAt = lastAt(before)
+      while ((after.busy || lastAt(after) <= beforeAt) && performance.now() - started < 60_000) { await new Promise((resolve) => setTimeout(resolve, 20)); after = await d.walCheckpoint() }
+      const release = after.releases?.[after.releases.length - 1] ?? null
+      // 释放后一次小保存（第2章）：等待态下这次写从 WAL 文件头写起并恢复 autocheckpoint；记录这次 COMMIT 的诊断
+      const cur2 = await window.workspace.documents.get(projectId, ch2.id)
+      const text2 = `${cur2.plainText}·${label}释放后保存`
+      await window.workspace.documents.save({ projectId, documentId: ch2.id, editorJson: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: text2 }] }] }, plainText: text2, expectedRevision: cur2.revision })
+      const afterSave = await d.walCheckpoint()
+      const restoreCommit = afterSave.commits?.[afterSave.commits.length - 1] ?? null
+      const releaseAfterSave = afterSave.releases?.[afterSave.releases.length - 1] ?? null
+      return { busyBefore: before.busy, busyAfterProbe: during.busy, walMB: +(before.walBytes / 1048576).toFixed(1), autoCheckpointDuring: before.autoCheckpoint, ipcMs: Math.round(ipcMs), saveMs: Math.round(saveMs), switchMs: Math.round(switchMs), checkpoint: after.last, autoCheckpointAtRelease: after.autoCheckpoint, autoCheckpointAfter: afterSave.autoCheckpoint, waitedMs: Math.round(performance.now() - started), release, releaseAfterSave, restoreCommit }
     }, { projectId: book.id, label })
     const assertProbe = (label, probe) => {
       process.stdout.write(`P3 book-${label} background checkpoint: ${JSON.stringify(probe)}\n`)
       for (const [name, ms] of [['IPC 往返', probe.ipcMs], ['普通保存', probe.saveMs], ['切章读取', probe.switchMs]]) assert.ok(ms <= 300, `${label} 后台检查点期间 ${name} ${ms}ms 应 ≤300ms；${JSON.stringify(probe)}`)
       assert.equal(probe.checkpoint?.ok, true, `${label} 后台检查点应成功：${JSON.stringify(probe)}`)
-      assert.ok(probe.autoCheckpointAfter > 0, '检查点结束后自动检查点恢复原值')
+      assert.ok(probe.release && probe.release.at > 0, `${label} 应出现本次批量的释放记录：${JSON.stringify(probe)}`)
+      assert.ok(probe.autoCheckpointAfter > 0, '检查点结束后自动检查点恢复原值（释放后一次小保存之后）')
+      // P3 ④ 新增：释放后那次小保存 COMMIT 内 nBackfill 不变（无同步回写）；兜底未触发
+      const rc = probe.restoreCommit
+      assert.ok(rc && rc.nBackfillAfter !== undefined && (rc.walRestarted ? rc.nBackfillAfter === 0 : rc.nBackfillAfter === rc.nBackfillBefore), `${label} 释放后小保存 COMMIT 内不应同步回写（nBackfill 不变；restart 时清 0）：${JSON.stringify(rc)}`)
+      assert.ok(!String(probe.releaseAfterSave?.autoCheckpointRestore ?? '').startsWith('fallback'), `${label} 等待态兜底不应触发：${JSON.stringify(probe.releaseAfterSave)}`)
     }
     assertProbe('replace', await probeCheckpoint('替换'))
     const ch1 = await chapterText('第1章'); let ch2 = await chapterText('第2章'); const ch997 = await chapterText('第997章')

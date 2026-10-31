@@ -117,7 +117,8 @@ describe('P3 后台 PASSIVE 收敛后的第一次保存不在 COMMIT 里同步�
     await s.cp.request(); await s.cp.idle()
     const saveR = smallSave(s)
     log('restore-save', { mxFrameBefore: saveR.mxFrameBefore, mxFrameAfter: saveR.mxFrameAfter, saveR, autoAfter: s.db.autoCheckpoint })
-    expect(saveR.backfilledInCommit, `restore-save nBackfill ${saveR.nBackfillBefore}→${saveR.nBackfillAfter}`).toBe(false)
+    // COMMIT 内 nBackfill 不变（测试侧按原始字段判定，不依赖诊断公式：walRestartLog 会把 nBackfill 清 0（wal.c:2235 walRestartHdr），此时只要求 nBackfillAfter == 0）
+    expect(saveR.walRestarted ? saveR.nBackfillAfter === 0 : saveR.nBackfillAfter === saveR.nBackfillBefore, `restore-save nBackfill ${saveR.nBackfillBefore}→${saveR.nBackfillAfter} mxFrame ${saveR.mxFrameBefore}→${saveR.mxFrameAfter}`).toBe(true)
     expect(s.db.autoCheckpoint).toBe(THRESHOLD)
     const save3 = smallSave(s)
     log('after-release', { release: s.db.releases.at(-1), save3 })
