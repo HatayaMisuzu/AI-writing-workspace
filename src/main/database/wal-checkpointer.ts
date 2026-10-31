@@ -148,7 +148,7 @@ export interface WalCheckpointerOptions {
   /** H-W6：调用方判断此刻能否按量请求（如批量暂停期间、主库已关闭时返回 false） */
   shouldTrigger?: () => boolean
   /**
-   * P3（wal-restart）：PASSIVE 收敛后在主线程调用一次，由调用方在主连接上执行 PRAGMA wal_checkpoint(RESTART)（busy_timeout=0，不等待）。
+   * P3（wal-restart）：PASSIVE 收敛后在主线程调用一次，由调用方在主连接上做一次 RESTART 模式检查点（busy_timeout=0，不等待；worker 本身仍只做 PASSIVE）。
    * 见 tryRestart。
    */
   restartLog?: () => { busy: number; log: number; checkpointed: number }
@@ -355,7 +355,7 @@ export class WalCheckpointer {
    * P3（wal-restart）：worker 的 PASSIVE 收敛（checkpointed == log）后，把 WAL 拉回文件头。
    * - 先读 -shm：mxFrame == 0 → 已在文件头；nBackfill < mxFrame（收敛后主连接又写了帧）→ 不做（RESTART 会在主线程同步回写这些帧），
    *   交给下一轮；读不到 → 不做。
-   * - 否则由调用方在主连接上执行 PRAGMA wal_checkpoint(RESTART)。此时 nBackfill == mxFrame，没有帧要回写（wal.c walCheckpoint 中
+   * - 否则由调用方在主连接上做一次 RESTART 模式检查点（restartLog）。此时 nBackfill == mxFrame，没有帧要回写（wal.c walCheckpoint 中
    *   mxSafeFrame ≤ nBackfill 时不拷页、不 fsync），只尝试 WAL_WRITE_LOCK（wal.c:4459）和 WAL_READ_LOCK(1..N-1) 排他锁（wal.c:2445-2449）。
    *   busy_timeout=0：拿不到锁立即返回 busy=1，不等待。成功 = 当时没有读者占用非 0 read mark，且 nBackfill == mxFrame 后新读者只用
    *   READ_LOCK(0)，所以下一次写的 walRestartLog（wal.c:3976-3997）必然从文件头写起。

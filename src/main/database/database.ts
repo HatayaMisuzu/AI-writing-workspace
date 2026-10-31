@@ -279,9 +279,12 @@ export class AppDatabase {
       // quiet===true 才释放：quiet===undefined（未提供 generation）不得误当作安静释放
       // P3（wal-restart）：还要确认 WAL 已回到文件头（RESTART 成功，restarted !== false）才恢复 autocheckpoint；
       // 否则恢复后第一次保存的 mxFrame 接在旧帧之后、≥ 阈值，COMMIT 里同步做检查点（run 41186632942）。拿不到锁 → 隔 retryDelayMs 再来一轮。
-      const restartBusy = outcome.quiet === true && outcome.restarted === false
-      if (outcome.quiet === true && !restartBusy) { reason = 'quiet'; break }
-      if (restartBusy) restartBusyRounds += 1
+      let restartBusy = false
+      if (outcome.quiet === true) {
+        if (outcome.restarted !== false) { reason = 'quiet'; break }
+        restartBusy = true
+        restartBusyRounds += 1
+      }
       if (rounds >= this.releaseMaxRounds) { reason = 'limit-rounds'; break }
       if (Date.now() - started >= this.releaseMaxMs) { reason = 'limit-ms'; break }
       if (restartBusy) await new Promise((resolve) => setTimeout(resolve, cp.retryDelayMs))
