@@ -20,6 +20,7 @@ import { isStaleContent } from '../services/content-adoption'
 import { createFrameCoalescer } from '../services/frame-coalescer'
 import { syncSelectionToDom } from '../services/select-all-dom-sync'
 import { NameMatcher, termsFromCharacters } from '../../../shared/name-matcher'
+import { isInHoverBridge } from './hover-bridge'
 import { CHARACTERS_CHANGED_EVENT, HOVER_DEGRADE_NOTICE, characterHoverPlugin, hitAt, ignoreHoverAt, isHoverDegraded, setHoverMatcher, type DecoratedHit } from '../services/character-hover'
 import { CharacterHoverCard } from './CharacterHoverCard'
 import { FindReplacePanel, type FindInitial } from './FindReplacePanel'
@@ -126,6 +127,8 @@ export function EditorSurface({ node, content, focusMode, onFocusMode, onSaved, 
   const [hoverCard, setHoverCard] = useState<{ hit: Pick<DecoratedHit, 'term' | 'characterIds' | 'pmFrom' | 'pmTo'>; position: { left: number; top: number } }>()
   const [hoverDegraded, setHoverDegraded] = useState(false)
   const openTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const hoverCardRef = useRef(hoverCard)
+  hoverCardRef.current = hoverCard
   const shortcutRef = useRef<(() => void) | undefined>(undefined)
   const chunkExtension = useMemo(() => Extension.create({ name: 'longParagraphChunks', addProseMirrorPlugins: () => [longParagraphChunksPlugin()] }), [])
   const docEdgeExtension = useMemo(() => Extension.create({ name: 'docEdgeNavigation',
@@ -384,7 +387,9 @@ export function EditorSurface({ node, content, focusMode, onFocusMode, onSaved, 
       const target = (event.target as HTMLElement).closest('.character-hit')
       if (!target || target.contains(event.relatedTarget as Node | null)) return
       if (openTimerRef.current) { clearTimeout(openTimerRef.current); openTimerRef.current = undefined }
-      if (!(event.relatedTarget as HTMLElement | null)?.closest?.('.character-hover-card')) setHoverCard(undefined)
+      if ((event.relatedTarget as HTMLElement | null)?.closest?.('.character-hover-card')) return
+      if (isInHoverBridge(editor.view, hoverCardRef.current?.hit, event.clientX, event.clientY)) return
+      setHoverCard(undefined)
     }
     dom.addEventListener('mouseover', onOver)
     dom.addEventListener('mouseout', onOut)
@@ -407,12 +412,13 @@ export function EditorSurface({ node, content, focusMode, onFocusMode, onSaved, 
     const onMove = (event: PointerEvent): void => {
       const target = event.target as HTMLElement | null
       if (target?.closest?.('.character-hit') || target?.closest?.('.character-hover-card')) return
+      if (editor && !editor.isDestroyed && isInHoverBridge(editor.view, hoverCardRef.current?.hit, event.clientX, event.clientY)) return
       if (openTimerRef.current) { clearTimeout(openTimerRef.current); openTimerRef.current = undefined }
       setHoverCard(undefined)
     }
     document.addEventListener('pointermove', onMove, true)
     return () => document.removeEventListener('pointermove', onMove, true)
-  }, [hoverCardOpen])
+  }, [hoverCardOpen, editor])
 
   useEffect(() => {
     if (!hoverCard) return
