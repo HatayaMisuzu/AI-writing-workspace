@@ -139,8 +139,8 @@ export class AppDatabase {
     let timedOut = false
     // H-W6 方案①：worker 正卡在一次尝试里（未回消息）→ 立即 terminate，不再等 close() 的 2s；
     // 没回写完的部分由下面的 TRUNCATE 重做。terminate 打断不了正在执行的原生 SQLite 调用：若 worker 仍在底层检查点里持 CKPT 锁，
-    // TRUNCATE 立即返回 busy=1（不调 busy handler，主连接 busy_timeout=0），只记录；随后 close 因 worker 连接仍在而不做检查点，
-    // 已提交数据留在 WAL，下次打开由 SQLite 恢复。
+    // TRUNCATE 立即返回 busy=1（不调 busy handler，主连接 busy_timeout=0），只记录；随后 close：仅当 worker 连接尚未释放时才不做检查点（拿不到排他锁）；若最后一个连接是主连接，SQLite 会在 close 里以 PASSIVE 把 WAL 回写（sqlite3WalClose，见 wal.c）。
+    // 前一种情况下已提交数据留在 WAL，下次打开由 SQLite 恢复。
     const terminatedInFlight = Boolean(this.checkpointer?.attemptInFlight)
     if (terminatedInFlight) this.checkpointer?.terminate()
     else {
