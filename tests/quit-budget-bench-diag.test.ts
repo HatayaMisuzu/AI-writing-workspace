@@ -18,7 +18,10 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 const stats = (xs: number[]) => {
   const s = [...xs].sort((a, b) => a - b)
   const q = (f: number): number => Math.round(s[Math.min(s.length - 1, Math.ceil(f * s.length) - 1)] * 100) / 100
-  return { n: s.length, median: q(0.5), p95: q(0const BOUND = 8 * 1024 * 1024
+  return { n: s.length, median: q(0.5), p95: q(0.95), max: q(1) }
+}
+
+const BOUND = 8 * 1024 * 1024
 describe('只靠现有维护：连续输入下待回写量峰值', () => {
   // [场景, 保存次数, 间隔 ms, 每次正文重复次数]；句子 24 字，×200 ≈ 4800 字，×2000 ≈ 4.8 万字
   const cases: Array<[string, number, number, number]> = [
