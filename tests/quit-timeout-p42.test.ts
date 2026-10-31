@@ -184,6 +184,7 @@ describe('P3 PR-53：待回写量口径的边界（进程内）', () => {
     const walBytes = statSync(`${path}-wal`).size
     expect(walBytes).toBeGreaterThan(40 * 1024 * 1024)
     expect(pendingBackfillBytes(path)).toBe(0)
+    console.log(`[fallback] p42 big-wal-45MB ${process.platform} fallbackCount=${db.restartWaitDiag.fallbackCount} waits=${db.restartWaitDiag.waits} restored=${db.restartWaitDiag.restored}`)
     expect(db.restartWaitDiag.fallbackCount).toBe(0) // P3 ④ 新增：正常路径兜底未触发
     const result = await db.closeForQuit()
     log(`big-wal-backfilled: walBytes=${walBytes} ${JSON.stringify(result)}`)

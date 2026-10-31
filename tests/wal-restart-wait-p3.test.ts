@@ -55,6 +55,18 @@ function save(s: S, chars = 10): CommitRecord {
   })
   return s.db.commits.at(-1)!
 }
+/**
+ * 每次 INSERT 一个新 key（不复用同一行）：同 key、同长度的 UPSERT 会被 SQLite 原地覆盖（btreeOverwriteCell / btreeOverwriteContent，
+ * 逐页比较只写改变的页），每次只产生几帧；造 WAL 压力必须写新行。chars 个「字」≈ chars×3 字节。
+ */
+function saveFresh(s: S, chars: number): CommitRecord {
+  seq += 1
+  const key = `wal-wait-big-${seq}`
+  s.db.transaction(() => {
+    s.db.raw.prepare('INSERT INTO app_settings(key, value_json, updated_at) VALUES (?, ?, ?)').run(key, JSON.stringify(`${seq}`.padEnd(chars, '字')), Date.now())
+  })
+  return s.db.commits.at(-1)!
+}
 function holdReader(s: S): DatabaseSync {
   const r = new DatabaseSync(s.path); readers.push(r)
   r.exec('BEGIN'); r.prepare('SELECT count(*) AS n FROM app_settings').get()
@@ -63,6 +75,13 @@ function holdReader(s: S): DatabaseSync {
 const pendingBytes = (path: string): number => { const h = readWalIndexHeader(path)!; return (h.mxFrame - h.nBackfill) * (h.pageSize + 24) }
 
 describe('P3 ④ 等待态：WAL 回文件头后才恢复 wal_autocheckpoint', () => {
+  it('记录 SQLite 版本（只打日志）', () => {
+    const d = new DatabaseSync(':memory:')
+    const v = (d.prepare('SELECT sqlite_version() AS v').get() as { v: string }).v
+    d.close()
+    process.stdout.write(`[sqlite_version] ${process.platform} ${v}\n`)
+    expect(v.length).toBeGreaterThan(0)
+  })
   it('T2 无读者：释放 → 等待态（释放记录 waiting）→ 一次小保存从文件头写起、COMMIT 内 nBackfill 不变 → 恢复（restored-after-restart），兜底未触发', async () => {
     const s = open()
     bulkFill(s)
@@ -92,7 +111,7 @@ describe('P3 ④ 等待态：WAL 回文件头后才恢复 wal_autocheckpoint', (
     const walAfterBulk = statSync(`${s.path}-wal`).size
     let maxCommitBytes = 0
     for (let i = 0; i < 40; i += 1) {
-      const r = save(s, 60_000)
+      const r = saveFresh(s, 60_000)
       maxCommitBytes = Math.max(maxCommitBytes, ((r.mxFrameAfter ?? 0) - (r.mxFrameBefore ?? 0)) * 4120)
       await tick(); await s.cp.idle()
       expect(pendingBytes(s.path)).toBeLessThanOrEqual(BACKFILL_TRIGGER_BYTES + maxCommitBytes)
@@ -116,11 +135,12 @@ describe('P3 ④ 等待态：WAL 回文件头后才恢复 wal_autocheckpoint', (
     // 同步连续写：noteCommit 推迟到 setImmediate，worker 不会插进来，兜底原因确定为 pending
     let n = 0
     while (s.db.restartWaitDiag.waiting) {
-      const r = save(s, 200_000)
+      const r = saveFresh(s, 200_000)
       n += 1
       expect(r.backfilledInCommit).toBe(false)
       expect(r.nBackfillAfter).toBe(base.nBackfill)
-      expect(n).toBeLessThan(200)
+      const cur = readWalIndexHeader(s.path)
+      expect(n, `saves=${n} mxFrame=${cur?.mxFrame} nBackfill=${cur?.nBackfill} pending=${cur ? (cur.mxFrame - cur.nBackfill) * (cur.pageSize + 24) : 'n/a'}`).toBeLessThan(200)
     }
     const h = readWalIndexHeader(s.path)!
     log('T1-held', { base, now: h, saves: n, diag: s.db.restartWaitDiag })
