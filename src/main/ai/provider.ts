@@ -79,7 +79,8 @@ export class ProviderService {
     const row = this.db.raw.prepare('SELECT base_url, encrypted_api_key FROM provider_configs WHERE id = ?').get(providerId) as Pick<ProviderRow, 'base_url' | 'encrypted_api_key'> | undefined
     if (!row) throw new Error('PROVIDER_NOT_FOUND')
     const checked = checkBaseUrl(row.base_url)
-    return { baseUrl: checked.ok ? checked.url : undefined, apiKey: row.encrypted_api_key ? this.codec.decrypt(row.encrypted_api_key) : '' }
+    // 库驱动可能返回 Uint8Array 而非 Buffer，统一转成 Buffer 再解密
+    return { baseUrl: checked.ok ? checked.url : undefined, apiKey: row.encrypted_api_key ? this.codec.decrypt(Buffer.from(row.encrypted_api_key)) : '' }
   }
 
   getWithSecret(providerId: string): { config: ProviderConfig; apiKey: string } {
