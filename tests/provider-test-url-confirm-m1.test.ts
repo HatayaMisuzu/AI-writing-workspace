@@ -81,8 +81,7 @@ describe('A·M1 providers:test-url 确认闸门（main 侧）', () => {
     const result = await testUrl({ baseUrl: `${SAVED}/`, providerId: 'p' })
     expect(result.ok).toBe(true)
     expect(ipc.dialogCalls).toHaveLength(0)
-    expect(requests.length).toBeGreaterThan(0)
-    expect(requests.every((r) => r.url.startsWith(SAVED) && r.authorization === `Bearer ${SECRET}`)).toBe(true)
+    expect(requests).toEqual([{ url: `${SAVED}/chat/completions`, authorization: `Bearer ${SECRET}`, apiKeyHeader: undefined }])
   })
 
   it('地址变了、作者取消：零请求、无 Authorization；返回 cancelled，文案说明 Key 未发送', async () => {
