@@ -536,6 +536,18 @@ try {
         // U03：全选 →（窄屏先开抽屉）→ 选区仍在、「修改」可用 → 发送后提案落到本章，说明 freezeAITarget 拿到了原始选区
         await editor.click()
         await page.keyboard.press('Control+A')
+        // 选区诊断：同行者是否拿到选区、焦点、编辑器中心点命中的元素、各层水平滚动
+        const selectionDiag = () => page.evaluate(() => {
+          const editorBox = document.querySelector('.manuscript-editor')?.getBoundingClientRect()
+          const hit = editorBox ? document.elementFromPoint(editorBox.left + editorBox.width / 2, editorBox.top + editorBox.height / 2) : null
+          return { active: document.activeElement?.className ?? document.activeElement?.tagName, domSelection: window.getSelection()?.toString().length ?? 0, chip: document.querySelector('.selection-chip')?.textContent ?? null,
+            hit: hit ? `${hit.tagName}.${hit.className}` : null, scroll: [...document.querySelectorAll('.screen-host, .workspace-screen, .workspace-main, .manuscript-with-outline, .editor-pane')].map((el) => `${el.className.split(' ')[0]} ${el.scrollLeft}/${el.scrollWidth}-${el.clientWidth}`) }
+        })
+        process.stdout.write(`e2e U03 selection ${process.platform} ${width}px after Ctrl+A: ${JSON.stringify(await selectionDiag())}\n`)
+        if (width > 1080) {
+          const gotChip = await page.locator('.assistant-panel .selection-chip').waitFor({ timeout: 3_000 }).then(() => true, () => false)
+          assert.ok(gotChip, `${width}px：全选后同行者面板没有拿到选区：${JSON.stringify(await selectionDiag())}`)
+        }
         const scope = await openAssistantKeepingSelection(page, `narrow ${width}px`)
         const before = (await waitPatches(page, chapterId, 0)).length
         await scope.getByRole('button', { name: '修改', exact: true }).click()
@@ -558,10 +570,11 @@ try {
         const findInput = page.getByLabel('查找', { exact: true })
         await findInput.waitFor()
         const geo = await page.evaluate(() => {
+          const layoutScroll = () => [...document.querySelectorAll('.screen-host, .workspace-screen, .workspace-main, .manuscript-with-outline, .editor-pane')].map((el) => `${el.className.split(' ')[0]} ${el.scrollLeft}/${el.scrollWidth}-${el.clientWidth}`)
           const box = (el) => { const r = el?.getBoundingClientRect(); return r ? { left: Math.round(r.left * 10) / 10, right: Math.round(r.right * 10) / 10, width: Math.round(r.width * 10) / 10 } : null }
           const panel = document.querySelector('[data-testid="find-panel"]')
           const outline = document.querySelector('.manuscript-with-outline')
-          return { innerWidth: window.innerWidth, panel: box(panel), pane: box(panel?.closest('.editor-pane')), sidebar: box(document.querySelector('.project-sidebar')), outline: box(outline?.lastElementChild), outlineColumns: outline ? getComputedStyle(outline).gridTemplateColumns : null }
+          return { innerWidth: window.innerWidth, panel: box(panel), pane: box(panel?.closest('.editor-pane')), sidebar: box(document.querySelector('.project-sidebar')), outline: box(outline?.lastElementChild), outlineColumns: outline ? getComputedStyle(outline).gridTemplateColumns : null, scroll: layoutScroll() }
         })
         process.stdout.write(`e2e find narrow ${process.platform} ${width}px: ${JSON.stringify(geo)}\n`)
         const expected = Math.min(340, geo.pane.width - 36)

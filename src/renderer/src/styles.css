@@ -301,6 +301,8 @@ button.danger-button { color: #fff; background: var(--danger); border-color: var
   .table-head, .work-row { grid-template-columns: minmax(200px, 1.3fr) .5fr .8fr .55fr .7fr 96px; }
 }
 @media (max-width: 1200px) {
+  /* 1081–1200 宽编辑列很窄：工具栏等内容比列宽时，overflow:hidden 的容器会被焦点 / scrollIntoView 横向滚走，编辑区左移钻到章节侧栏下面（查找面板的「正则」被侧栏挡住）。改为 clip：照样裁切，但不能被滚动 */
+  .workspace-main, .manuscript-with-outline { overflow: clip; }
   .workspace-screen { grid-template-columns: 286px minmax(400px, 1fr) 282px; }
   .workspace-screen:has(.assistant-collapsed) { grid-template-columns: 286px minmax(400px, 1fr) 48px; }
   .chat-compose { margin-inline: 8px; }
