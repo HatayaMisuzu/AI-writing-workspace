@@ -1,4 +1,4 @@
-import { closeSync, openSync, readSync } from 'node:fs'
+import { closeSync, openSync, readSync, statSync } from 'node:fs'
 import { endianness } from 'node:os'
 
 /**
@@ -86,4 +86,15 @@ export const fmtWalState = (s: WalState): string => {
   const w = s.wal.ok ? `ckptSeq=${s.wal.value.ckptSeq} salt1=${s.wal.value.salt1}` : `wal=ERR(${s.wal.error})`
   const m = s.shm.ok ? `mxFrame=${s.shm.value.mxFrame} nBackfill=${s.shm.value.nBackfill}` : `shm=ERR(${s.shm.error})`
   return `{${w} ${m} tries=${s.attempts}}`
+}
+
+/** P3 PR-53：待回写量 = (mxFrame − nBackfill) × 帧大小（pageSize + 24 字节帧头）；-wal 不存在 = 0；头读不到则抛错（调用方当红处理）。 */
+export function pendingBackfillBytes(dbPath: string): number {
+  let size = 0
+  try { size = statSync(`${dbPath}-wal`).size } catch { return 0 }
+  if (size < WAL_HEADER_BYTES) return 0
+  const state = readWalState(dbPath)
+  if (!state.wal.ok) throw new Error(`pendingBackfillBytes: ${state.wal.error}`)
+  if (!state.shm.ok) throw new Error(`pendingBackfillBytes: ${state.shm.error}`)
+  return Math.max(0, state.shm.value.mxFrame - state.shm.value.nBackfill) * (state.wal.value.pageSize + 24)
 }
