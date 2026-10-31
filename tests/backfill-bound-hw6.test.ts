@@ -104,6 +104,8 @@ describe('H-W6 1：连续保存的待回写上界', () => {
     expect(cp.pendingPeakBytes).toBeLessThanOrEqual(BACKFILL_BOUND_BYTES)
     expect(cp.backfillRequests).toBeGreaterThan(0)
     expect(s.docs.getContent(s.project.id, s.chapter.id).plainText).toBe(text(299))
+    console.log(`[fallback] hw6 test1-300saves ${process.platform} fallbackCount=${s.db.restartWaitDiag.fallbackCount} waits=${s.db.restartWaitDiag.waits} restored=${s.db.restartWaitDiag.restored}`)
+    expect(s.db.restartWaitDiag.fallbackCount).toBe(0) // P3 ④ 新增：正常路径兜底未触发
   })
 
   it('间隔 250ms 的 120 次大章保存：待回写峰值 ≤ 8MB（记录 COMMIT 分布）', async () => {

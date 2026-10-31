@@ -56,6 +56,17 @@ const items = (s: S, from = '远处灯', to = '远处星') => s.ids.map((id) => 
   const text = current.plainText.replaceAll(from, to)
   return { documentId: id, expectedRevision: current.revision, editorJson: doc(text), plainText: text, hits: 240 }
 })
+/** P3 ④：批量释放后的一次小保存（app_settings，不动章节）：COMMIT 内 nBackfill 不变（无同步回写）、等待态兜底未触发 */
+const releaseSave = (s: S): void => {
+  s.db.transaction(() => {
+    s.db.raw.prepare(`INSERT INTO app_settings(key, value_json, updated_at) VALUES ('p3-release-save', ?, ?)
+      ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at`).run(JSON.stringify(String(Date.now())), Date.now())
+  })
+  const c = s.db.commits[s.db.commits.length - 1]
+  // 测试侧按原始字段判定（walRestartLog 把 nBackfill 清 0，wal.c:2235）：未 restart 时 nBackfill 前后相等；restart 时 nBackfillAfter == 0
+  const noBackfill = c.walRestarted ? c.nBackfillAfter === 0 : c.nBackfillAfter === c.nBackfillBefore
+  expect(noBackfill, `释放后小保存 COMMIT 内同步回写：nBackfill ${c.nBackfillBefore}→${c.nBackfillAfter} mxFrame ${c.mxFrameBefore}→${c.mxFrameAfter}`).toBe(true)
+}
 const save = (s: S, id: string, suffix: string): number => {
   const current = s.docs.getContent(s.project.id, id)
   const started = performance.now()
@@ -90,6 +101,7 @@ describe('A / 1：暂停自动检查点，失败路径 finally 立即恢复原�
     const s = setup(5)
     const result = s.docs.replaceBatch({ projectId: s.project.id, items: items(s), ...meta })
     await s.db.checkpointIdle()
+    releaseSave(s) // P3 ④：释放后 WAL 未回文件头时 autocheckpoint 保持 0，一次小保存（COMMIT 内 nBackfill 不变）之后才恢复
     expect(s.db.autoCheckpoint).toBe(ORIGINAL)
     const before = chapterHashes(s.db.raw, s.project.id)
     s.docs.fault = fault
@@ -103,6 +115,7 @@ describe('A / 1：暂停自动检查点，失败路径 finally 立即恢复原�
     expect(s.db.autoCheckpoint).toBe(0)
     expect(s.db.checkpointer?.busy).toBe(true)
     await s.db.checkpointIdle()
+    releaseSave(s) // P3 ④：释放后 WAL 未回文件头时 autocheckpoint 保持 0，一次小保存（COMMIT 内 nBackfill 不变）之后才恢复
     expect(s.db.autoCheckpoint).toBe(ORIGINAL)
     expect(s.db.checkpointer?.last).toMatchObject({ ok: true, busy: 0 })
     const off = setup(3, { checkpointer: false })
@@ -163,6 +176,7 @@ describe('B：后台检查点策略（PASSIVE、重试、一直失败的上限�
     await cp.worker!.terminate()
     s.docs.replaceBatch({ projectId: s.project.id, items: items(s, '远处星', '远处月'), ...meta })
     await s.db.checkpointIdle()
+    releaseSave(s) // P3 ④：释放后 WAL 未回文件头时 autocheckpoint 保持 0，一次小保存（COMMIT 内 nBackfill 不变）之后才恢复
     expect(s.db.autoCheckpoint).toBe(ORIGINAL)
     expect(s.db.checkpointer!.last?.ok).toBe(true)
   })
@@ -185,6 +199,7 @@ describe('C / 5：后台检查点进行中继续编辑保存不卡不丢；大 W
     expect(cp.busy).toBe(true)
     expect(s.db.autoCheckpoint).toBe(0)
     await s.db.checkpointIdle()
+    releaseSave(s) // P3 ④：释放后 WAL 未回文件头时 autocheckpoint 保持 0，一次小保存（COMMIT 内 nBackfill 不变）之后才恢复
     expect(s.db.autoCheckpoint).toBe(ORIGINAL)
     const afterSaves = [save(s, s.ids[1], '·检查点后1'), save(s, s.ids[2], '·检查点后2')]
     log(`1000ch replace ${Math.round(replaceMs)}ms timing ${JSON.stringify(result.timing)}; wal ${(walBig / 1048576).toFixed(1)}MB; bg checkpoint ${cp.last?.ms}ms (attempts ${cp.last?.attempts}, excl. injected 3000ms delay); during-checkpoint save max ${Math.max(...saves).toFixed(1)}ms, read max ${Math.max(...reads).toFixed(1)}ms; after-checkpoint save ${afterSaves.map((v) => v.toFixed(1)).join('/')}ms`)
@@ -233,6 +248,7 @@ describe('D：上一次后台检查点未完成就开始下一次批量 → 不�
     await s.db.checkpointIdle()
     expect(s.db.checkpointer!.runs).toBe(2)
     expect(s.db.checkpointer!.last).toMatchObject({ ok: true })
+    releaseSave(s) // P3 ④：释放后 WAL 未回文件头时 autocheckpoint 保持 0，一次小保存（COMMIT 内 nBackfill 不变）之后才恢复
     expect(s.db.autoCheckpoint).toBe(ORIGINAL)
   })
 })
