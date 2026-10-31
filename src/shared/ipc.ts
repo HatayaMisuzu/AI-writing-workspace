@@ -146,8 +146,12 @@ export interface WorkspaceApi {
     routes(): Promise<Record<RoutedTask, string | 'default'>>
     setRoute(route: TaskModelRoute): Promise<void>
     test(providerId: string, modelId: string): Promise<{ ok: boolean; message?: string }>
-    /** S2：未保存地址的临时测连（仅临时放行 origin，不写入白名单） */
-    testUrl(input: { baseUrl: string; apiKey?: string; modelId: string; providerType?: ProviderType }): Promise<{ ok: boolean; message?: string }>
+    /**
+     * S2：未保存地址的临时测连（仅临时放行 origin，不写入白名单）。
+     * A·M1：providerId 指明正在编辑的已保存服务（Key 栏留空时用其已保存 Key，Key 不回传界面）。
+     * 要带 Key 发往与已保存地址不同（或尚无已保存地址）的地址时，main 进程先弹原生确认框；作者取消则不发请求，返回 cancelled: true。
+     */
+    testUrl(input: { baseUrl: string; apiKey?: string; modelId: string; providerType?: ProviderType; providerId?: string }): Promise<{ ok: boolean; message?: string; cancelled?: boolean }>
   }
   /** S2 e2e：读取 webRequest 拦截日志 */
   network: { blockedLog(): Promise<Array<{ url: string; reason: string; at: number }>> }

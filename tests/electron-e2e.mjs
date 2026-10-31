@@ -543,8 +543,9 @@ try {
     streamDelay = 0
     const tested = await running.page.evaluate(async ({ anthropicBaseUrl }) => {
       const providerId = crypto.randomUUID()
-      const unsaved = await window.workspace.providers.testUrl({ baseUrl: anthropicBaseUrl, apiKey: 'anthropic-fixture-key', modelId: 'claude-fixture', providerType: 'anthropic' })
+      // A·M1：带 Key 测未保存地址会由 main 弹原生确认框（e2e 无法点原生框，单测覆盖）；这里先保存，再按「地址未变」测连——不弹框、直接发
       await window.workspace.providers.save({ id: providerId, providerType: 'anthropic', displayName: 'E2E Anthropic', baseUrl: anthropicBaseUrl, apiKey: 'anthropic-fixture-key' })
+      const unsaved = await window.workspace.providers.testUrl({ baseUrl: anthropicBaseUrl, modelId: 'claude-fixture', providerType: 'anthropic', providerId })
       await window.workspace.providers.saveModel({ id: crypto.randomUUID(), providerId, modelId: 'claude-fixture', displayName: 'Claude Fixture',
         capabilities: { streaming: true, tools: false, structuredOutput: false, cancellation: true, maxContextTokens: 8_000 }, enabled: true, isDefault: true, contextWindow: 8_000, maxOutput: 1_500 })
       const saved = await window.workspace.providers.test(providerId, 'claude-fixture')

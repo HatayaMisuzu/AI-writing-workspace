@@ -71,6 +71,17 @@ export class ProviderService {
     return this.list().find((item) => item.id === input.id) ?? this.list()[0]
   }
 
+  /**
+   * A·M1：测试连接用。返回已保存的原始地址（未脱敏，只在 main 内使用）与 Key（无 Key 时为空串，不抛错）。
+   * 地址无效（存量坏地址）时 baseUrl 为 undefined，调用方按「无已保存地址」处理。
+   */
+  getRawBaseUrlAndSecret(providerId: string): { baseUrl?: string; apiKey: string } {
+    const row = this.db.raw.prepare('SELECT base_url, encrypted_api_key FROM provider_configs WHERE id = ?').get(providerId) as Pick<ProviderRow, 'base_url' | 'encrypted_api_key'> | undefined
+    if (!row) throw new Error('PROVIDER_NOT_FOUND')
+    const checked = checkBaseUrl(row.base_url)
+    return { baseUrl: checked.ok ? checked.url : undefined, apiKey: row.encrypted_api_key ? this.codec.decrypt(row.encrypted_api_key) : '' }
+  }
+
   getWithSecret(providerId: string): { config: ProviderConfig; apiKey: string } {
     const row = this.db.raw.prepare('SELECT * FROM provider_configs WHERE id = ?').get(providerId) as ProviderRow | undefined
     if (!row) throw new Error('PROVIDER_NOT_FOUND')

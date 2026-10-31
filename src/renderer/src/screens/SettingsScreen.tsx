@@ -116,7 +116,9 @@ export function SettingsScreen(): React.JSX.Element {
     const savedSame = Boolean(selectedId && selected && !selected.baseUrlError && form.baseUrl === selected.baseUrl && form.providerType === selected.providerType)
     const result = savedSame && selectedId && activeModel
       ? await window.workspace.providers.test(selectedId, activeModel.modelId)
-      : await window.workspace.providers.testUrl({ baseUrl: form.baseUrl, apiKey: form.apiKey || undefined, modelId: draftModelId, providerType: form.providerType })
+      : await window.workspace.providers.testUrl({ baseUrl: form.baseUrl, apiKey: form.apiKey || undefined, modelId: draftModelId, providerType: form.providerType, providerId: selected ? selectedId : undefined })
+    // A·M1：地址与上次保存不同时由 main 进程弹确认框；取消时不发请求
+    if ('cancelled' in result && result.cancelled) { setNotice({ ok: false, text: result.message ?? '已取消测试连接，API Key 未发送。' }); return }
     setNotice({ ok: result.ok, text: result.ok ? '连接成功。' : `连接失败：${result.message ?? '未知错误'} 正文与本地保存不受影响。` })
   })
   const updateModel = (item: ModelConfig, changes: Partial<ModelConfig>): Promise<void> => run(async () => {
