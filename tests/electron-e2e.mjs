@@ -2432,11 +2432,40 @@ try {
       const q = (p) => s[Math.min(s.length - 1, Math.ceil(s.length * p) - 1)]
       return { p50: q(0.5), p95: q(0.95), max: s.at(-1), n: s.length }
     }
+    // [KEYDIAG] 各阶段记录后台检查点状态（busy / WAL 文件字节 / 最近一次 PASSIVE 结果），便于 grep 对照
+    const keyDiag = async (stage) => {
+      const d = await page.evaluate(() => window.workspace.diagnostics.walCheckpoint())
+      const info = { stage, busy: d.busy, walBytes: d.walBytes, runs: d.runs, autoCheckpoint: d.autoCheckpoint, last: d.last && { ok: d.last.ok, ms: d.last.ms, log: d.last.log, checkpointed: d.last.checkpointed } }
+      process.stdout.write(`[KEYDIAG] ${JSON.stringify(info)}\n`)
+      return d
+    }
+    // 测按键前确定性等后台安静：worker 空闲（busy=false）且 WAL 文件连续 1s 不再增长；最近一次 PASSIVE 的 log/checkpointed 只记录不作门槛
+    // （待回写 ≤1MB 时不会再触发 PASSIVE，last 可能长期停在未完成，作门槛会假超时）。WAL 文件本身不缩（未设 journal_size_limit，见 wal-checkpointer.ts 头注释），所以「回落」按待回写量判断。
+    // 上限 60s（沿用本文件 book-replace 等检查点结束的 60_000 上限）；超时直接失败并带上 busy/walBytes。
+    const waitQuiet = async (label) => {
+      const started = Date.now(); let stableSince = Date.now(); let prev = -1; let d
+      for (;;) {
+        d = await page.evaluate(() => window.workspace.diagnostics.walCheckpoint())
+        if (d.walBytes !== prev) { prev = d.walBytes; stableSince = Date.now() }
+        if (!d.busy && Date.now() - stableSince >= 1000) break
+        if (Date.now() - started > 60_000) assert.fail(`${label} 等后台安静超时 60s：busy=${d.busy} walBytes=${d.walBytes} last=${JSON.stringify(d.last)}`)
+        await new Promise((resolve) => setTimeout(resolve, 100))
+      }
+      const waitMs = Date.now() - started
+      process.stdout.write(`[KEYDIAG] quiet ${label}: waited ${waitMs}ms busy=${d.busy} walBytes=${d.walBytes} lastOk=${d.last?.ok ?? null} log=${d.last?.log ?? null} checkpointed=${d.last?.checkpointed ?? null}\n`)
+      return waitMs
+    }
+    await keyDiag('start')
     const smallId = await seedBook('按键对照三章', 3)
     await openBook('按键对照三章', '第2章')
+    await waitQuiet('small')
+    await keyDiag('small-before-keys')
     const small = await keystrokes()
+    await keyDiag('small-after-keys')
     const bigId = await seedBook('按键千章', 1000)
+    await keyDiag('big-after-seed')
     await openBook('按键千章', '第500章')
+    await keyDiag('big-after-open')
     // ① 高度：size 容器不塌成 0，且约等于侧栏扣掉书名和分区导航后的可用高度
     const geo = await page.evaluate(() => {
       const tree = document.querySelector('.manuscript-tree'); const sidebar = document.querySelector('.project-sidebar')
@@ -2479,8 +2508,30 @@ try {
     assert.ok(narrow.titleInRow, '窄屏章名不溢出到行外')
     if (viewport) await page.setViewportSize(viewport); else await page.setViewportSize({ width: 1400, height: 860 })
     await page.waitForTimeout(300)
+    await keyDiag('big-before-quiet')
+    await waitQuiet('big')
+    await keyDiag('big-before-keys')
     const big = await keystrokes()
+    await keyDiag('big-after-keys')
     process.stdout.write(`P3 1000-chapter keystroke key→rAF: p50 ${big.p50.toFixed(1)}ms p95 ${big.p95.toFixed(1)}ms max ${big.max.toFixed(1)}ms (n=${big.n}; limits p50 ≤16, p95 ≤50, max record only); 3-chapter p50 ${small.p50.toFixed(1)} p95 ${small.p95.toFixed(1)} max ${small.max.toFixed(1)}\n`)
+    // 只记数、不断言：全书替换（IPC replaceBatch，除当前第 500 章外 999 章）返回后不等安静，马上打字
+    const replaced = await page.evaluate(async (projectId) => {
+      const tree = await window.workspace.documents.tree(projectId)
+      const items = []
+      for (const node of tree.filter((item) => item.type === 'chapter' && item.title !== '第500章')) {
+        const doc = await window.workspace.documents.get(projectId, node.id)
+        const text = doc.plainText.replaceAll('旧信', '新信')
+        items.push({ documentId: node.id, expectedRevision: doc.revision, editorJson: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text }] }] }, plainText: text, hits: (doc.plainText.match(/旧信/g) ?? []).length })
+      }
+      const t = performance.now()
+      await window.workspace.documents.replaceBatch({ projectId, items, query: '旧信', replacement: '新信', regex: false, caseSensitive: false })
+      return { chapters: items.length, ms: Math.round(performance.now() - t) }
+    }, bigId)
+    process.stdout.write(`[KEYDIAG] immediate replaceBatch: ${JSON.stringify(replaced)}\n`)
+    await keyDiag('immediate-before-keys')
+    const immediate = await keystrokes()
+    await keyDiag('immediate-after-keys')
+    process.stdout.write(`[KEYDIAG] P3 1000-chapter keystroke right after replace (record only, no wait): p50 ${immediate.p50.toFixed(1)}ms p95 ${immediate.p95.toFixed(1)}ms max ${immediate.max.toFixed(1)}ms (n=${immediate.n})\n`)
     assert.ok(big.p50 <= 16, `千章书按键 p50 ${big.p50.toFixed(1)}ms 应 ≤16ms`)
     assert.ok(big.p95 <= 50, `千章书按键 p95 ${big.p95.toFixed(1)}ms 应 ≤50ms`)
     assert.ok(big.p50 <= small.p50 * 3 + 10, `千章书 p50 ${big.p50.toFixed(1)}ms 应 ≤ 小书 p50 ${small.p50.toFixed(1)}×3+10`)
