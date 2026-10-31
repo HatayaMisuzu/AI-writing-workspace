@@ -14,10 +14,15 @@ describe('空书名显示「未命名作品」', () => {
     expect(displayProjectTitle(' 雾港 ')).toBe(' 雾港 ')
   })
   it('书库、侧栏、作品栏、检索、小黑屋提示都走 displayProjectTitle', () => {
-    for (const file of ['src/renderer/src/screens/LibraryScreen.tsx', 'src/renderer/src/components/ProjectSidebar.tsx', 'src/renderer/src/components/WorksRail.tsx', 'src/renderer/src/screens/WorkspaceScreen.tsx', 'src/renderer/src/components/Blackroom.tsx', 'src/renderer/src/screens/PromptTemplatesView.tsx']) {
+    for (const file of ['src/renderer/src/screens/LibraryScreen.tsx', 'src/renderer/src/components/ProjectSidebar.tsx', 'src/renderer/src/components/WorksRail.tsx', 'src/renderer/src/screens/WorkspaceScreen.tsx', 'src/renderer/src/components/Blackroom.tsx', 'src/renderer/src/screens/PromptTemplatesView.tsx', 'src/renderer/src/components/AssistantPanel.tsx']) {
       expect(read(file), file).toContain('displayProjectTitle(')
     }
     expect(read('src/renderer/src/screens/LibraryScreen.tsx')).not.toMatch(/<strong>\{project\.title\}<\/strong>/)
+    // 同行者头部：空书名不能显示成「仅使用《》」
+    const assistant = read('src/renderer/src/components/AssistantPanel.tsx')
+    expect(assistant).toContain('仅使用《{displayProjectTitle(project.title)}》')
+    expect(assistant).not.toMatch(/《\{project\.title\}》/)
+    expect(`仅使用《${displayProjectTitle('')}》`).toBe('仅使用《未命名作品》')
   })
 })
 
