@@ -2620,15 +2620,35 @@ try {
       await page.waitForTimeout(1000)
     }
     // 口径同诊断：keydown.timeStamp → 下一个 rAF；预热 20 键后每 60ms 一键共 120 键
-    const keystrokes = async () => {
+    // [KEYDIAG-R] 只记不断言：焦点 / 可见性 / BrowserWindow 状态（e2e 主进程侧 electronApp.evaluate 读取，不改 src），以及 rAF 间隔分布
+    const rafStats = (ts) => {
+      const gaps = ts.slice(1).map((t, i) => t - ts[i]).toSorted((a, b) => a - b)
+      const q = (p) => gaps.length ? +gaps[Math.min(gaps.length - 1, Math.ceil(gaps.length * p) - 1)].toFixed(1) : null
+      return { n: gaps.length, p50: q(0.5), p95: q(0.95), max: gaps.length ? +gaps.at(-1).toFixed(1) : null }
+    }
+    const keyDiagR = async (stage, sampleRaf = true) => {
+      const r = await page.evaluate((sampleRaf) => new Promise((resolve) => {
+        const info = { hasFocus: document.hasFocus(), visibility: document.visibilityState }
+        if (!sampleRaf) { resolve({ ...info, ts: [] }); return }
+        // 按键段外采样 rAF 间隔 1s
+        const ts = []; const end = performance.now() + 1000
+        const loop = (t) => { ts.push(t); if (t < end) requestAnimationFrame(loop); else resolve({ ...info, ts }) }
+        requestAnimationFrame(loop)
+      }), sampleRaf)
+      const win = await running.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map((w) => ({ focused: w.isFocused(), minimized: w.isMinimized(), visible: w.isVisible() }))).catch((error) => ({ error: String(error) }))
+      process.stdout.write(`[KEYDIAG-R] ${JSON.stringify({ stage, hasFocus: r.hasFocus, visibility: r.visibility, windows: win, rafOutside: rafStats(r.ts) })}\n`)
+    }
+    const keystrokes = async (label = 'keys') => {
       await page.locator('.manuscript-editor p').first().click(); await page.keyboard.press('End')
       await page.evaluate(() => { if (window.__treeKeys) return; window.__treeKeys = []; window.addEventListener('keydown', (event) => { const start = event.timeStamp; requestAnimationFrame(() => window.__treeKeys.push(performance.now() - start)) }, true) })
       for (let i = 0; i < 20; i += 1) { await page.keyboard.press('a'); await page.waitForTimeout(60) }
       await page.waitForTimeout(1000)
-      await page.evaluate(() => { window.__treeKeys = [] })
+      await page.evaluate(() => { window.__treeKeys = []; window.__rafTs = []; window.__rafOn = true; const loop = (t) => { if (!window.__rafOn) return; window.__rafTs.push(t); requestAnimationFrame(loop) }; requestAnimationFrame(loop) })
       for (let i = 0; i < 120; i += 1) { await page.keyboard.press('a'); await page.waitForTimeout(60) }
       await page.waitForTimeout(800)
       const s = await page.evaluate(() => window.__treeKeys.toSorted((a, b) => a - b))
+      const rafTs = await page.evaluate(() => { window.__rafOn = false; const ts = window.__rafTs; window.__rafTs = []; return ts })
+      process.stdout.write(`[KEYDIAG-R] ${JSON.stringify({ stage: `${label}-during`, rafDuring: rafStats(rafTs) })}\n`)
       assert.ok(s.length >= 118, `采样 ${s.length} 应接近 120`)
       const q = (p) => s[Math.min(s.length - 1, Math.ceil(s.length * p) - 1)]
       return { p50: q(0.5), p95: q(0.95), max: s.at(-1), n: s.length }
@@ -2712,7 +2732,9 @@ try {
     await keyDiag('big-before-quiet')
     await waitQuiet('big')
     await keyDiag('big-before-keys')
-    const big = await keystrokes()
+    await keyDiagR('big-before-keys')
+    const big = await keystrokes('big')
+    await keyDiagR('big-after-keys')
     await keyDiag('big-after-keys')
     process.stdout.write(`P3 1000-chapter keystroke key→rAF: p50 ${big.p50.toFixed(1)}ms p95 ${big.p95.toFixed(1)}ms max ${big.max.toFixed(1)}ms (n=${big.n}; limits p50 ≤16, p95 ≤50, max record only); 3-chapter p50 ${small.p50.toFixed(1)} p95 ${small.p95.toFixed(1)} max ${small.max.toFixed(1)}\n`)
     // 只记数、不断言：全书替换（IPC replaceBatch，除当前第 500 章外 999 章）返回后不等安静，马上打字
@@ -2734,7 +2756,9 @@ try {
     }, bigId)
     process.stdout.write(`[KEYDIAG] immediate replaceBatch: ${JSON.stringify(replaced)}\n`)
     await keyDiag('immediate-before-keys')
-    const immediate = await keystrokes()
+    await keyDiagR('immediate-before-keys', false) // 立即打字段不插 1s rAF 采样，避免改变「不等」语义
+    const immediate = await keystrokes('immediate')
+    await keyDiagR('immediate-after-keys')
     await keyDiag('immediate-after-keys')
     process.stdout.write(`[KEYDIAG] P3 1000-chapter keystroke right after replace (record only, no wait): p50 ${immediate.p50.toFixed(1)}ms p95 ${immediate.p95.toFixed(1)}ms max ${immediate.max.toFixed(1)}ms (n=${immediate.n})\n`)
     assert.ok(big.p50 <= 16, `千章书按键 p50 ${big.p50.toFixed(1)}ms 应 ≤16ms`)
