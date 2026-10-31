@@ -80,15 +80,6 @@ async function waitConverged(s: S, runsBefore: number): Promise<void> {
   await sleep(50) // 让释放循环（未修复代码）有机会恢复 autocheckpoint
 }
 
-async function waitAutoCheckpoint(s: S, value: number, limitMs = 30_000): Promise<boolean> {
-  const started = Date.now()
-  while (s.db.autoCheckpoint !== value) {
-    if (Date.now() - started > limitMs) return false
-    await sleep(20)
-  }
-  return true
-}
-
 let seq = 0
 /** 小保存：数据库层写事务（走 transaction()，commit 记录带诊断字段） */
 function smallSave(s: S): CommitRecord {
@@ -122,8 +113,12 @@ describe('P3 后台 PASSIVE 收敛后的第一次保存不在 COMMIT 里同步�
     // checkpointerBusy 只记录不断言：修复后 save1 在暂停期间提交会请求补做一轮，worker 此时处于注入的 300ms 延迟中（未开始 PASSIVE），nBackfill 不会被它改动
     expect.soft(save2.backfilledInCommit, `save2 COMMIT 内同步回写：autoCheckpoint=${autoAtSave2} nBackfill ${save2.nBackfillBefore}→${save2.nBackfillAfter} mxFrame ${save2.mxFrameBefore}→${save2.mxFrameAfter} commitMs=${save2.commitMs}`).toBe(false)
     expect.soft(save1.backfilledInCommit, `save1 nBackfill ${save1.nBackfillBefore}→${save1.nBackfillAfter}`).toBe(false)
-    // 读连接释放后：autocheckpoint 最终恢复，之后的保存从文件头写起
-    expect(await waitAutoCheckpoint(s, THRESHOLD)).toBe(true)
+    // 读连接释放后：后台 PASSIVE 回写 save1/save2 的帧，一次小保存之后 autocheckpoint 已恢复（组长批准：不再要求写入前恢复），之后的保存从文件头写起
+    await s.cp.request(); await s.cp.idle()
+    const saveR = smallSave(s)
+    log('restore-save', { mxFrameBefore: saveR.mxFrameBefore, mxFrameAfter: saveR.mxFrameAfter, saveR, autoAfter: s.db.autoCheckpoint })
+    expect(saveR.backfilledInCommit, `restore-save nBackfill ${saveR.nBackfillBefore}→${saveR.nBackfillAfter}`).toBe(false)
+    expect(s.db.autoCheckpoint).toBe(THRESHOLD)
     const save3 = smallSave(s)
     log('after-release', { release: s.db.releases.at(-1), save3 })
     expect(save3.backfilledInCommit).toBe(false)
@@ -137,9 +132,11 @@ describe('P3 后台 PASSIVE 收敛后的第一次保存不在 COMMIT 里同步�
     const reader = holdReader(s)
     await waitConverged(s, runsBefore)
     reader.exec('COMMIT')
-    expect(await waitAutoCheckpoint(s, THRESHOLD)).toBe(true)
+    await s.cp.idle()
     const save = smallSave(s)
-    log('released-reader', { last: s.cp.last, release: s.db.releases.at(-1), save })
+    log('released-reader', { mxFrameBefore: save.mxFrameBefore, mxFrameAfter: save.mxFrameAfter, last: s.cp.last, release: s.db.releases.at(-1), save })
+    // 一次小保存之后 autocheckpoint 已恢复（组长批准：不再要求写入前恢复）
+    expect(s.db.autoCheckpoint).toBe(THRESHOLD)
     expect(save.walRestarted).toBe(true)
     expect(save.mxFrameAfter).toBeLessThan(THRESHOLD)
     expect(save.backfilledInCommit).toBe(false)

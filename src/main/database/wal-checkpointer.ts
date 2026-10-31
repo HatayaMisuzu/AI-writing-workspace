@@ -122,16 +122,7 @@ export interface CheckpointOutcome {
   /** 本轮起止（墙钟 ms，Date.now()），诊断用 */
   startedAt?: number
   endedAt?: number
-  /**
-   * P3（wal-restart）：PASSIVE 收敛后的不等待 RESTART 结果。true = 下一次写会从 WAL 文件头开始；false = 拿不到锁 / 收敛后又有新帧 / 读不到 -shm；
-   * undefined = 本轮没做（未收敛、调用方未提供 restartLog、或 restartNeeded 返回 false）。
-   */
-  restarted?: boolean
-  restart?: RestartResult
 }
-
-/** P3（wal-restart）：一次 RESTART 尝试的结果（诊断用） */
-export interface RestartResult { ok: boolean; busy?: number; log?: number; checkpointed?: number; skipped?: 'empty' | 'pending' | 'unread'; error?: string }
 
 export interface WalCheckpointerOptions {
   retries?: number
@@ -147,13 +138,6 @@ export interface WalCheckpointerOptions {
   backfill?: { triggerBytes?: number } | false
   /** H-W6：调用方判断此刻能否按量请求（如批量暂停期间、主库已关闭时返回 false） */
   shouldTrigger?: () => boolean
-  /**
-   * P3（wal-restart）：PASSIVE 收敛后在主线程调用一次，由调用方在主连接上执行 PRAGMA wal_checkpoint(RESTART)（busy_timeout=0，不等待）。
-   * 见 tryRestart。
-   */
-  restartLog?: () => { busy: number; log: number; checkpointed: number }
-  /** P3（wal-restart）：此刻是否需要 RESTART（如只在批量暂停、等待恢复 autocheckpoint 时）；不提供 = 总是需要 */
-  restartNeeded?: () => boolean
   /** 仅测试：注入 worker 内失败 / 延迟 / 崩溃；delaySchedule[i] = 该 worker 第 i 次尝试的延迟（超出部分为 0）；crash = 每个 worker 第一次尝试时线程直接退出 */
   inject?: { failWith?: string; delayMs?: number; delaySchedule?: number[]; crash?: boolean; nativeSpinRows?: number }
 }
@@ -333,10 +317,7 @@ export class WalCheckpointer {
       if (complete) break
     }
     const complete = attempt.ok && attempt.busy === 0 && (attempt.checkpointed ?? 0) >= (attempt.log ?? 0)
-    let restart: RestartResult | undefined
-    if (complete && !this.closing && this.options.restartLog) restart = this.tryRestart()
     const outcome: CheckpointOutcome = {
-      restarted: restart?.ok, restart,
       ok: complete, ms: Math.round(ms), attempts, busy: attempt.busy, log: attempt.log, checkpointed: attempt.checkpointed,
       walBytes: this.walBytes(), startedAt, endedAt: Date.now(),
       quiet: generationAtStart === undefined ? undefined : this.readGeneration() === generationAtStart,
@@ -349,31 +330,6 @@ export class WalCheckpointer {
     if (this.consecutiveFailures >= this.failWarnCount) this.warn(`[wal-checkpoint] ${this.consecutiveFailures} consecutive failures`)
     if ((outcome.walBytes ?? 0) > this.walWarnBytes) this.warn(`[wal-checkpoint] WAL file ${outcome.walBytes} bytes exceeds ${this.walWarnBytes}`)
     return outcome
-  }
-
-  /**
-   * P3（wal-restart）：worker 的 PASSIVE 收敛（checkpointed == log）后，把 WAL 拉回文件头。
-   * - 先读 -shm：mxFrame == 0 → 已在文件头；nBackfill < mxFrame（收敛后主连接又写了帧）→ 不做（RESTART 会在主线程同步回写这些帧），
-   *   交给下一轮；读不到 → 不做。
-   * - 否则由调用方在主连接上执行 PRAGMA wal_checkpoint(RESTART)。此时 nBackfill == mxFrame，没有帧要回写（wal.c walCheckpoint 中
-   *   mxSafeFrame ≤ nBackfill 时不拷页、不 fsync），只尝试 WAL_WRITE_LOCK（wal.c:4459）和 WAL_READ_LOCK(1..N-1) 排他锁（wal.c:2445-2449）。
-   *   busy_timeout=0：拿不到锁立即返回 busy=1，不等待。成功 = 当时没有读者占用非 0 read mark，且 nBackfill == mxFrame 后新读者只用
-   *   READ_LOCK(0)，所以下一次写的 walRestartLog（wal.c:3976-3997）必然从文件头写起。
-   * - 在主连接上做而不是在 worker 里做：RESTART/TRUNCATE 要拿 WAL_WRITE_LOCK，worker 持有期间主连接的 BEGIN IMMEDIATE（busy_timeout=0）
-   *   会直接 SQLITE_BUSY，保存失败；主线程单线程，执行 RESTART 时主连接不可能在事务中，不会和保存抢写锁。
-   */
-  private tryRestart(): RestartResult | undefined {
-    try { if (this.options.restartNeeded && !this.options.restartNeeded()) return undefined } catch { return undefined }
-    const h = readWalIndexHeader(this.path)
-    if (!h) return { ok: false, skipped: 'unread' }
-    if (h.mxFrame === 0) return { ok: true, skipped: 'empty' }
-    if (h.nBackfill < h.mxFrame) return { ok: false, skipped: 'pending' }
-    try {
-      const row = this.options.restartLog!()
-      return { ok: row.busy === 0 && row.checkpointed >= row.log, busy: row.busy, log: row.log, checkpointed: row.checkpointed }
-    } catch (error) {
-      return { ok: false, error: String((error as Error)?.message ?? error) }
-    }
   }
 
   private readGeneration(): number | undefined {
