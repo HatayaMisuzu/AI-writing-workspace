@@ -8,6 +8,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { DatabaseSync } from 'node:sqlite'
+import type { Worker } from 'node:worker_threads'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { AppDatabase, QUIT_CLOSE_LIMIT_MS, type AppDatabaseOptions } from '../src/main/database/database'
@@ -16,11 +17,25 @@ import { ProjectService } from '../src/main/services/project-service'
 import { DocumentService } from '../src/main/services/document-service'
 import { readWalState } from './helpers/wal-index'
 
-vi.setConfig({ testTimeout: 300_000 })
+vi.setConfig({ testTimeout: 300_000, hookTimeout: 60_000 })
 const dirs: string[] = []
 const dbs: AppDatabase[] = []
-afterEach(() => {
-  for (const db of dbs.splice(0)) { try { db.close() } catch { /* 已关闭 */ } }
+/** 测试侧记录的检查点 worker（含被 terminate 的）：删临时目录前必须等它们真正 'exit'（Windows 上 worker 连接未关时 unlink 会 EBUSY） */
+const workers = new Set<Worker>()
+const workerOf = (db: AppDatabase): Worker | undefined => (db.checkpointer as unknown as { worker?: Worker } | undefined)?.worker
+const trackWorker = (db: AppDatabase): void => {
+  const cp = db.checkpointer
+  if (!cp) return
+  const terminate = cp.terminate.bind(cp)
+  cp.terminate = () => { const w = workerOf(db); if (w) workers.add(w); terminate() }
+}
+const exited = (w: Worker): Promise<void> => new Promise((resolve) => { if (w.threadId < 0) resolve(); else { w.once('exit', () => resolve()); if (w.threadId < 0) resolve() } })
+afterEach(async () => {
+  for (const db of dbs.splice(0)) {
+    const w = workerOf(db); if (w) workers.add(w)
+    await db.closeAsync()
+  }
+  for (const w of [...workers]) { await exited(w); workers.delete(w) }
   dirs.splice(0).forEach((d) => rmSync(d, { recursive: true, force: true }))
 })
 const tempDir = (): string => { const d = mkdtempSync(join(tmpdir(), 'inkstone-hw6fix-')); dirs.push(d); return d }
@@ -41,7 +56,7 @@ const REP = 2000
 const text = (i: number): string => `第${i}次保存` + SENT.repeat(REP)
 
 function open(options: AppDatabaseOptions = {}, path = join(tempDir(), 'inkstone.sqlite')) {
-  const db = new AppDatabase(path, options); dbs.push(db)
+  const db = new AppDatabase(path, options); dbs.push(db); trackWorker(db)
   const project = new ProjectService(db).create({ title: '大章', projectType: 'novel', description: '' })
   const docs = new DocumentService(db)
   const chapter = docs.listTree(project.id).find((n) => n.type === 'chapter')!
