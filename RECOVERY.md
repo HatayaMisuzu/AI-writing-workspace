@@ -64,7 +64,7 @@
 
 ## 依据
 
-基于 origin/main `5679058ea0344773a523fee14b80ae46b75768fa`。
+基于合入 #55 后的 main。
 
 - 自动保存节奏与 flush 路径：`src/renderer/src/services/save-coordinator.ts:10–16,43–56`（`SAVE_IDLE_DELAY_MS = 700`、`SAVE_MAX_WAIT_MS = 2000`、`schedule`、`flush`）。卡顿时可能更晚：定时器依赖 `setTimeout`（06-release-gap.md「保存调度没有兜底」）。
 - 保存在事务内：`src/main/services/document-service.ts:227`（`saveContent` → `db.transaction`）；事务实现 `src/main/database/database.ts:259`（`BEGIN IMMEDIATE`）。
