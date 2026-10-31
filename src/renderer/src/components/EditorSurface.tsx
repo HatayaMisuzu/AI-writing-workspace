@@ -18,6 +18,7 @@ import { docEdgeNavigationPlugin, revealDocEdge } from '../services/doc-edge-nav
 import { revealPos } from '../services/find-highlight'
 import { isStaleContent } from '../services/content-adoption'
 import { createFrameCoalescer } from '../services/frame-coalescer'
+import { syncSelectionToDom } from '../services/select-all-dom-sync'
 import { NameMatcher, termsFromCharacters } from '../../../shared/name-matcher'
 import { CHARACTERS_CHANGED_EVENT, HOVER_DEGRADE_NOTICE, characterHoverPlugin, hitAt, ignoreHoverAt, isHoverDegraded, setHoverMatcher, type DecoratedHit } from '../services/character-hover'
 import { CharacterHoverCard } from './CharacterHoverCard'
@@ -129,6 +130,11 @@ export function EditorSurface({ node, content, focusMode, onFocusMode, onSaved, 
   const chunkExtension = useMemo(() => Extension.create({ name: 'longParagraphChunks', addProseMirrorPlugins: () => [longParagraphChunksPlugin()] }), [])
   const docEdgeExtension = useMemo(() => Extension.create({ name: 'docEdgeNavigation',
     addProseMirrorPlugins: () => [docEdgeNavigationPlugin({ reveal: (_view, _pos, edge) => { void revealDocEdge(writingPageRef.current?.parentElement, edge) } })] }), [])
+  // U03：全选后不管 PM 是否认为选区「没变」，都把当前非空 PM 选区写回 DOM（见 select-all-dom-sync.ts）
+  const selectAllExtension = useMemo(() => Extension.create({ name: 'selectAllDomSync', priority: 1000,
+    addKeyboardShortcuts() {
+      return { 'Mod-a': () => { const handled = this.editor.commands.selectAll(); syncSelectionToDom(this.editor.view); return handled } }
+    } }), [])
   const hoverExtension = useMemo(() => Extension.create({ name: 'characterHover',
     addProseMirrorPlugins: () => [characterHoverPlugin({ onShortcut: () => shortcutRef.current?.() })] }), [])
   useEffect(() => {
@@ -144,7 +150,7 @@ export function EditorSurface({ node, content, focusMode, onFocusMode, onSaved, 
     { ignoredTerms: hoverPrefs.ignoredTerms, enabledSingleTerms: hoverPrefs.enabledSingleTerms }) : null, [characters, hoverPrefs])
 
   const editor = useEditor({
-    extensions: [StarterKit, CharacterCount, Placeholder.configure({ placeholder: '从这里开始写……' }), hoverExtension, chunkExtension, docEdgeExtension],
+    extensions: [StarterKit, CharacterCount, Placeholder.configure({ placeholder: '从这里开始写……' }), hoverExtension, chunkExtension, docEdgeExtension, selectAllExtension],
     content: content.editorJson,
     editorProps: { attributes: { class: 'manuscript-editor', spellcheck: 'false' } },
     onUpdate: ({ editor: activeEditor }) => {

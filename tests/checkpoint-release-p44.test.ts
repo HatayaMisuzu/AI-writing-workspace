@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { AppDatabase, type AppDatabaseOptions } from '../src/main/database/database'
@@ -7,6 +7,7 @@ import { ProjectService } from '../src/main/services/project-service'
 import { DocumentService } from '../src/main/services/document-service'
 import { WritingDailyService } from '../src/main/services/writing-daily-service'
 import { fmtWalState, readWalState } from './helpers/wal-index'
+import { readStripped } from './helpers/source-guard'
 
 // P3 PR-44（组长 2026-10-30 20:52）：暂停释放条件 = 某轮 checkpointed == log 且该轮期间主连接无新写入（写入代数）；
 // 暂停期间写入合并补做；上限 maxRounds / maxMs 降级并告警。诊断 run 41055697997：检查点期间的保存让 WAL 无法复用，
@@ -209,7 +210,7 @@ describe('I：quiet===true 才释放（未提供 generation 不得误释放）',
   })
 
   it('源码守卫：释放条件必须是 outcome.quiet === true（不得用 !== false，避免 undefined 误释放）', () => {
-    const src = readFileSync(resolve('src/main/database/database.ts'), 'utf8')
+    const src = readStripped(resolve('src/main/database/database.ts'))
     expect(src).toMatch(/if \(outcome\.quiet === true\)/)
     expect(src).not.toMatch(/outcome\.quiet !== false/)
   })

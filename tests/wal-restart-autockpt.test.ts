@@ -6,8 +6,8 @@
  *
  * 复现：真实临时库，批量写出远超阈值的 WAL → 在 worker PASSIVE 开始前用另一条连接开读事务占住非 0 的 read mark →
  * worker PASSIVE 收敛（checkpointed == log）→ 小保存 → 释放读连接 → 再一次小保存。
- * 修复设计（wal-checkpointer）：PASSIVE 收敛后做一次不等待的 RESTART，确认下一次写会从 WAL 文件头开始后才恢复 wal_autocheckpoint；
- * 拿不到锁（读连接仍占 read mark）时不恢复，下一轮再试。所以断言是：
+ * 修复设计（wal-checkpointer）：不主动做 RESTART；PASSIVE 收敛后等 WAL 自然回到文件头（读连接释放 read mark 后下一次写从 WAL 文件头开始），确认之后才恢复 wal_autocheckpoint；
+ * WAL 还没回到文件头（读连接仍占 read mark）时不恢复，下一轮再看。所以断言是：
  *   (a) 保存时要么 autocheckpoint 尚未恢复（=0），要么本次写从文件头开始（mxFrame 很小）；
  *   (b) COMMIT 里没有同步回写（nBackfill 前后不变，且后台 worker 不在跑）。
  * 断言不依赖计时。诊断字段见 CommitRecord（database.ts）。
@@ -107,7 +107,7 @@ describe('P3 后台 PASSIVE 收敛后的第一次保存不在 COMMIT 里同步�
     const autoAtSave2 = s.db.autoCheckpoint
     const save2 = smallSave(s)
     log('held-reader', { threshold: THRESHOLD, afterBulk, last: s.cp.last, autoAtSave1, shmAtSave1, save1, autoAtSave2, save2 })
-    // (a) 修复后：读连接占锁 → RESTART 拿不到锁 → autocheckpoint 不恢复；或者本次写已从文件头开始
+    // (a) 修复后：读连接占 read mark → WAL 回不到文件头 → autocheckpoint 不恢复；或者 WAL 已自然回到文件头、本次写从文件头开始
     expect.soft(autoAtSave1 === 0 || (save1.mxFrameAfter ?? Infinity) < THRESHOLD, `save1 autoCheckpoint=${autoAtSave1} mxFrameBefore=${save1.mxFrameBefore} mxFrameAfter=${save1.mxFrameAfter} walRestarted=${save1.walRestarted}`).toBe(true)
     // (b) COMMIT 里没有同步回写
     // checkpointerBusy 只记录不断言：修复后 save1 在暂停期间提交会请求补做一轮，worker 此时处于注入的 300ms 延迟中（未开始 PASSIVE），nBackfill 不会被它改动
