@@ -963,6 +963,59 @@ try {
     }
   })
 
+  // U03 前置变体：复刻诊断轮 d8bf523 (b)：1093 宽先跑一轮（全选 → 点编辑区 → 查找 → Escape），再切 1150 走 Ctrl+A → 点编辑区 → Ctrl+A。不勾「正则」。
+  await record('U03 前置变体：1093 查找 Escape 后切 1150，点编辑区后再全选', async () => {
+    const page = running.page
+    const viewport = page.viewportSize()
+    const height = viewport?.height ?? 860
+    try {
+      await openChapter(page, '悬停章')
+      const editor = page.locator('.manuscript-editor')
+      await page.locator('.manuscript-editor', { hasText: '林栀推门进来' }).waitFor()
+      const diag = () => page.evaluate(() => {
+        const sel = window.getSelection()
+        return { domLen: sel?.toString().length ?? 0, collapsed: sel?.isCollapsed ?? null, chip: document.querySelector('.selection-chip')?.textContent ?? null,
+          active: document.activeElement?.className ?? document.activeElement?.tagName ?? null }
+      })
+      const log = async (label) => { const d = await diag(); process.stdout.write(`e2e U03 variant ${process.platform} ${label}: ${JSON.stringify(d)}\n`); return d }
+
+      // 1093 轮
+      await page.setViewportSize({ width: 1093, height })
+      await editor.click()
+      await page.keyboard.press('Control+A')
+      await page.locator('.assistant-panel .selection-chip').waitFor({ timeout: 3_000 })
+      await log('1093 after Ctrl+A')
+      await editor.click()
+      await page.keyboard.press('Control+Home')
+      await page.keyboard.press('Control+f')
+      await page.getByLabel('查找', { exact: true }).fill('林栀')
+      await page.getByTestId('find-count').filter({ hasText: '共' }).waitFor({ timeout: 2_000 })
+      await page.getByLabel('查找', { exact: true }).press('Escape')
+      await page.getByTestId('find-panel').waitFor({ state: 'detached', timeout: 2_000 })
+      await log('1093 after find Escape')
+
+      // 1150 轮
+      await page.setViewportSize({ width: 1150, height })
+      await editor.press('Control+A')
+      const afterFirst = await log('1150 after first Ctrl+A')
+      assert.ok(afterFirst.domLen > 0, `前置变体 1150 首次全选后 DOM 选区应非空：${JSON.stringify(afterFirst)}`)
+      await editor.click()
+      await log('1150 after editor.click')
+      await editor.press('Control+A')
+      const afterSecond = await diag()
+      const modifyEnabled = await page.getByRole('button', { name: '修改', exact: true }).isEnabled()
+      process.stdout.write(`e2e U03 variant ${process.platform} 1150 after second Ctrl+A: ${JSON.stringify({ ...afterSecond, modifyEnabled })}\n`)
+      assert.ok(afterSecond.domLen > 0, `前置变体：点编辑区后再全选，DOM 选区应非空：${JSON.stringify(afterSecond)}`)
+      assert.match(afterSecond.chip ?? '', /已选择 \d+ 字/, `前置变体：点编辑区后再全选，chip 应仍在：${JSON.stringify(afterSecond)}`)
+      assert.equal(modifyEnabled, true, `前置变体：点编辑区后再全选，「修改」应可用：${JSON.stringify({ ...afterSecond, modifyEnabled })}`)
+    } finally {
+      if (viewport) await page.setViewportSize(viewport)
+      else await page.setViewportSize({ width: 1400, height: 860 })
+      await page.locator('.assistant-panel').waitFor().catch(() => undefined)
+      await openChapter(page, '悬停章').catch(() => undefined)
+    }
+  })
+
   await record('F14 ⑩ 「此别名不提示」后下划线消失，重启后仍不提示', async () => {
     let page = running.page
     await hitLocator(page, '林栀').first().hover()
