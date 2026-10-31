@@ -344,14 +344,7 @@ export function EditorSurface({ node, content, focusMode, onFocusMode, onSaved, 
   useEffect(() => {
     if (!editor || editor.isDestroyed) return
     setHoverMatcher(editor.view, hoverMatcher)
-    // F14 B+：匹配器更换（人物/偏好变化）不再无条件关卡。按新装饰在原位置重取命中：
-    // 同一 term 仍命中 → 用新命中刷新（人物 ids 以新数据为准，卡片内容由当前 characters 渲染）；否则关闭。
-    setHoverCard((previous) => {
-      if (!previous) return previous
-      const next = hitAt(editor.state, previous.hit.pmFrom)
-      if (!next || next.term !== previous.hit.term || next.pmFrom !== previous.hit.pmFrom) return undefined
-      return { hit: next, position: previous.position }
-    })
+    setHoverCard(undefined)
     setHoverDegraded(isHoverDegraded(editor.state))
     const onTransaction = (): void => setHoverDegraded(isHoverDegraded(editor.state))
     editor.on('transaction', onTransaction)
