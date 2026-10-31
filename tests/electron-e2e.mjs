@@ -985,18 +985,21 @@ try {
     await page.mouse.move(5, 5)
     await card.waitFor({ state: 'detached', timeout: 2_000 })
     assert.equal(await card.count(), 0, '开始前无残留卡片')
-    const setNotes = (suffix) => page.evaluate(async ({ projectId, characterId, suffix }) => {
+    // 触发：给林栀加一个正文里不出现的别名 → matcher 变化，林栀仍命中
+    const extraAlias = 'F14b不在正文的别名'
+    const listAliases = () => page.evaluate(async ({ projectId, characterId }) => (await window.workspace.characters.list(projectId)).find((item) => item.id === characterId).aliases, { projectId: ids.projectId, characterId: f14.characterId })
+    const setAliases = (aliases) => page.evaluate(async ({ projectId, characterId, aliases }) => {
       const current = (await window.workspace.characters.list(projectId)).find((item) => item.id === characterId)
-      const base = current.notes.replace(/F14b-notes-bump$/, '')
-      await window.workspace.characters.save({ id: current.id, projectId, name: current.name, aliases: current.aliases, notes: base + suffix, fields: current.fields })
+      await window.workspace.characters.save({ id: current.id, projectId, name: current.name, aliases, notes: current.notes, fields: current.fields })
       window.dispatchEvent(new CustomEvent('workspace:characters-changed', { detail: { projectId } }))
-    }, { projectId: ids.projectId, characterId: f14.characterId, suffix })
+    }, { projectId: ids.projectId, characterId: f14.characterId, aliases })
+    const originalAliases = await listAliases()
     const oldHit = await hitLocator(page, '林栀').first().elementHandle()
     await hitLocator(page, '林栀').first().hover()
     await page.waitForFunction(() => document.querySelector('[data-testid="character-hover-card"]')?.getAttribute('aria-label') === '人物卡 · 林栀', undefined, { timeout: 2_000 })
     try {
-      await setNotes('F14b-notes-bump')
-      await page.waitForFunction(async ({ projectId }) => (await window.workspace.characters.list(projectId)).some((item) => item.notes.endsWith('F14b-notes-bump')), { projectId: ids.projectId }, { timeout: 2_000 })
+      await setAliases([...originalAliases, extraAlias])
+      assert.ok((await listAliases()).includes(extraAlias), '新别名已保存')
       // 确定性等待装饰重建：旧 hit 节点脱离 DOM，或出现不同于旧节点的新「林栀」命中节点
       await page.waitForFunction((old) => !old.isConnected || [...document.querySelectorAll('.character-hit')].some((el) => el !== old && el.textContent === '林栀'), oldHit, { timeout: 2_000 })
         .catch((error) => { throw new Error(`2000ms 内未观察到装饰重建（旧林栀 hit 仍连在 DOM 且无新林栀 hit 节点）：${error.message}`) })
@@ -1004,7 +1007,8 @@ try {
       await page.mouse.move(5, 5)
       await card.waitFor({ state: 'detached', timeout: 2_000 })
     } finally {
-      await setNotes('')
+      await setAliases(originalAliases)
+      assert.deepEqual(await listAliases(), originalAliases, 'finally 恢复原别名')
     }
     assert.equal(await card.count(), 0, '结束后无残留卡片')
   })
