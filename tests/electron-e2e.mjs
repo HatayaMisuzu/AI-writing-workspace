@@ -911,6 +911,38 @@ try {
     assert.deepEqual(await docState(page, f14.hover), before, '悬停/快捷键前后 editor_json 和 revision 不变')
   })
 
+  // F14 产品 B+ 主动复现（悬停掉卡）：卡已打开后触发 matcher 更换，断言卡仍在或短时再现。
+  // 人物设置页会切走 section 卸载 EditorSurface，无法在真 UI 上「边悬停边改人物」；
+  // 故用与 ProjectViews.flush 相同的产物路径：IPC save + 派发 workspace:characters-changed（renderer 内部事件，不改 main/preload/IPC）。
+  await record('F14 悬停卡：characters-changed 更换 matcher 后卡片仍在或短时再现', async () => {
+    const page = running.page
+    await openChapter(page, '悬停章')
+    await waitHitStable(page, '林栀')
+    const hit = hitLocator(page, '林栀').first()
+    await hit.hover()
+    const card = page.getByTestId('character-hover-card')
+    await card.waitFor({ timeout: 2_000 })
+    assert.match(await card.innerText(), /林栀/)
+    // 新增正文已有的「顾言」→ 匹配器项变化且可观测新下划线，证明 hoverMatcher effect / setMatcher 已执行
+    const extraId = await page.evaluate(async ({ projectId }) => {
+      const saved = await window.workspace.characters.save({ projectId, name: '顾言', aliases: [], notes: 'F14b-matcher-bump' })
+      window.dispatchEvent(new CustomEvent('workspace:characters-changed', { detail: { projectId } }))
+      return saved.id
+    }, { projectId: ids.projectId })
+    try {
+      await hitLocator(page, '顾言').waitFor({ timeout: 2_000 })
+      // 未修时 EditorSurface.tsx:347 无条件关卡；鼠标仍在「林栀」上但 mouseover 不重燃 → 期望此处红
+      await card.waitFor({ timeout: 2_000 })
+      assert.match(await card.innerText(), /林栀/)
+    } finally {
+      await page.evaluate(async ({ projectId, extraId }) => {
+        await window.workspace.characters.delete(projectId, extraId)
+        window.dispatchEvent(new CustomEvent('workspace:characters-changed', { detail: { projectId } }))
+      }, { projectId: ids.projectId, extraId })
+      await page.waitForFunction(() => ![...document.querySelectorAll('.manuscript-editor .character-hit')].some((el) => el.textContent.includes('顾言')), undefined, { timeout: 2_000 }).catch(() => undefined)
+    }
+  })
+
   await record('F14 ⑩ 「此别名不提示」后下划线消失，重启后仍不提示', async () => {
     let page = running.page
     await hitLocator(page, '林栀').first().hover()
