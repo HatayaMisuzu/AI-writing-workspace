@@ -418,9 +418,52 @@ try {
   await running.page.getByRole('button', { name: '继续写作' }).click()
   await running.page.locator('.manuscript-editor').waitFor()
 
+// [F14DIAG] 诊断（只记录、不断言）：.character-hit 增删、编辑器根替换、选区、chip、resize、降级、CSS 高亮
+const diagInstall = (page, tag) => page.evaluate((tag) => {
+  const old = window.__f14diag
+  if (old) { old.mo.disconnect(); document.removeEventListener('selectionchange', old.onSel); window.removeEventListener('resize', old.onResize) }
+  const ids = window.__f14ids ?? (window.__f14ids = new WeakMap()); window.__f14seq ??= 0
+  const idOf = (n) => { if (!ids.has(n)) ids.set(n, ++window.__f14seq); return ids.get(n) }
+  const t0 = performance.now(); const ev = []
+  const log = (type, data) => { if (ev.length < 400) ev.push({ t: Math.round(performance.now() - t0), type, ...data }) }
+  const hl = () => (typeof CSS !== 'undefined' && CSS.highlights ? CSS.highlights.size : 'NOT_SUPPORTED')
+  const chip = () => document.querySelector('.selection-chip')?.textContent ?? null
+  const hitsIn = (n) => n.nodeType !== 1 ? [] : [...(n.matches('.character-hit') ? [n] : []), ...n.querySelectorAll('.character-hit')]
+  let root = document.querySelector('.manuscript-editor'); if (root) idOf(root)
+  let degraded = Boolean(document.querySelector('[data-testid="hover-degraded"]')); let lastHl = hl()
+  const mo = new MutationObserver((list) => {
+    for (const m of list) {
+      if (m.type === 'attributes') { if (m.target.classList?.contains('character-hit') || m.oldValue?.includes('character-hit')) log('hit-attr', { id: idOf(m.target), attr: m.attributeName, old: m.oldValue, text: m.target.textContent }); continue }
+      for (const n of m.removedNodes) { for (const h of hitsIn(n)) log('hit-removed', { id: idOf(h), text: h.textContent, connected: h.isConnected }); if (n.nodeType === 3 && m.target.closest?.('.manuscript-editor')) log('text-removed', { parent: m.target.className || m.target.tagName, text: n.textContent.slice(0, 12) }) }
+      for (const n of m.addedNodes) { for (const h of hitsIn(n)) log('hit-added', { id: idOf(h), text: h.textContent }); if (n.nodeType === 3 && m.target.closest?.('.manuscript-editor')) log('text-added', { parent: m.target.className || m.target.tagName, text: n.textContent.slice(0, 12) }) }
+    }
+    const now = document.querySelector('.manuscript-editor')
+    if (now !== root) { log('editor-root-replaced', { from: root ? idOf(root) : null, to: now ? idOf(now) : null }); root = now }
+    const d = Boolean(document.querySelector('[data-testid="hover-degraded"]')); if (d !== degraded) { log('degraded', { degraded: d }); degraded = d }
+    const h = hl(); if (h !== lastHl) { log('css-highlights', { size: h }); lastHl = h }
+  })
+  mo.observe(document.body, { subtree: true, childList: true, attributes: true, attributeOldValue: true, attributeFilter: ['class', 'data-term', 'data-character-ids'] })
+  const onSel = () => { const s = window.getSelection(); const r = s && s.rangeCount ? s.getRangeAt(0) : null
+    log('selectionchange', { rangeCount: s?.rangeCount ?? 0, collapsed: r ? r.collapsed : null, len: s ? s.toString().length : 0,
+      startConnected: r ? r.startContainer.isConnected : null, endConnected: r ? r.endContainer.isConnected : null, chip: chip(), active: document.activeElement?.className ?? null }) }
+  const onResize = () => log('resize', { w: window.innerWidth, h: window.innerHeight })
+  document.addEventListener('selectionchange', onSel); window.addEventListener('resize', onResize)
+  window.__f14diag = { mo, onSel, onResize, ev, log }
+  log('install', { tag, w: window.innerWidth, h: window.innerHeight, hits: document.querySelectorAll('.manuscript-editor .character-hit').length, degraded, cssHighlights: hl(), chip: chip(), editorRootId: root ? idOf(root) : null })
+}, tag).catch((e) => process.stdout.write(`[F14DIAG] install failed ${e.message}\n`))
+const diagMark = (page, label) => page.evaluate((label) => { const s = window.getSelection(); window.__f14diag?.log('mark', { label, len: s ? s.toString().length : 0, rangeCount: s?.rangeCount ?? 0, chip: document.querySelector('.selection-chip')?.textContent ?? null, modifyDisabled: [...document.querySelectorAll('button')].find((b) => b.textContent.trim() === '修改')?.disabled ?? null, card: Boolean(document.querySelector('[data-testid="character-hover-card"]')) }) }, label).catch(() => undefined)
+const diagDump = async (page, tag) => {
+  const ev = await page.evaluate(() => { const d = window.__f14diag; if (!d) return null; d.mo.disconnect(); document.removeEventListener('selectionchange', d.onSel); window.removeEventListener('resize', d.onResize); window.__f14diag = undefined; return d.ev }).catch((e) => [{ type: 'dump-failed', error: e.message }])
+  process.stdout.write(`[F14DIAG] ${tag} ${process.platform} NOT FOUND: recompute/setMatcher/viewport 事件无页面信号（只能由 hit-removed/added/hit-attr 推断）；hoverMatcher 更换次数无页面信号\n`)
+  for (const e of ev ?? [{ type: 'no-diag' }]) process.stdout.write(`[F14DIAG] ${tag} ${process.platform} ${JSON.stringify(e)}\n`)
+}
+
   await record('U03 同字跨章编辑提案仍绑定来源章', async () => {
+    await diagInstall(running.page, 'u03')
     await running.page.locator('.manuscript-editor').press('Control+A')
+    await diagMark(running.page, 'before-modify-click')
     await running.page.getByRole('button', { name: '修改', exact: true }).click()
+    await diagMark(running.page, 'after-modify-click'); await diagDump(running.page, 'u03')
     const input = running.page.getByPlaceholder('和同行者聊聊这部作品…')
     await input.fill('请修改选中的文字')
     await running.page.getByRole('button', { name: '发送' }).click()
@@ -854,6 +897,7 @@ try {
   await record('F14 ⑨ 悬停「林栀」弹出只读卡片；Esc 关闭；Ctrl+Shift+K 打开；editor_json 与 revision 不变', async () => {
     const page = running.page
     await openChapter(page, '悬停章')
+    await diagInstall(page, 'f14-9')
     await hitLocator(page, '林栀').first().waitFor()
     assert.equal(await hitLocator(page, '顾言').count(), 0)
     // 单字别名「栀」默认不参与：全文只有「林栀」「阿栀」两处下划线
@@ -884,8 +928,10 @@ try {
         const file = join(process.cwd(), 'e2e-artifacts', `f14-hover-trace-${process.platform}.zip`)
         try { mkdirSync(dirname(file), { recursive: true }); await tracing.stop({ path: file }); process.stdout.write(`F14 trace saved ${file}\n`) } catch (e) { process.stdout.write(`F14 trace save failed (${e.message})\n`) }
       }
+      await diagDump(page, 'f14-9')
       throw error
     }
+    await diagDump(page, 'f14-9')
     if (traced) await tracing.stop().catch(() => undefined)
     const text = await card.innerText()
     assert.match(text, /林栀/)
@@ -909,6 +955,30 @@ try {
     await page.waitForTimeout(1_500)
     assert.equal(await page.getByText('已保存', { exact: true }).count(), 1)
     assert.deepEqual(await docState(page, f14.hover), before, '悬停/快捷键前后 editor_json 和 revision 不变')
+    // [F14DIAG] 只记录不断言：主宽度与 1093 宽度下各做一轮「Ctrl+A 静置 1.5s」与「悬停林栀等卡 2s」
+    const diagViewport = page.viewportSize()
+    for (const width of [null, 1093]) {
+      const tag = width ? 'w1093' : 'main'
+      if (width) await page.setViewportSize({ width, height: diagViewport?.height ?? 800 }).catch(() => undefined)
+      await diagInstall(page, `${tag}-select`)
+      await page.locator('.manuscript-editor').click().catch(() => undefined)
+      await page.keyboard.press('Control+A')
+      await diagMark(page, 'after-ctrl-a')
+      await page.waitForTimeout(1_500)
+      await diagMark(page, 'after-1500ms')
+      await diagDump(page, `${tag}-select`)
+      await page.mouse.move(5, 5)
+      await hitLocator(page, '林栀').first().click().catch(() => undefined)
+      await page.mouse.move(5, 5)
+      await diagInstall(page, `${tag}-hover`)
+      await hitLocator(page, '林栀').first().hover().catch(() => undefined)
+      await diagMark(page, 'after-hover')
+      const shown = await page.getByTestId('character-hover-card').waitFor({ timeout: 2_000 }).then(() => true, () => false)
+      await diagMark(page, `card-${shown ? 'shown' : 'timeout'}`)
+      await diagDump(page, `${tag}-hover`)
+      await page.keyboard.press('Escape'); await page.mouse.move(5, 5)
+    }
+    if (diagViewport) await page.setViewportSize(diagViewport).catch(() => undefined)
   })
 
   await record('F14 ⑩ 「此别名不提示」后下划线消失，重启后仍不提示', async () => {
