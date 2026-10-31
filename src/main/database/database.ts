@@ -2,7 +2,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { mkdirSync, statSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { schema } from './schema'
-import { WalCheckpointer, type WalCheckpointerOptions } from './wal-checkpointer'
+import { WalCheckpointer, autoCheckpointPagesFor, type WalCheckpointerOptions } from './wal-checkpointer'
 
 export const CURRENT_SCHEMA_VERSION = 10
 /** 退出时等后台检查点 worker 关闭的上限（ms）；超时则 terminate worker、直接关主连接后退出（P3 PR-42）。 */
@@ -33,6 +33,8 @@ export interface QuitSegments {
   walBytesBeforeClose: number
   checkpointOk: boolean
   workerLimitMs: number
+  /** H-W6：进入退出时 worker 正卡在一次尝试里 → 已立即 terminate（不等 close） */
+  terminatedInFlight?: boolean
 }
 export interface QuitResult { timedOut: boolean; ms: number; segments?: QuitSegments }
 
@@ -89,7 +91,16 @@ export class AppDatabase {
     this.releaseMaxRounds = options.release?.maxRounds ?? RELEASE_MAX_ROUNDS
     this.releaseMaxMs = options.release?.maxMs ?? RELEASE_MAX_MS
     if (path !== ':memory:' && options.checkpointer !== false) {
-      this.checkpointer = new WalCheckpointer(path, { ...(options.checkpointer ?? {}), generation: () => this.writeGeneration() })
+      this.checkpointer = new WalCheckpointer(path, {
+        ...(options.checkpointer ?? {}),
+        generation: () => this.writeGeneration(),
+        shouldTrigger: () => !this.isClosed && this.autoCheckpointHolds === 0
+      })
+      // H-W6：wal_autocheckpoint 只作保底，阈值 ≈ 6MB 帧（上界 = 6MB + 一次提交），按实际 page_size 计算（见 wal-checkpointer.ts 顶部注释）
+      if (this.checkpointer.triggerBytes !== undefined) {
+        const pageSize = Number((this.raw.prepare('PRAGMA page_size').get() as { page_size: number }).page_size)
+        this.raw.exec(`PRAGMA wal_autocheckpoint = ${autoCheckpointPagesFor(pageSize)}`)
+      }
     }
   }
 
@@ -125,12 +136,21 @@ export class AppDatabase {
     if (this.isClosed) return { timedOut: false, ms: 0 }
     const workerLimitMs = Math.max(0, limitMs - reserveMs)
     let timer: ReturnType<typeof setTimeout> | undefined
-    const timedOut = await Promise.race([
-      (this.checkpointer?.close() ?? Promise.resolve()).then(() => false, () => false),
-      new Promise<boolean>((resolve) => { timer = setTimeout(() => resolve(true), workerLimitMs) })
-    ])
-    if (timer) clearTimeout(timer)
-    if (timedOut) this.checkpointer?.terminate()
+    let timedOut = false
+    // H-W6 方案①：worker 正卡在一次尝试里（未回消息）→ 立即 terminate，不再等 close() 的 2s；
+    // 没回写完的部分由下面的 TRUNCATE 重做。terminate 打断不了正在执行的原生 SQLite 调用：若 worker 仍在底层检查点里持 CKPT 锁，
+    // TRUNCATE 立即返回 busy=1（不调 busy handler，主连接 busy_timeout=0），只记录；随后 close 因 worker 连接仍在而不做检查点，
+    // 已提交数据留在 WAL，下次打开由 SQLite 恢复。
+    const terminatedInFlight = Boolean(this.checkpointer?.attemptInFlight)
+    if (terminatedInFlight) this.checkpointer?.terminate()
+    else {
+      timedOut = await Promise.race([
+        (this.checkpointer?.close() ?? Promise.resolve()).then(() => false, () => false),
+        new Promise<boolean>((resolve) => { timer = setTimeout(() => resolve(true), workerLimitMs) })
+      ])
+      if (timer) clearTimeout(timer)
+      if (timedOut) this.checkpointer?.terminate()
+    }
     const workerEnd = performance.now()
     const walBytesBeforeCheckpoint = this.walFileBytes()
     let checkpointOk = false
@@ -146,7 +166,7 @@ export class AppDatabase {
     const closeEnd = performance.now()
     const segments: QuitSegments = {
       workerMs: Math.round(workerEnd - started), checkpointMs: Math.round(checkpointEnd - workerEnd), mainCloseMs: Math.round(closeEnd - checkpointEnd),
-      walBytesBeforeCheckpoint, walBytesBeforeClose, checkpointOk, workerLimitMs
+      walBytesBeforeCheckpoint, walBytesBeforeClose, checkpointOk, workerLimitMs, terminatedInFlight
     }
     return { timedOut, ms: Math.round(closeEnd - started), segments }
   }
@@ -269,6 +289,8 @@ export class AppDatabase {
         this.writesDuringHold += 1
         void this.checkpointer.request()
       }
+      // H-W6：普通写入后按待回写量请求后台 PASSIVE（批量暂停期间由释放循环负责）
+      if (!held) this.checkpointer?.noteCommit()
       return result
     } catch (error) {
       this.raw.exec('ROLLBACK')
