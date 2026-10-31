@@ -991,12 +991,15 @@ try {
       await window.workspace.characters.save({ id: current.id, projectId, name: current.name, aliases: current.aliases, notes: base + suffix, fields: current.fields })
       window.dispatchEvent(new CustomEvent('workspace:characters-changed', { detail: { projectId } }))
     }, { projectId: ids.projectId, characterId: f14.characterId, suffix })
+    const oldHit = await hitLocator(page, '林栀').first().elementHandle()
     await hitLocator(page, '林栀').first().hover()
     await page.waitForFunction(() => document.querySelector('[data-testid="character-hover-card"]')?.getAttribute('aria-label') === '人物卡 · 林栀', undefined, { timeout: 2_000 })
     try {
       await setNotes('F14b-notes-bump')
       await page.waitForFunction(async ({ projectId }) => (await window.workspace.characters.list(projectId)).some((item) => item.notes.endsWith('F14b-notes-bump')), { projectId: ids.projectId }, { timeout: 2_000 })
-      await page.waitForTimeout(300)
+      // 确定性等待装饰重建：旧 hit 节点脱离 DOM，或出现不同于旧节点的新「林栀」命中节点
+      await page.waitForFunction((old) => !old.isConnected || [...document.querySelectorAll('.character-hit')].some((el) => el !== old && el.textContent === '林栀'), oldHit, { timeout: 2_000 })
+        .catch((error) => { throw new Error(`2000ms 内未观察到装饰重建（旧林栀 hit 仍连在 DOM 且无新林栀 hit 节点）：${error.message}`) })
       assert.equal(await card.getAttribute('aria-label'), '人物卡 · 林栀', '人物数据变化后卡片保留（刷新）')
       await page.mouse.move(5, 5)
       await card.waitFor({ state: 'detached', timeout: 2_000 })
