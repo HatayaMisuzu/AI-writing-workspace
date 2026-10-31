@@ -442,15 +442,34 @@ try {
   await running.page.getByRole('button', { name: '继续写作' }).click()
   await running.page.locator('.manuscript-editor').waitFor()
 
+  // 窄屏辅助（≤1080 宽，与 WorkspaceScreen NARROW_QUERY 一致）：同行者收起为「打开同行者」按钮，面板内容只在抽屉里。
+  const isNarrowLayout = (page) => page.evaluate(() => window.matchMedia('(max-width: 1080px)').matches)
+  // 打开同行者抽屉并返回抽屉作为操作范围；宽布局面板常驻，返回 page；抽屉已开时不再点按钮
+  const openAssistantDrawer = async (page) => {
+    if (!(await isNarrowLayout(page))) return page
+    const drawer = page.getByRole('dialog', { name: '同行者' })
+    if (!(await drawer.count())) await page.getByRole('button', { name: '打开同行者' }).click()
+    await drawer.waitFor()
+    return drawer
+  }
+  // 关同行者抽屉（未打开 / 宽布局时无操作）。抽屉是模态、带遮罩，切章、点编辑区、点其他入口前必须关；用 Esc（抽屉的 document keydown，不受提案抽屉遮挡）
+  const closeAssistantDrawer = async (page) => {
+    const drawer = page.getByRole('dialog', { name: '同行者' })
+    if (!(await drawer.count())) return
+    await page.keyboard.press('Escape')
+    await drawer.waitFor({ state: 'detached' })
+  }
+  // 同行者区域已回来：宽布局等面板，窄布局等「打开同行者」按钮（与 restoreBaseline 同一判断）
+  const waitAssistantShown = async (page) => {
+    if (await isNarrowLayout(page)) await page.getByRole('button', { name: '打开同行者' }).waitFor()
+    else await page.locator('.assistant-panel').waitFor()
+  }
   // 窄屏辅助：≤1080 宽时同行者收起为按钮；先开抽屉，再确认选区仍在（选区提示 +「修改」可用），返回抽屉作为后续操作范围
   const openAssistantKeepingSelection = async (page, label) => {
-    const narrowLayout = await page.evaluate(() => window.matchMedia('(max-width: 1080px)').matches)
-    if (!narrowLayout) return page
+    if (!(await isNarrowLayout(page))) return page
     const domSelection = () => page.evaluate(() => window.getSelection()?.toString().length ?? 0)
     const before = await domSelection()
-    await page.getByRole('button', { name: '打开同行者' }).click()
-    const drawer = page.getByRole('dialog', { name: '同行者' })
-    await drawer.waitFor()
+    const drawer = await openAssistantDrawer(page)
     const chip = await drawer.locator('.selection-chip').textContent({ timeout: 3_000 }).catch(() => null)
     const enabled = await drawer.getByRole('button', { name: '修改', exact: true }).isEnabled().catch(() => false)
     const after = await domSelection()
@@ -615,12 +634,16 @@ try {
   // S8：续写候选须「采用为补丁」才 propose；未接受前正文不变；补丁只绑来源章
   await record('U04 跨章续写候选采用为补丁只写来源章', async () => {
     await openChapter(running.page, '第一章')
-    await running.page.getByRole('button', { name: '续写', exact: true }).click()
-    await running.page.getByPlaceholder('和同行者聊聊这部作品…').fill('请续写一段候选')
-    await running.page.getByRole('button', { name: '发送' }).click()
+    let assistant = await openAssistantDrawer(running.page)
+    await assistant.getByRole('button', { name: '续写', exact: true }).click()
+    await assistant.getByPlaceholder('和同行者聊聊这部作品…').fill('请续写一段候选')
+    await assistant.getByRole('button', { name: '发送' }).click()
+    // 窄屏：切章前必须关抽屉（模态遮罩）。AssistantPanel 收起时只换渲染、组件不卸载（messages 是其 useState），再开抽屉候选应仍在
+    await closeAssistantDrawer(running.page)
     await openChapter(running.page, '第二章')
-    await running.page.getByText('续写候选', { exact: true }).waitFor({ timeout: 15_000 })
-    await running.page.getByRole('button', { name: '采用为补丁' }).last().click()
+    assistant = await openAssistantDrawer(running.page)
+    await assistant.getByText('续写候选', { exact: true }).waitFor({ timeout: 15_000 })
+    await assistant.getByRole('button', { name: '采用为补丁' }).last().click()
     await running.page.getByText('已提出补丁', { exact: true }).waitFor()
     const mid = await running.page.evaluate(async ({ projectId, chapterA, chapterB }) => {
       const patchesA = await window.workspace.patches.list(projectId, chapterA)
@@ -636,7 +659,8 @@ try {
     assert.equal(mid.bProposed, 0, '当前章不应有补丁')
     assert.equal(mid.bodyB, '同字原文。最后一次输入会保存。')
     assert.ok(!mid.bodyA.includes('续写候选'), '接受前来源章正文不应写入候选')
-    // createPatch 会打开提案抽屉，挡住「打开来源章节」；先关再回来源章
+    // createPatch 会打开提案抽屉，挡住「打开来源章节」；先关（窄屏先关同行者抽屉）再回来源章
+    await closeAssistantDrawer(running.page)
     const drawer = running.page.locator('.patch-drawer')
     if (await drawer.count()) await drawer.getByRole('button', { name: '关闭' }).click()
     await openChapter(running.page, '第一章')
@@ -688,21 +712,27 @@ try {
   await record('摘要请求中正文变化不会写成 fresh', async () => {
     streamDelay = 2_000
     const editor = running.page.locator('.manuscript-editor')
-    await running.page.getByRole('button', { name: '理解本章' }).click()
-    await running.page.getByRole('button', { name: '理解中…' }).waitFor()
+    let assistant = await openAssistantDrawer(running.page)
+    await assistant.getByRole('button', { name: '理解本章' }).click()
+    await assistant.getByRole('button', { name: '理解中…' }).waitFor()
+    await closeAssistantDrawer(running.page)
     await editor.fill('摘要请求发出后发生修改')
     await openChapter(running.page, '第二章')
-    await running.page.getByText(/章节理解失败：/).waitFor({ timeout: 15_000 })
+    assistant = await openAssistantDrawer(running.page)
+    await assistant.getByText(/章节理解失败：/).waitFor({ timeout: 15_000 })
+    await closeAssistantDrawer(running.page)
     const status = await running.page.evaluate(({ projectId, chapterA }) => window.workspace.digests.status(projectId, chapterA), ids)
     assert.notEqual(status.state, 'fresh')
     streamDelay = 450
   })
 
   await record('Provider 意外 EOF 在 UI 与持久层标为错误', async () => {
-    await running.page.getByRole('button', { name: '续写', exact: true }).click()
-    await running.page.getByPlaceholder('和同行者聊聊这部作品…').fill('EOF 测试')
-    await running.page.getByRole('button', { name: '发送' }).click()
-    await running.page.getByText(/模型流在完成标记前中断/).waitFor({ timeout: 15_000 })
+    const assistant = await openAssistantDrawer(running.page)
+    await assistant.getByRole('button', { name: '续写', exact: true }).click()
+    await assistant.getByPlaceholder('和同行者聊聊这部作品…').fill('EOF 测试')
+    await assistant.getByRole('button', { name: '发送' }).click()
+    await assistant.getByText(/模型流在完成标记前中断/).waitFor({ timeout: 15_000 })
+    await closeAssistantDrawer(running.page)
     const state = await running.page.evaluate(async (projectId) => {
       const [thread] = await window.workspace.chat.listThreads(projectId)
       const messages = await window.workspace.chat.listMessages(projectId, thread.id, undefined, 50)
@@ -713,10 +743,12 @@ try {
 
   await record('Provider 长请求可取消且不会标为完成', async () => {
     streamDelay = 2_000
-    await running.page.getByPlaceholder('和同行者聊聊这部作品…').fill('请续写取消测试')
-    await running.page.getByRole('button', { name: '发送' }).click()
-    await running.page.getByTitle('取消请求').click()
-    await running.page.getByText(/请求已取消/).waitFor({ timeout: 10_000 })
+    const assistant = await openAssistantDrawer(running.page)
+    await assistant.getByPlaceholder('和同行者聊聊这部作品…').fill('请续写取消测试')
+    await assistant.getByRole('button', { name: '发送' }).click()
+    await assistant.getByTitle('取消请求').click()
+    await assistant.getByText(/请求已取消/).waitFor({ timeout: 10_000 })
+    await closeAssistantDrawer(running.page)
     const state = await running.page.evaluate(async (projectId) => {
       const [thread] = await window.workspace.chat.listThreads(projectId)
       const messages = await window.workspace.chat.listMessages(projectId, thread.id, undefined, 50)
@@ -738,9 +770,11 @@ try {
       return { unsaved, saved }
     }, { anthropicBaseUrl })
     assert.deepEqual(tested, { unsaved: { ok: true }, saved: { ok: true } })
-    await running.page.getByPlaceholder('和同行者聊聊这部作品…').fill('请续写 Anthropic 一句')
-    await running.page.getByRole('button', { name: '发送' }).click()
-    await running.page.getByText('Anthropic 候选', { exact: true }).first().waitFor({ timeout: 15_000 })
+    const assistant = await openAssistantDrawer(running.page)
+    await assistant.getByPlaceholder('和同行者聊聊这部作品…').fill('请续写 Anthropic 一句')
+    await assistant.getByRole('button', { name: '发送' }).click()
+    await assistant.getByText('Anthropic 候选', { exact: true }).first().waitFor({ timeout: 15_000 })
+    await closeAssistantDrawer(running.page)
     const streamed = anthropicRequests.find((item) => item.body.stream === true)
     assert.ok(streamed, '应收到 Anthropic 流式请求')
     assert.equal(streamed.url, '/v1/messages')
@@ -905,7 +939,7 @@ try {
     assert.match(await page.getByTestId('blackroom-words').innerText(), /已写 1[0-9] \/ 8 字/)
     await addLockedDelta(page, before)
     await page.getByTestId('blackroom-finish').click()
-    await page.locator('.assistant-panel').waitFor()
+    await waitAssistantShown(page)
     await page.locator('.works-rail').waitFor()
     assert.equal(await page.getByTestId('blackroom-bar').count(), 0)
     const last = await page.evaluate((projectId) => window.workspace.focus.lastSession(projectId), ids.projectId)
@@ -939,7 +973,7 @@ try {
     await page.getByLabel('紧急出屋确认').fill('我要出屋')
     await addLockedDelta(page, before)
     await page.getByRole('button', { name: '确认出屋' }).click()
-    await page.locator('.assistant-panel').waitFor()
+    await waitAssistantShown(page)
     const last = await page.evaluate((projectId) => window.workspace.focus.lastSession(projectId), ids.projectId)
     assert.equal(last.endedBy, 'emergency')
   })
@@ -954,7 +988,7 @@ try {
     assert.match(await page.getByTestId('blackroom-remaining').innerText(), /剩余 00:00/)
     await addLockedDelta(page, before)
     await page.getByTestId('blackroom-finish').click()
-    await page.locator('.assistant-panel').waitFor()
+    await waitAssistantShown(page)
   })
 
   await record('F15 × 窄屏 900px：抽屉开着时进入小黑屋 → 抽屉关闭、打开按钮不可见、网络 0', async () => {
@@ -1633,7 +1667,7 @@ try {
     await addLockedDelta(page, before)
     await page.getByRole('button', { name: '确认出屋' }).click()
     await page.getByTestId('blackroom-bar').waitFor({ state: 'detached' })
-    await page.locator('.assistant-panel').waitFor()
+    await waitAssistantShown(page)
   })
 
   // ───── F13 校对词表（e2e ⑪–⑭ + 忽略重启保持）。批量只生成提案、全部接受、快照恢复原文、单条 Ctrl+Z、小黑屋不自动校对且网络 0 ─────
@@ -2832,11 +2866,18 @@ try {
       return { p50: q(0.5), p95: q(0.95), max: s.at(-1), n: s.length }
     }
     // [KEYDIAG] 各阶段记录后台检查点状态（busy / WAL 文件字节 / 最近一次 PASSIVE 结果），便于 grep 对照
+    // 诊断：只记日志，接口不可用或调用异常都不抛（返回 undefined）
     const keyDiag = async (stage) => {
-      const d = await page.evaluate(() => window.workspace.diagnostics.walCheckpoint())
-      const info = { stage, busy: d.busy, walBytes: d.walBytes, runs: d.runs, autoCheckpoint: d.autoCheckpoint, last: d.last && { ok: d.last.ok, ms: d.last.ms, log: d.last.log, checkpointed: d.last.checkpointed } }
-      process.stdout.write(`[KEYDIAG] ${JSON.stringify(info)}\n`)
-      return d
+      try {
+        const d = await page.evaluate(() => typeof window.workspace.__devWalCheckpoint === 'function' ? window.workspace.__devWalCheckpoint() : null)
+        if (!d) { process.stdout.write(`[KEYDIAG] ${JSON.stringify({ stage, diag: 'NOT_AVAILABLE' })}\n`); return undefined }
+        const info = { stage, busy: d.busy, walBytes: d.walBytes, runs: d.runs, autoCheckpoint: d.autoCheckpoint, last: d.last && { ok: d.last.ok, ms: d.last.ms, log: d.last.log, checkpointed: d.last.checkpointed } }
+        process.stdout.write(`[KEYDIAG] ${JSON.stringify(info)}\n`)
+        return d
+      } catch (error) {
+        process.stdout.write(`[KEYDIAG] ${JSON.stringify({ stage, diagError: String(error) })}\n`)
+        return undefined
+      }
     }
     // 测按键前确定性等后台安静：worker 空闲（busy=false）且 WAL 文件连续 1s 不再增长；最近一次 PASSIVE 的 log/checkpointed 只记录不作门槛
     // （待回写 ≤1MB 时不会再触发 PASSIVE，last 可能长期停在未完成，作门槛会假超时）。WAL 文件本身不缩（未设 journal_size_limit，见 wal-checkpointer.ts 头注释），所以「回落」按待回写量判断。
@@ -2844,7 +2885,9 @@ try {
     const waitQuiet = async (label) => {
       const started = Date.now(); let stableSince = Date.now(); let prev = -1; let d
       for (;;) {
-        d = await page.evaluate(() => window.workspace.diagnostics.walCheckpoint())
+        // 测量前置（不是诊断）：拿不到就明确失败，不跳过、不退化为固定等待
+        d = await page.evaluate(() => typeof window.workspace.__devWalCheckpoint === 'function' ? window.workspace.__devWalCheckpoint() : null)
+        if (!d) assert.fail(`${label} 前置接口不可用 __devWalCheckpoint（e2e 应为 isPackaged=false 构建）`)
         if (d.walBytes !== prev) { prev = d.walBytes; stableSince = Date.now() }
         if (!d.busy && Date.now() - stableSince >= 1000) break
         if (Date.now() - started > 60_000) assert.fail(`${label} 等后台安静超时 60s：busy=${d.busy} walBytes=${d.walBytes} last=${JSON.stringify(d.last)}`)
@@ -2976,22 +3019,24 @@ try {
     assert.match(await libraryNotice.innerText(), new RegExp(`《${lockedTitle}》正在小黑屋中`))
     // 打开另一本书：提示仍在，AI 报错带书名、无前缀
     await page.locator('.work-row', { hasText: '旁边的书' }).getByRole('button', { name: '继续写作' }).click()
-    await page.locator('.assistant-panel').waitFor()
+    await waitAssistantShown(page)
     await page.getByTestId('focus-lock-notice').waitFor()
     assert.match(await page.getByTestId('focus-lock-notice').innerText(), new RegExp(`《${lockedTitle}》`))
-    await page.getByRole('button', { name: '理解本章' }).click()
+    const assistant = await openAssistantDrawer(page)
+    await assistant.getByRole('button', { name: '理解本章' }).click()
     const digestError = page.locator('.message-content', { hasText: '章节理解失败' })
     await digestError.waitFor({ timeout: 5_000 })
     const digestText = await digestError.innerText()
     assert.ok(digestText.includes(`章节理解失败：《${lockedTitle}》正在小黑屋中`), `理解本章报错应带书名且无前缀，实际 ${digestText}`)
     assert.doesNotMatch(digestText, /FocusLockError|Error invoking/)
-    await page.getByPlaceholder('和同行者聊聊这部作品…').fill('锁定时在另一本书里提问')
-    await page.getByRole('button', { name: '发送' }).click()
+    await assistant.getByPlaceholder('和同行者聊聊这部作品…').fill('锁定时在另一本书里提问')
+    await assistant.getByRole('button', { name: '发送' }).click()
     const chatError = page.locator('.message-content', { hasText: '正在小黑屋中' }).last()
     await page.waitForFunction(() => [...document.querySelectorAll('.message-content')].filter((node) => node.textContent?.includes('正在小黑屋中')).length >= 2, null, { timeout: 5_000 })
     const chatText = await chatError.innerText()
     assert.ok(chatText.startsWith(`《${lockedTitle}》正在小黑屋中`), `对话报错应带书名且无前缀，实际 ${chatText}`)
     assert.doesNotMatch(chatText, /FocusLockError|FOCUS_LOCKED/)
+    await closeAssistantDrawer(page)
     // 回去入口：跳回被锁那本书的小黑屋，在那里出屋
     await page.getByTestId('focus-lock-return').click()
     await page.getByTestId('blackroom-bar').waitFor()
@@ -3001,7 +3046,7 @@ try {
     await page.getByLabel('紧急出屋确认').fill('我要出屋')
     await addLockedDelta(page, before)
     await page.getByRole('button', { name: '确认出屋' }).click()
-    await page.locator('.assistant-panel').waitFor()
+    await waitAssistantShown(page)
     assert.deepEqual(await page.evaluate(() => window.workspace.focus.lockedProjects()), [])
     await page.evaluate((id) => window.workspace.projects.archive(id, true), other.id)
   })
