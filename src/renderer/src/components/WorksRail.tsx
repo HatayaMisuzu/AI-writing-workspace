@@ -1,3 +1,4 @@
+import { displayProjectTitle } from '../services/project-title'
 import { BookOpen, Library, Plus, Search, Settings } from 'lucide-react'
 import type { Project } from '../../../shared/domain'
 
@@ -11,8 +12,8 @@ export function WorksRail({ projects, activeId, onLibrary, onOpen, onCreate, onS
     <div className="work-tile-list">
       {projects.slice(0, 8).map((project, index) => <button
         key={project.id} className={activeId === project.id ? 'work-tile active' : 'work-tile'}
-        onClick={() => onOpen(project)} title={project.title} style={{ '--cover-hue': `${(index * 57 + 174) % 360}` } as React.CSSProperties}
-      ><BookOpen size={17} /><span>{project.title.slice(0, 2)}</span></button>)}
+        onClick={() => onOpen(project)} title={displayProjectTitle(project.title)} style={{ '--cover-hue': `${(index * 57 + 174) % 360}` } as React.CSSProperties}
+      ><BookOpen size={17} /><span>{displayProjectTitle(project.title).slice(0, 2)}</span></button>)}
       <button className="work-tile add" onClick={onCreate} title="新建作品"><Plus size={20} /></button>
     </div>
     <div className="rail-bottom">

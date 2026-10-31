@@ -98,10 +98,21 @@ button.danger-button { color: #fff; background: var(--danger); border-color: var
 .project-sections button { border: 0; background: transparent; padding: 0; min-height: 32px; border-radius: 0; color: var(--muted); font-size: 13px; }
 .project-sections button.active { color: var(--accent); border-bottom: 2px solid var(--accent); }
 .manuscript-tree { flex: 1; overflow: auto; padding: 10px 8px 68px; position: relative; }
+/* P3：章树作为布局边界。高度来自侧栏 flex 列（flex: 1 + 父级 min-height: 0），宽度来自 grid 列；不用 paint/strict，避免裁剪焦点环等溢出绘制。千章书每次按键的整页 Layout 从 ~40ms 降到 ~1ms（diag run 41143605473） */
+.manuscript-tree { contain: layout size; }
 .volume-row { height: 38px; display: grid; grid-template-columns: 18px minmax(0, auto) 1fr repeat(3, 28px); align-items: center; padding: 0 6px; }
 .volume-row strong { font-size: 13px; }
-.chapter-row { width: 100%; height: 36px; padding: 0 5px 0 24px; background: transparent; display: grid; grid-template-columns: minmax(0, 1fr) 26px 26px; align-items: center; font-size: 13px; }
-.chapter-row.active { background: var(--accent-soft); color: #126f72; box-shadow: inset 3px 0 var(--accent); }
+.chapter-row { --row-bg: #f7f6f3; position: relative; width: 100%; height: 36px; padding: 0 5px 0 24px; background: var(--row-bg); display: grid; grid-template-columns: minmax(0, 1fr) 0 auto; align-items: center; font-size: 13px; }
+/* 窄侧栏：grid 只给标题和徽标分列，重命名/删除不占列宽。按钮放在 0 宽锚点列（标题与徽标之间，DOM 顺序仍是 标题→徽标→按钮，Tab 顺序不变），
+   容器绝对定位压在标题列尾部、不盖徽标；平时 opacity 0，行 :hover / :focus-within 时显示，只改 opacity 不重排。
+   背景取行的 --row-bg（普通 / 选中各一值），左侧 ::before 由透明渐变到同色，标题尾部自然过渡。容器在行内、行在树内，不受 .manuscript-tree contain 影响 */
+.chapter-row > .chapter-status-badge { grid-column: 3; grid-row: 1; }
+.chapter-actions-anchor { grid-column: 2; grid-row: 1; position: relative; width: 0; height: 100%; }
+.chapter-actions { position: absolute; right: 0; top: 50%; transform: translateY(-50%); display: flex; gap: 2px; padding-left: 2px; background-color: var(--row-bg); opacity: 0; pointer-events: none; z-index: 1; }
+.chapter-actions::before { content: ''; position: absolute; top: 0; bottom: 0; right: 100%; width: 14px; background: linear-gradient(to right, transparent, var(--row-bg)); pointer-events: none; }
+.chapter-row:hover .chapter-actions, .chapter-row:focus-within .chapter-actions { opacity: 1; pointer-events: auto; }
+.chapter-actions > .tree-node-action { width: 26px; min-width: 26px; opacity: 1; }
+.chapter-row.active { --row-bg: var(--accent-soft); background: var(--row-bg); color: #126f72; box-shadow: inset 3px 0 var(--accent); }
 .chapter-open { width: 100%; min-width: 0; padding: 0 5px; border: 0; background: transparent; display: grid; grid-template-columns: 17px minmax(0, 1fr) auto; justify-content: flex-start; text-align: left; }
 .chapter-title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .chapter-row small { color: var(--muted); font-size: 11px; }
@@ -444,6 +455,7 @@ button.danger-button { color: #fff; background: var(--danger); border-color: var
   line-height: 20px;
   cursor: pointer;
   flex-shrink: 0;
+  white-space: nowrap;
 }
 .chapter-status-badge.status-outline { color: #6b6570; }
 .chapter-status-badge.status-draft { color: #3d5a80; background: #e8eef6; border-color: #c5d3e6; }
