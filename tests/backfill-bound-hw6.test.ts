@@ -119,8 +119,10 @@ describe('H-W6 2：退出不与进行中的 PASSIVE 互卡（#51 closeForQuit �
     const result = await s.db.closeForQuit()
     log('HW6FIX-QUIT', { delayMs, peak: r.peak, result })
     expect(result.ms).toBeLessThan(QUIT_CLOSE_LIMIT_MS)
-    expect(result.timedOut).toBe(delayMs > QUIT_WORKER_LIMIT_MS)
-    expect(result.segments!.workerMs).toBeLessThanOrEqual(QUIT_WORKER_LIMIT_MS + 500)
+    // WalCheckpointer.close() 自带 2s terminate：worker 卡住时在 worker 段硬上限（3500ms）之前就被结束，closeForQuit 不必走超时分支
+    expect(result.timedOut).toBe(false)
+    expect(result.segments!.workerMs).toBeLessThan(QUIT_WORKER_LIMIT_MS)
+    if (delayMs > 2_000) expect(result.segments!.workerMs).toBeGreaterThanOrEqual(1_900)
     const reopened = new AppDatabase(s.path, { checkpointer: false }); dbs.push(reopened)
     expect(integrity(reopened)).toBe('ok')
     expect(new DocumentService(reopened).getContent(s.project.id, s.chapter.id).plainText).toBe(text(19))
