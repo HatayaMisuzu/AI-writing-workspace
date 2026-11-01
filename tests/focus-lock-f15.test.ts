@@ -148,12 +148,14 @@ describe('F15 ④ 锁定期间 AI 主进程入口返回 FOCUS_LOCKED，Provider 
     expect(providerCalls).toBe(1)
     expect(rawFetchCalls).toBe(1)
   })
-  it('有意全局：任一作品锁定 → 另一作品的 AI 入口同样拒绝（与出站兜底一致），报错带被锁书名', () => {
+  it('P3 只锁当前作品：被锁那本的 AI 入口拒绝（报错带被锁书名）；另一作品放行；全局兜底判定仍认任一锁定', () => {
     const { db, focus, project } = setup()
     const other = new ProjectService(db).create({ title: '另一本', projectType: 'novel' })
     focus.start(project.id, { mode: 'words', words: 10 })
-    expect(codeOf(() => assertNotFocusLocked(focus, other.id))).toBe('FOCUS_LOCKED')
-    expect(() => assertNotFocusLocked(focus, other.id)).toThrow('《小黑屋》')
+    expect(codeOf(() => assertNotFocusLocked(focus, project.id))).toBe('FOCUS_LOCKED')
+    expect(() => assertNotFocusLocked(focus, project.id)).toThrow('《小黑屋》')
+    expect(() => assertNotFocusLocked(focus, other.id)).not.toThrow()
+    expect(codeOf(() => assertNoFocusLockAnywhere(focus))).toBe('FOCUS_LOCKED')
   })
 })
 

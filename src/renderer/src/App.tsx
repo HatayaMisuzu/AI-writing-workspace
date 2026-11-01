@@ -54,8 +54,8 @@ export function App(): React.JSX.Element {
     const project = await window.workspace.projects.create(newProject)
     setCreateOpen(false); setNewProject({ title: '', projectType: 'novel', description: '' }); await reload(); open(project)
   }
-  // 在被锁作品里由小黑屋界面自己呈现；在作品库 / 其他作品 / 设置里显示锁定提示
-  const lockNotice = blackroomLocked ? [] : lockedProjects.filter((item) => !(screen.type === 'workspace' && screen.projectId === item.projectId))
+  // P3 小黑屋只锁当前作品：只在作品库给一条轻提示（哪本在小黑屋 + 回去入口）；其他作品与设置里不显示全局锁提示
+  const lockNotice = screen.type === 'library' ? lockedProjects : []
   const returnToLocked = (projectId: string): void => { void navigate({ type: 'workspace', projectId }) }
   const title = screen.type === 'library' ? '作品库' : screen.type === 'settings' ? '设置 · 模型与服务' : active ? `${active.title} · 写作` : '墨记'
 
@@ -64,10 +64,11 @@ export function App(): React.JSX.Element {
     {appError && <div className="app-error" role="alert"><span>{appError}</span><button onClick={() => setAppError(undefined)}>关闭</button></div>}
     {appNotice && <div className="app-notice" role="status" data-testid="app-notice"><span>{appNotice}</span><button onClick={() => setAppNotice(undefined)}>关闭</button></div>}
     <div className={blackroomLocked ? "app-body is-blackroom" : "app-body"}>
-      {!blackroomLocked && <WorksRail projects={projects.filter((project) => !project.archived)} activeId={active?.id} onLibrary={() => void navigate({ type: 'library' })} onOpen={open} onCreate={() => setCreateOpen(true)} onSettings={() => void navigate({ type: 'settings' })} onSearch={() => void navigate({ type: 'library' })} />}
+      {/* P3：锁定期间也保留作品栏，可以切换到其他作品；回到被锁作品时锁定照常 */}
+      <WorksRail projects={projects.filter((project) => !project.archived)} activeId={active?.id} onLibrary={() => void navigate({ type: 'library' })} onOpen={open} onCreate={() => setCreateOpen(true)} onSettings={() => void navigate({ type: 'settings' })} onSearch={() => void navigate({ type: 'library' })} />
       <div className={lockNotice.length ? "screen-host has-lock-notice" : "screen-host"}>
         <FocusLockNotice locked={lockNotice} onReturn={returnToLocked} />
-        {screen.type === 'library' ? <LibraryScreen projects={projects} onOpen={open} onCreate={() => setCreateOpen(true)} onImport={async () => { const project = await window.workspace.backup.importProject(); if (project) { if (project.importNotice) setAppNotice(project.importNotice); await reload(); open(project) } }} onImportManuscript={async () => { const project = await window.workspace.backup.importManuscript(); if (project) { await reload(); open(project) } }} onArchive={async (project) => { await window.workspace.projects.archive(project.id, !project.archived); await reload() }} onBackup={(project) => void window.workspace.backup.exportProject(project.id)} onExport={(project, format, onlyFinal, range) => window.workspace.backup.exportManuscript(project.id, format, onlyFinal, range)} />
+        {screen.type === 'library' ? <LibraryScreen projects={projects} lockedIds={new Set(lockedProjects.map((item) => item.projectId))} onOpen={open} onCreate={() => setCreateOpen(true)} onImport={async () => { const project = await window.workspace.backup.importProject(); if (project) { if (project.importNotice) setAppNotice(project.importNotice); await reload(); open(project) } }} onImportManuscript={async () => { const project = await window.workspace.backup.importManuscript(); if (project) { await reload(); open(project) } }} onArchive={async (project) => { await window.workspace.projects.archive(project.id, !project.archived); await reload() }} onBackup={(project) => void window.workspace.backup.exportProject(project.id)} onExport={(project, format, onlyFinal, range) => window.workspace.backup.exportManuscript(project.id, format, onlyFinal, range)} />
           : screen.type === 'settings' ? <SettingsScreen />
           : active ? <WorkspaceScreen key={active.id} project={active} onProjectChanged={() => void reload()} onSettings={() => void navigate({ type: 'settings' })} onRegisterBeforeLeave={registerBeforeLeave} onFocusLockChange={onFocusLockChange} />
           : <div className="fatal-view">作品不存在或已被删除。<button onClick={() => setScreen({ type: 'library' })}>返回作品库</button></div>}
