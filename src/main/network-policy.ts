@@ -108,7 +108,7 @@ export class NetworkGate {
   }
 
   /**
-   * P3：只按地址白名单判定，不看小黑屋锁。仅供主进程 guardedFetch 使用——
+   * P3：只按地址白名单判定，不看小黑屋锁。仅供主进程出站守门（egress-guard）使用——
    * 主进程出站的锁判定由 egress-guard 的 checkFocusEgress 按作品标记做（无标记仍按全局兜底）。
    * renderer（webRequest）路径仍走 decide()，任一作品锁定即拒绝。
    */
