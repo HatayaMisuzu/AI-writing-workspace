@@ -104,6 +104,15 @@ export class NetworkGate {
   decide(rawUrl: string): NetworkDecision {
     // F15：小黑屋锁定期间，渲染进程（session.webRequest）的 http/https/ws 一律拒绝，已保存 origin 也不例外。
     if (/^(https?|wss?):/i.test(rawUrl.trim()) && this.isFocusLocked()) return { allow: false, reason: 'focus-locked' }
+    return this.decideAllowlist(rawUrl)
+  }
+
+  /**
+   * P3：只按地址白名单判定，不看小黑屋锁。仅供主进程 guardedFetch 使用——
+   * 主进程出站的锁判定由 egress-guard 的 checkFocusEgress 按作品标记做（无标记仍按全局兜底）。
+   * renderer（webRequest）路径仍走 decide()，任一作品锁定即拒绝。
+   */
+  decideAllowlist(rawUrl: string): NetworkDecision {
     return decideNetworkRequest(rawUrl, {
       savedOrigins: this.savedOrigins,
       temporaryOrigins: this.temporaryOrigins,

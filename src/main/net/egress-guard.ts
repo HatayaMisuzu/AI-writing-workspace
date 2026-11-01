@@ -9,7 +9,11 @@
 import type { NetworkGate } from '../network-policy'
 import { currentEgressContext } from './egress-context'
 
-export type EgressDecider = Pick<NetworkGate, 'decide'>
+/**
+ * 主进程出站优先用 decideAllowlist（只看地址白名单；锁判定在 checkFocusEgress 里按作品做）。
+ * 只有 decide 的门闸（测试桩）退回 decide。
+ */
+export type EgressDecider = Pick<NetworkGate, 'decide'> & Partial<Pick<NetworkGate, 'decideAllowlist'>>
 
 export class EgressBlockedError extends Error {
   readonly code = 'EGRESS_BLOCKED'
@@ -73,7 +77,7 @@ export function checkEgress(rawUrl: string): void {
   }
   if (!installed) throw new EgressBlockedError('出站请求被拒绝：网络守门未就绪。', 'gate-not-installed')
   checkFocusEgress()
-  const decision = installed.decide(parsed.href)
+  const decision = installed.decideAllowlist ? installed.decideAllowlist(parsed.href) : installed.decide(parsed.href)
   if (!decision.allow) {
     console.warn(`[egress-guard] blocked ${decision.reason}: ${parsed.origin}`)
     throw new EgressBlockedError(`出站请求被拒绝：${parsed.origin} 不在已配置的模型服务地址中。请先在设置中保存该服务地址，或使用「测试连接」。`, decision.reason)
