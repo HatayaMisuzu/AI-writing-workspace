@@ -12,9 +12,11 @@ const typeName = { novel: '小说', webnovel: '网文', screenplay: '剧本', ot
 const formatCount = (count: number): string => count.toLocaleString('zh-CN')
 const relative = (time: number): string => new Intl.DateTimeFormat('zh-CN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(time)
 
-export function LibraryScreen({ projects, onOpen, onCreate, onImport, onImportManuscript, onArchive, onBackup, onExport }: {
+export function LibraryScreen({ projects, onOpen, onCreate, onImport, onImportManuscript, onArchive, onBackup, onExport, lockedIds }: {
   projects: Project[]; onOpen(project: Project): void; onCreate(): void; onImport(): void; onImportManuscript(): void; onArchive(project: Project): void; onBackup(project: Project): void
   onExport(project: Project, format: ExportFormat, onlyFinal?: boolean, range?: ExportChapterRange): void | Promise<unknown>
+  /** P3：处于小黑屋中的作品（只做轻标记，不弹窗、不拦打开） */
+  lockedIds?: ReadonlySet<string>
 }): React.JSX.Element {
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState<'all' | 'recent' | 'archived'>('all')
@@ -59,7 +61,7 @@ export function LibraryScreen({ projects, onOpen, onCreate, onImport, onImportMa
         <div className="works-table">
           <div className="table-head"><span>作品名称</span><span>类型</span><span>最后编辑</span><span>总字数</span><span>本地状态</span><span /></div>
           {filtered.map((project, index) => <div className="work-row" key={project.id} onDoubleClick={() => onOpen(project)}>
-            <div className="work-name"><span className={`mini-cover cover-${index % 3}`}>{displayProjectTitle(project.title).slice(0, 1)}</span><strong>{displayProjectTitle(project.title)}</strong></div>
+            <div className="work-name"><span className={`mini-cover cover-${index % 3}`}>{displayProjectTitle(project.title).slice(0, 1)}</span><strong>{displayProjectTitle(project.title)}</strong>{lockedIds?.has(project.id) && <span className="work-locked-badge" data-testid="work-locked-badge">小黑屋中</span>}</div>
             <span>{typeName[project.projectType]}</span><span>{relative(project.updatedAt)}</span><span>{formatCount(project.totalWordCount)}</span>
             <span className="local-status"><ShieldCheck size={15} />本地保存</span>
             <div className="row-actions"><button className="text-action" onClick={() => onOpen(project)}>继续写作</button><button className="icon-button" onClick={() => setMenuId(menuId === project.id ? undefined : project.id)}><MoreHorizontal size={18} /></button>

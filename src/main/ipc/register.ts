@@ -27,7 +27,8 @@ import { ProofreadingRunner } from '../ai/proofreading-runner'
 import { WritingDailyService } from '../services/writing-daily-service'
 import { ForeshadowService } from '../services/foreshadow-service'
 import { TimelineService } from '../services/timeline-service'
-import { FocusLockError, FocusLockService, assertNoFocusLockAnywhere, assertNotFocusLocked, focusEgressCheck } from '../services/focus-lock-service'
+import { FocusLockError, FocusLockService, assertNotFocusLocked, focusEgressCheck, focusProjectEgressCheck } from '../services/focus-lock-service'
+import { runWithEgressContext, runWithWorkEgress } from '../net/egress-context'
 import { readHoverPrefs, writeHoverPrefs } from '../services/hover-prefs-service'
 import { installFocusEgressLock } from '../net/egress-guard'
 
@@ -110,7 +111,9 @@ export function registerIpc(db: AppDatabase, codec: SecretCodec, network?: Netwo
   const foreshadows = new ForeshadowService(db)
   const timeline = new TimelineService(db)
   const focus = new FocusLockService(db)
-  installFocusEgressLock(focusEgressCheck(focus))
+  installFocusEgressLock(focusEgressCheck(focus), focusProjectEgressCheck(focus))
+  // P3 小黑屋只锁当前作品：作品入口的出站标记只用确实存在的作品；不存在 → 不标记，出站时按全局兜底。
+  const projectExists = (projectId: string): boolean => db.raw.prepare('SELECT 1 FROM projects WHERE id = ?').get(projectId) !== undefined
   handle('focus:status', (projectId: string) => focus.status(parse(idSchema, projectId)))
   handle('focus:restore', (projectId: string) => focus.restore(parse(idSchema, projectId)))
   handle('focus:start', (projectId: string, input: unknown) => focus.start(parse(idSchema, projectId), input))
@@ -176,7 +179,7 @@ export function registerIpc(db: AppDatabase, codec: SecretCodec, network?: Netwo
   handle('memories:reject', (projectId: string, memoryId: string) => memories.reject(parse(idSchema, projectId), parse(idSchema, memoryId)))
   handle('memories:retire', (projectId: string, memoryId: string) => memories.retire(parse(idSchema, projectId), parse(idSchema, memoryId)))
   handle('memories:replace', (projectId: string, memoryId: string, content: string) => memories.proposeReplacement(parse(idSchema, projectId), parse(idSchema, memoryId), parse(contentSchema, content)))
-  handle('memories:extract-intent', (projectId: string, sourceId: string, content: string) => { assertNotFocusLocked(focus, parse(idSchema, projectId)); return memoryIntent.extractAndCreate(parse(idSchema, projectId), parse(idSchema, sourceId), parse(contentSchema, content)) })
+  handle('memories:extract-intent', (projectId: string, sourceId: string, content: string) => { assertNotFocusLocked(focus, parse(idSchema, projectId)); return runWithWorkEgress(projectExists, projectId, () => memoryIntent.extractAndCreate(parse(idSchema, projectId), parse(idSchema, sourceId), parse(contentSchema, content))) })
   handle('foreshadows:list-ledger', (projectId: string) => foreshadows.listLedger(parse(idSchema, projectId)))
   handle('foreshadows:list-pending', (projectId: string) => foreshadows.listPending(parse(idSchema, projectId)))
   handle('foreshadows:register', (input: unknown) => {
@@ -259,8 +262,8 @@ export function registerIpc(db: AppDatabase, codec: SecretCodec, network?: Netwo
   handle('prompts:global-reset', (mode: unknown) => promptTemplates.resetGlobal(parse(promptTemplateModeSchema, mode)))
   handle('prompts:copy-preview', (projectId: string, source: unknown) => promptTemplates.previewCopy(parse(idSchema, projectId), parse(promptCopySourceSchema, source)))
   handle('prompts:copy-apply', (projectId: string, source: unknown, token: unknown) => promptTemplates.applyCopy(parse(idSchema, projectId), parse(promptCopySourceSchema, source), parse(z.string().regex(/^[0-9a-f]{64}$/), token)))
-  // F13：本地规则 + 词表（不联网、不调 AI；小黑屋中不运行）
-  const lint = new LintService(db, (projectId) => focus.isLocked(projectId))
+  // F13：本地规则 + 词表（不联网、不调 AI；P3 起小黑屋锁定时照常可用）
+  const lint = new LintService(db)
   handle('linter:run', (...args: unknown[]) => { const [projectId, documentId, text, revision] = lintRunSchema.parse(args); return lint.run(projectId, documentId, text, revision) })
   handle('lint:rules', (projectId: unknown) => lint.getRules(parse(idSchema, projectId)))
   handle('lint:set-rules', (projectId: unknown, rules: unknown) => lint.setRules(parse(idSchema, projectId), parse(lintRulesSchema, rules)))
@@ -306,17 +309,17 @@ export function registerIpc(db: AppDatabase, codec: SecretCodec, network?: Netwo
     trustedSender(event)
     try {
       const id = parse(idSchema, projectId)
-      assertNotFocusLocked(focus, id)
+      // P3：整本检查纯本地、不出站，小黑屋锁定时照常可用。
       const run = parse(idSchema, runId)
       return await lint.checkBook(id, { volumeId: parse(idSchema.optional(), volumeId ?? undefined), runId: run,
         onProgress: (done, total) => { if (!event.sender.isDestroyed()) event.sender.send('lint:book-progress', { runId: run, done, total }) } })
     } catch (error) { throw toUserFacingIpcError(error) }
   })
   handle('lint:check-book-cancel', (runId: unknown) => { lint.cancelBookCheck(parse(idSchema, runId)); return null })
-  handle('digests:run', (projectId: string, chapterId: string) => { assertNotFocusLocked(focus, parse(idSchema, projectId)); return digestRunner.run(parse(idSchema, projectId), parse(idSchema, chapterId)) })
+  handle('digests:run', (projectId: string, chapterId: string) => { assertNotFocusLocked(focus, parse(idSchema, projectId)); return runWithWorkEgress(projectExists, projectId, () => digestRunner.run(parse(idSchema, projectId), parse(idSchema, chapterId))) })
   handle('digests:list', (projectId: string, chapterId?: string) => digests.list(projectId, chapterId))
   handle('digests:status', (projectId: string, chapterId: string) => digests.status(projectId, chapterId))
-  handle('proofreading:run', (projectId: string, documentId: string) => { assertNotFocusLocked(focus, parse(idSchema, projectId)); return proofreading.run(parse(idSchema, projectId), parse(idSchema, documentId)) })
+  handle('proofreading:run', (projectId: string, documentId: string) => { assertNotFocusLocked(focus, parse(idSchema, projectId)); return runWithWorkEgress(projectExists, projectId, () => proofreading.run(parse(idSchema, projectId), parse(idSchema, documentId))) })
 
   handle('providers:list', () => providers.list())
   // A·M1（保存）：Key 栏留空、要沿用已保存 Key，且归一化后的地址与已保存的不同（同一 scheme/host/port 下改了路径或查询串）时，
@@ -345,14 +348,14 @@ export function registerIpc(db: AppDatabase, codec: SecretCodec, network?: Netwo
   handle('providers:save-model', (model: ModelConfig) => providers.saveModel(parse(modelSchema, model)))
   handle('providers:routes', () => providers.listRoutes())
   handle('providers:set-route', (route: TaskModelRoute) => { const valid = parse(routeSchema, route); return providers.setRoute(valid.taskType, valid.modelId) })
+  // P3：测试连接与任何作品无关，标为「非作品」，小黑屋锁定时照常可用（nonWork 只允许这里与 providers:test-url 使用）。
   handle('providers:test', async (providerId: string, modelId: string) => {
-    assertNoFocusLockAnywhere(focus)
     try {
       providerId = parse(idSchema, providerId); modelId = parse(idSchema, modelId)
       const { config, apiKey } = providers.getWithSecret(providerId)
       const origin = originFromBaseUrl(config.baseUrl)
       const revoke = origin && network ? network.allowOriginTemporarily(origin) : () => {}
-      try { return await createProviderAdapter(config.providerType, config.baseUrl, apiKey).testConnection(modelId) }
+      try { return await runWithEgressContext({ nonWork: true }, () => createProviderAdapter(config.providerType, config.baseUrl, apiKey).testConnection(modelId)) }
       finally { revoke() }
     } catch (error) { return { ok: false, message: error instanceof Error ? error.message : '服务配置不可用' } }
   })
@@ -362,7 +365,6 @@ export function registerIpc(db: AppDatabase, codec: SecretCodec, network?: Netwo
   ipcMain.handle('providers:test-url', async (event, input: unknown) => {
     trustedSender(event)
     try {
-      assertNoFocusLockAnywhere(focus)
       const body = z.object({
         baseUrl: z.string().min(1).max(2000),
         apiKey: z.string().max(4000).optional(),
@@ -389,7 +391,7 @@ export function registerIpc(db: AppDatabase, codec: SecretCodec, network?: Netwo
       }
       const revoke = network ? network.allowOriginTemporarily(origin) : () => {}
       try {
-        return await createProviderAdapter(body.providerType, checked.url, apiKey).testConnection(body.modelId)
+        return await runWithEgressContext({ nonWork: true }, () => createProviderAdapter(body.providerType, checked.url, apiKey).testConnection(body.modelId))
       } finally { revoke() }
     } catch (error) {
       if (error instanceof FocusLockError) throw toUserFacingIpcError(error)
@@ -447,12 +449,13 @@ export function registerIpc(db: AppDatabase, codec: SecretCodec, network?: Netwo
         throw new Error('AI_TARGET_IDENTITY_INVALID')
       }
       let candidates: string[] | undefined
-      for await (const result of runtime.run(request.requestId, request.task, request.threadId, request.userMessageId, request.assistantMessageId)) {
+      // 标记包住整个流式消费：async generator 每次 next()、流读取与第二次出站（多候选）都在同一标记下
+      await runWithWorkEgress(projectExists, request.task.projectId, async () => { for await (const result of runtime.run(request.requestId, request.task, request.threadId, request.userMessageId, request.assistantMessageId)) {
         if (result.candidates) candidates = result.candidates
         if (result.chunk && !event.sender.isDestroyed()) {
           event.sender.send('ai:event', { type: 'chunk', requestId: request.requestId, chunk: result.chunk, context: result.context })
         }
-      }
+      } })
       if (!event.sender.isDestroyed()) event.sender.send('ai:event', { type: 'done', requestId: request.requestId, candidates })
     } catch (error) {
       const shaped = toUserFacingIpcError(error) as Error & { code?: string }

@@ -25,7 +25,7 @@ export function BlackroomEntryDialog({ onClose, onStart }: { onClose(): void; on
     try { await onStart(input) } catch (failure) { setError(cleanError(failure)) }
   }
   return <Modal title="进入小黑屋" onClose={onClose}><form className="node-create-form blackroom-entry" data-testid="blackroom-entry" onSubmit={(event) => { event.preventDefault(); void submit() }}>
-    <p className="isolation-note">锁定期间只保留写作：AI、检索、设置、导出与其它作品都会关闭。条件达成后点「出屋」离开；Esc 不会退出。</p>
+    <p className="isolation-note">锁定期间这本书只保留写作与本地检查（全书查找、整本检查）：这本书的 AI 与联网请求关闭，其他作品不受影响、可随时切换。条件达成后点「出屋」离开；Esc 不会退出。</p>
     <fieldset className="blackroom-modes"><legend>锁定方式</legend>
       <label><input type="radio" name="blackroom-mode" checked={mode === 'words'} onChange={() => setMode('words')} />写满字数</label>
       <label><input type="radio" name="blackroom-mode" checked={mode === 'minutes'} onChange={() => setMode('minutes')} />写满时间</label>
@@ -73,12 +73,12 @@ export function BlackroomEmergencyDialog({ onClose, onConfirm }: { onClose(): vo
   </form></Modal>
 }
 
-/** 作品库 / 其他作品里的锁定提示：写明哪本书被锁，并给出回到该书小黑屋的入口（出屋只能在那本书里完成）。 */
+/** 作品库里的轻提示（P3 小黑屋只锁当前作品）：写明哪本书在小黑屋，并给出回到该书的入口（出屋只能在那本书里完成）；不弹窗。 */
 export function FocusLockNotice({ locked, onReturn }: { locked: FocusLockedProject[]; onReturn(projectId: string): void }): React.JSX.Element | null {
   if (!locked.length) return null
   const names = locked.map((item) => `《${displayProjectTitle(item.title)}》`).join('、')
   return <div className="focus-lock-notice" role="status" data-testid="focus-lock-notice">
-    <span><strong>{names}</strong>正在小黑屋中。锁定期间所有作品的 AI 与联网请求都已关闭，出屋需回到该书。</span>
-    {locked.map((item) => <button key={item.projectId} className="primary" data-testid="focus-lock-return" onClick={() => onReturn(item.projectId)}>回到《{displayProjectTitle(item.title)}》的小黑屋</button>)}
+    <span><strong>{names}</strong>正在小黑屋中：只锁这一本，其他作品照常可用；出屋需回到该书。</span>
+    {locked.map((item) => <button key={item.projectId} data-testid="focus-lock-return" onClick={() => onReturn(item.projectId)}>回到《{displayProjectTitle(item.title)}》的小黑屋</button>)}
   </div>
 }
