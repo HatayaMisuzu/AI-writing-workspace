@@ -7,9 +7,12 @@ import type { SecretCodec } from './ai/provider'
 import { attachCloseHandshake } from './window-close'
 import { shouldOpenExternal } from './external-url'
 import { NetworkGate, originsFromProviderBaseUrls } from './network-policy'
+import { DEV_DIAGNOSTICS_ARG } from '../shared/dev-diagnostics'
 
 let database: AppDatabase | undefined
 let networkGate: NetworkGate | undefined
+/** 开发用诊断接口（preload __devWalCheckpoint + IPC diagnostics:wal-checkpoint）只在未打包时开启；打包版恒为 false，没有其他开关。 */
+const devDiagnosticsEnabled = (): boolean => !app.isPackaged
 
 if (!app.requestSingleInstanceLock()) {
   app.quit()
@@ -23,9 +26,13 @@ if (!app.requestSingleInstanceLock()) {
 
   function createWindow(): void {
     const win = new BrowserWindow({
-      width: 1560, height: 980, minWidth: 1100, minHeight: 700, show: false,
+      width: 1560, height: 980, minWidth: 1000, minHeight: 700, show: false,
       frame: false, backgroundColor: '#fffdf9', title: '墨记',
-      webPreferences: { preload: join(__dirname, '../preload/index.cjs'), sandbox: true, contextIsolation: true, nodeIntegration: false }
+      webPreferences: {
+        preload: join(__dirname, '../preload/index.cjs'), sandbox: true, contextIsolation: true, nodeIntegration: false,
+        // 开发用诊断接口只在未打包时让 preload 暴露（见 src/shared/dev-diagnostics.ts）；打包版不追加参数
+        additionalArguments: devDiagnosticsEnabled() ? [DEV_DIAGNOSTICS_ARG] : []
+      }
     })
     win.on('ready-to-show', () => win.show())
     win.webContents.on('will-navigate', (event) => { event.preventDefault() })
@@ -81,7 +88,7 @@ if (!app.requestSingleInstanceLock()) {
       getBlockedLog: () => networkGate!.getBlockedLog()
     }, {
       // 诊断通道只在未打包（开发 / 测试 / e2e：直接跑 out/main/index.js）时注册；打包安装的生产构建 app.isPackaged=true，不注册。
-      diagnostics: !app.isPackaged
+      diagnostics: devDiagnosticsEnabled()
     })
     createWindow()
     app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow() })

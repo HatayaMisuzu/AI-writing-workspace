@@ -14,6 +14,7 @@ const executablePath = existsSync(bundledElectron) ? bundledElectron : process.e
 const userData = await mkdtemp(join(tmpdir(), 'inkstone-e2e-'))
 const results = []
 let streamDelay = 450
+let baseline // { width, height }：首次启动时真实窗口的 innerWidth / innerHeight，见 finishLaunch
 
 let fixtureHits = 0
 const fixture = createServer(async (request, response) => {
@@ -135,6 +136,14 @@ const finishLaunch = async (app, page) => {
   page.on('pageerror', (error) => process.stderr.write(`renderer error: ${error.stack ?? error.message}\n`))
   page.on('console', (message) => { if (message.type() === 'error') process.stderr.write(`renderer console: ${message.text()}\n`) })
   await page.waitForLoadState('domcontentloaded')
+  // P3 发布包：minWidth 1000。不再把窗口放大到 1100：用例跑在真实窗口宽度上（Windows runner 实测 1024，≤1080 为窄屏布局）。
+  // 首次启动的真实尺寸记为基准视口；每次启动都把实测宽度打到日志（Windows 另读 BrowserWindow 的 getBounds / getContentBounds）。
+  const size = await page.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }))
+  const bounds = typeof app.evaluate === 'function'
+    ? await app.evaluate(({ BrowserWindow }) => { const win = BrowserWindow.getAllWindows()[0]; return win ? { bounds: win.getBounds(), content: win.getContentBounds() } : null }).catch(() => null)
+    : null
+  baseline ??= size
+  process.stdout.write(`e2e width launch ${process.platform}: innerWidth ${size.width} innerHeight ${size.height} window ${JSON.stringify(bounds)} baseline ${baseline.width}x${baseline.height}\n`)
   process.stdout.write(`launched: ${await page.title()} ${page.url()}\n`)
   return { app, page }
 }
@@ -238,6 +247,21 @@ const undoSaveControl = async (page, label, restoredText) => {
 // 按章名精确匹配（hasText 是子串匹配：「长章」会误中「单段长章」，「第50章」会误中「第500章」）
 const chapterOpen = (page, title) => page.locator(`.chapter-open[title=${JSON.stringify(title)}]`)
 const openChapter = (page, title) => chapterOpen(page, title).click()
+// 基准视口：首次启动时真实窗口的内容尺寸（不放大窗口、不模拟）。改过视口的用例结束时恢复到这里，不再用固定宽屏兜底。
+const restoreBaseline = async (page) => {
+  await page.setViewportSize(baseline)
+  if (baseline.width <= 1080) await page.getByRole('button', { name: '打开同行者' }).waitFor()
+  else await page.locator('.assistant-panel').waitFor()
+}
+// 真实改窗口（仅 Playwright Electron，即 Windows）：frame:false，setContentSize 即窗口尺寸；读回 innerWidth / getBounds 供日志与判断是否被系统压回
+const resizeRealWindow = async ({ app, page }, width, height = baseline.height) => {
+  await app.evaluate(({ BrowserWindow }, size) => BrowserWindow.getAllWindows()[0].setContentSize(size.width, size.height), { width, height })
+  await page.waitForFunction((w) => window.innerWidth === w, width, { timeout: 3_000 }).catch(() => {})
+  await page.waitForTimeout(300)
+  const inner = await page.evaluate(() => ({ innerWidth: window.innerWidth, innerHeight: window.innerHeight }))
+  const win = await app.evaluate(({ BrowserWindow }) => { const w = BrowserWindow.getAllWindows()[0]; return { bounds: w.getBounds(), content: w.getContentBounds() } })
+  return { ...inner, ...win }
+}
 
 let running
 try {
@@ -418,22 +442,188 @@ try {
   await running.page.getByRole('button', { name: '继续写作' }).click()
   await running.page.locator('.manuscript-editor').waitFor()
 
-  await record('U03 同字跨章编辑提案仍绑定来源章', async () => {
-    await running.page.locator('.manuscript-editor').press('Control+A')
-    await running.page.getByRole('button', { name: '修改', exact: true }).click()
-    const input = running.page.getByPlaceholder('和同行者聊聊这部作品…')
+  // 窄屏辅助（≤1080 宽，与 WorkspaceScreen NARROW_QUERY 一致）：同行者收起为「打开同行者」按钮，面板内容只在抽屉里。
+  const isNarrowLayout = (page) => page.evaluate(() => window.matchMedia('(max-width: 1080px)').matches)
+  // 打开同行者抽屉并返回抽屉作为操作范围；宽布局面板常驻，返回 page；抽屉已开时不再点按钮
+  const openAssistantDrawer = async (page) => {
+    if (!(await isNarrowLayout(page))) return page
+    const drawer = page.getByRole('dialog', { name: '同行者' })
+    if (!(await drawer.count())) await page.getByRole('button', { name: '打开同行者' }).click()
+    await drawer.waitFor()
+    return drawer
+  }
+  // 关同行者抽屉（未打开 / 宽布局时无操作）。抽屉是模态、带遮罩，切章、点编辑区、点其他入口前必须关；用 Esc（抽屉的 document keydown，不受提案抽屉遮挡）
+  const closeAssistantDrawer = async (page) => {
+    const drawer = page.getByRole('dialog', { name: '同行者' })
+    if (!(await drawer.count())) return
+    await page.keyboard.press('Escape')
+    await drawer.waitFor({ state: 'detached' })
+  }
+  // 同行者区域已回来：宽布局等面板，窄布局等「打开同行者」按钮（与 restoreBaseline 同一判断）
+  const waitAssistantShown = async (page) => {
+    if (await isNarrowLayout(page)) await page.getByRole('button', { name: '打开同行者' }).waitFor()
+    else await page.locator('.assistant-panel').waitFor()
+  }
+  // 窄屏辅助：≤1080 宽时同行者收起为按钮；先开抽屉，再确认选区仍在（选区提示 +「修改」可用），返回抽屉作为后续操作范围
+  const openAssistantKeepingSelection = async (page, label) => {
+    if (!(await isNarrowLayout(page))) return page
+    const domSelection = () => page.evaluate(() => window.getSelection()?.toString().length ?? 0)
+    const before = await domSelection()
+    const drawer = await openAssistantDrawer(page)
+    const chip = await drawer.locator('.selection-chip').textContent({ timeout: 3_000 }).catch(() => null)
+    const enabled = await drawer.getByRole('button', { name: '修改', exact: true }).isEnabled().catch(() => false)
+    const after = await domSelection()
+    process.stdout.write(`e2e U03 drawer ${process.platform} ${label}: selection-chip ${JSON.stringify(chip)} 修改 enabled ${enabled} DOM selection length ${before}→${after}\n`)
+    assert.ok(chip && enabled, `STOP④ ${label}：打开同行者抽屉后选区丢失（chip=${JSON.stringify(chip)}，修改可用=${enabled}，DOM 选区长度 ${before}→${after}）`)
+    return drawer
+  }
+  const waitPatches = async (page, documentId, count, timeout = 15_000) => {
+    const started = Date.now()
+    for (;;) {
+      const list = await page.evaluate(({ projectId, documentId }) => window.workspace.patches.list(projectId, documentId), { projectId: ids.projectId, documentId })
+      if (list.length >= count) return list
+      if (Date.now() - started > timeout) throw new Error(`等待修改提案超时：${list.length} / ${count}`)
+      await page.waitForTimeout(100)
+    }
+  }
+
+  await record('U03 同字跨章编辑提案仍绑定来源章（≤1080 宽时先开同行者抽屉，选区保留后再「修改」）', async () => {
+    const page = running.page
+    await page.locator('.manuscript-editor').press('Control+A')
+    const scope = await openAssistantKeepingSelection(page, `U03 ${await page.evaluate(() => window.innerWidth)}px`)
+    await scope.getByRole('button', { name: '修改', exact: true }).click()
+    const input = scope.getByPlaceholder('和同行者聊聊这部作品…')
     await input.fill('请修改选中的文字')
-    await running.page.getByRole('button', { name: '发送' }).click()
-    await openChapter(running.page, '第二章')
-    await running.page.getByText('跨章改写', { exact: true }).waitFor({ timeout: 15_000 })
-    await running.page.waitForTimeout(100)
-    const counts = await running.page.evaluate(async ({ projectId, chapterA, chapterB }) => ({
+    await scope.getByRole('button', { name: '发送' }).click()
+    // 窄屏：抽屉遮住侧栏，先收起抽屉再切章（请求仍在进行，验证的仍是「切章后提案绑定来源章」）
+    if (scope !== page) { await input.press('Escape'); await scope.waitFor({ state: 'detached' }) }
+    await openChapter(page, '第二章')
+    if (scope === page) await page.getByText('跨章改写', { exact: true }).waitFor({ timeout: 15_000 })
+    await waitPatches(page, ids.chapterA, 1)
+    await page.waitForTimeout(100)
+    const counts = await page.evaluate(async ({ projectId, chapterA, chapterB }) => ({
       a: (await window.workspace.patches.list(projectId, chapterA)).length,
       b: (await window.workspace.patches.list(projectId, chapterB)).length
     }), ids)
     assert.equal(counts.a, 1)
     assert.equal(counts.b, 0)
-    await running.page.locator('.patch-drawer').getByRole('button', { name: '关闭' }).click()
+    const patchDrawer = page.locator('.patch-drawer')
+    if (scope === page || await patchDrawer.count()) await patchDrawer.getByRole('button', { name: '关闭' }).click()
+  })
+
+  // 窄屏覆盖（只跑 U03 与 P3 查找，不把整套 e2e 放到窄屏跑）：
+  // Windows 用真实窗口（BrowserWindow.setContentSize，frame:false 时内容尺寸即窗口尺寸）跑 1000 / 1093 / 1150，读回 innerWidth / getBounds 打到日志；
+  // 1000 必须是真实窗口；1093 / 1150 若被系统压回则 Windows 上不跑（日志标明），由 Linux 视口模拟覆盖。
+  // Linux 走 CDP（无 app.evaluate，不能改 BrowserWindow），1093 / 1150 用 page.setViewportSize（即 CDP Emulation.setDeviceMetricsOverride）模拟，日志标明「emulated」。
+  await record('窄屏覆盖：U03 选中→开抽屉→修改、P3 查找面板不越出编辑区（Windows 真实窗口 1000 / 1093 / 1150；Linux 模拟 1093 / 1150）', async () => {
+    const page = running.page
+    const text = ['窄验乙推门进来。窄验乙，你来了。', '窄验乙没有回答。']
+    const chapterId = await page.evaluate(async ({ projectId, text }) => {
+      const tree = await window.workspace.documents.tree(projectId)
+      const volume = tree.find((item) => item.type === 'volume')
+      const node = await window.workspace.documents.create({ projectId, parentId: volume.id, type: 'chapter', title: '窄屏验收章' })
+      await window.workspace.documents.save({ projectId, documentId: node.id, editorJson: { type: 'doc', content: text.map((line) => ({ type: 'paragraph', content: [{ type: 'text', text: line }] })) },
+        plainText: text.join('\n\n'), expectedRevision: 0 })
+      return node.id
+    }, { projectId: ids.projectId, text })
+    await page.reload()
+    await page.getByRole('button', { name: '继续写作' }).click()
+    await page.locator('.manuscript-editor').waitFor()
+    await openChapter(page, '窄屏验收章')
+    const editor = page.locator('.manuscript-editor', { hasText: '窄验乙没有回答' })
+    await editor.waitFor()
+    const plan = process.platform === 'win32' ? [1000, 1093, 1150].map((width) => ({ width, mode: 'real' }))
+      : process.platform === 'linux' ? [1093, 1150].map((width) => ({ width, mode: 'emulated' })) : []
+    try {
+      for (const { width, mode } of plan) {
+        if (mode === 'real') {
+          const measured = await resizeRealWindow(running, width)
+          process.stdout.write(`e2e width narrow ${process.platform} target ${width} real window: innerWidth ${measured.innerWidth} innerHeight ${measured.innerHeight} getBounds ${JSON.stringify(measured.bounds)} getContentBounds ${JSON.stringify(measured.content)}\n`)
+          if (measured.innerWidth !== width) {
+            assert.notEqual(width, 1000, `1000 宽必须用真实窗口跑：setContentSize(1000) 后 innerWidth=${measured.innerWidth}`)
+            process.stdout.write(`e2e width narrow ${process.platform} target ${width}: real window clamped to ${measured.innerWidth}, NOT RUN on ${process.platform} (covered by Linux emulation)\n`)
+            continue
+          }
+        } else {
+          await page.setViewportSize({ width, height: baseline.height })
+          const innerWidth = await page.evaluate(() => window.innerWidth)
+          process.stdout.write(`e2e width narrow ${process.platform} target ${width} emulated (CDP Emulation.setDeviceMetricsOverride via setViewportSize): innerWidth ${innerWidth}\n`)
+          assert.equal(innerWidth, width)
+        }
+        assert.equal(await page.evaluate(() => window.matchMedia('(max-width: 1080px)').matches), width <= 1080, `${width}px：窄屏断点`)
+
+        // U03：全选 →（窄屏先开抽屉）→ 选区仍在、「修改」可用 → 发送后提案落到本章，说明 freezeAITarget 拿到了原始选区
+        await editor.click()
+        await page.keyboard.press('Control+A')
+        // 选区诊断：同行者是否拿到选区、焦点、编辑器中心点命中的元素、各层水平滚动
+        const selectionDiag = () => page.evaluate(() => {
+          const editorBox = document.querySelector('.manuscript-editor')?.getBoundingClientRect()
+          const hit = editorBox ? document.elementFromPoint(editorBox.left + editorBox.width / 2, editorBox.top + editorBox.height / 2) : null
+          return { active: document.activeElement?.className ?? document.activeElement?.tagName, domSelection: window.getSelection()?.toString().length ?? 0, chip: document.querySelector('.selection-chip')?.textContent ?? null,
+            hit: hit ? `${hit.tagName}.${hit.className}` : null, scroll: [...document.querySelectorAll('.screen-host, .workspace-screen, .workspace-main, .manuscript-with-outline, .editor-pane')].map((el) => `${el.className.split(' ')[0]} ${el.scrollLeft}/${el.scrollWidth}-${el.clientWidth}`) }
+        })
+        process.stdout.write(`e2e U03 selection ${process.platform} ${width}px after Ctrl+A: ${JSON.stringify(await selectionDiag())}\n`)
+        if (width > 1080) {
+          const gotChip = await page.locator('.assistant-panel .selection-chip').waitFor({ timeout: 3_000 }).then(() => true, () => false)
+          assert.ok(gotChip, `${width}px：全选后同行者面板没有拿到选区：${JSON.stringify(await selectionDiag())}`)
+        }
+        const scope = await openAssistantKeepingSelection(page, `narrow ${width}px`)
+        const before = (await waitPatches(page, chapterId, 0)).length
+        await scope.getByRole('button', { name: '修改', exact: true }).click()
+        const input = scope.getByPlaceholder('和同行者聊聊这部作品…')
+        await input.fill('请修改选中的文字')
+        await scope.getByRole('button', { name: '发送' }).click()
+        const patches = await waitPatches(page, chapterId, before + 1)
+        const patch = patches.find((item) => item.status === 'proposed' && item.replacement === '跨章改写')
+        process.stdout.write(`e2e U03 narrow ${process.platform} ${width}px: patches ${before}→${patches.length} proposed ${JSON.stringify(patch && { originalText: patch.originalText, replacement: patch.replacement })}\n`)
+        assert.ok(patch && patch.originalText.includes('窄验乙'), `${width}px：「修改」应对原始选区生成提案：${JSON.stringify(patches)}`)
+        await page.evaluate(({ projectId, id }) => window.workspace.patches.reject(projectId, id), { projectId: ids.projectId, id: patch.id })
+        if (scope !== page) { await input.press('Escape'); await scope.waitFor({ state: 'detached' }) }
+        const patchDrawer = page.locator('.patch-drawer')
+        if (await patchDrawer.count()) await patchDrawer.getByRole('button', { name: '关闭' }).click()
+
+        // P3 查找：面板宽 = min(340px, 编辑区宽 − 36px)，不越出编辑区、不压到章节侧栏；正则复选框可真实点击；细纲保持打开
+        await editor.click()
+        await page.keyboard.press('Control+Home')
+        await page.keyboard.press('Control+f')
+        const findInput = page.getByLabel('查找', { exact: true })
+        await findInput.waitFor()
+        const geo = await page.evaluate(() => {
+          const layoutScroll = () => [...document.querySelectorAll('.screen-host, .workspace-screen, .workspace-main, .manuscript-with-outline, .editor-pane')].map((el) => `${el.className.split(' ')[0]} ${el.scrollLeft}/${el.scrollWidth}-${el.clientWidth}`)
+          const box = (el) => { const r = el?.getBoundingClientRect(); return r ? { left: Math.round(r.left * 10) / 10, right: Math.round(r.right * 10) / 10, width: Math.round(r.width * 10) / 10 } : null }
+          const panel = document.querySelector('[data-testid="find-panel"]')
+          const outline = document.querySelector('.manuscript-with-outline')
+          return { innerWidth: window.innerWidth, panel: box(panel), pane: box(panel?.closest('.editor-pane')), sidebar: box(document.querySelector('.project-sidebar')), outline: box(outline?.lastElementChild), outlineColumns: outline ? getComputedStyle(outline).gridTemplateColumns : null, scroll: layoutScroll() }
+        })
+        process.stdout.write(`e2e find narrow ${process.platform} ${width}px: ${JSON.stringify(geo)}\n`)
+        const expected = Math.min(340, geo.pane.width - 36)
+        assert.ok(Math.abs(geo.panel.width - expected) <= 1, `${width}px：查找面板宽 ${geo.panel.width} 应为 min(340, 编辑区 ${geo.pane.width} − 36) = ${expected}`)
+        assert.ok(geo.panel.left >= geo.pane.left - 0.5 && geo.panel.right <= geo.pane.right + 0.5, `${width}px：查找面板应在编辑区内：${JSON.stringify(geo)}`)
+        assert.ok(geo.panel.left >= geo.sidebar.right - 0.5, `${width}px：查找面板不压章节侧栏：${JSON.stringify(geo)}`)
+        await findInput.fill('窄验乙')
+        await page.getByTestId('find-count').filter({ hasText: '共 3 处' }).waitFor()
+        await page.getByLabel('正则').check()
+        await findInput.fill('窄验.')
+        await page.getByTestId('find-count').filter({ hasText: '共 3 处' }).waitFor()
+        await page.getByLabel('正则').uncheck()
+        await findInput.press('Escape')
+        await page.getByTestId('find-panel').waitFor({ state: 'detached' })
+      }
+    } finally {
+      // 恢复到基准宽度（首次启动时的真实窗口尺寸），不放大窗口
+      if (plan.some((item) => item.mode === 'real')) {
+        const restored = await resizeRealWindow(running, baseline.width, baseline.height)
+        process.stdout.write(`e2e width narrow ${process.platform} restore real window to baseline ${baseline.width}: innerWidth ${restored.innerWidth}\n`)
+      } else await page.setViewportSize(baseline)
+    }
+    await openChapter(page, '第二章')
+    await page.locator('.manuscript-editor', { hasText: '同字原文' }).waitFor()
+    await page.evaluate(async ({ projectId, chapterId }) => window.workspace.documents.delete(projectId, chapterId), { projectId: ids.projectId, chapterId })
+    await page.reload()
+    await page.getByRole('button', { name: '继续写作' }).click()
+    await page.locator('.manuscript-editor').waitFor()
+    await openChapter(page, '第二章')
+    await page.locator('.manuscript-editor', { hasText: '同字原文' }).waitFor()
   })
 
   // S2 / §6 ③：配置本地 fixture Provider 后，只有该 origin 收到请求（AI 走已保存 origin；非白名单由单测覆盖）
@@ -444,12 +634,16 @@ try {
   // S8：续写候选须「采用为补丁」才 propose；未接受前正文不变；补丁只绑来源章
   await record('U04 跨章续写候选采用为补丁只写来源章', async () => {
     await openChapter(running.page, '第一章')
-    await running.page.getByRole('button', { name: '续写', exact: true }).click()
-    await running.page.getByPlaceholder('和同行者聊聊这部作品…').fill('请续写一段候选')
-    await running.page.getByRole('button', { name: '发送' }).click()
+    let assistant = await openAssistantDrawer(running.page)
+    await assistant.getByRole('button', { name: '续写', exact: true }).click()
+    await assistant.getByPlaceholder('和同行者聊聊这部作品…').fill('请续写一段候选')
+    await assistant.getByRole('button', { name: '发送' }).click()
+    // 窄屏：切章前必须关抽屉（模态遮罩）。AssistantPanel 收起时只换渲染、组件不卸载（messages 是其 useState），再开抽屉候选应仍在
+    await closeAssistantDrawer(running.page)
     await openChapter(running.page, '第二章')
-    await running.page.getByText('续写候选', { exact: true }).waitFor({ timeout: 15_000 })
-    await running.page.getByRole('button', { name: '采用为补丁' }).last().click()
+    assistant = await openAssistantDrawer(running.page)
+    await assistant.getByText('续写候选', { exact: true }).waitFor({ timeout: 15_000 })
+    await assistant.getByRole('button', { name: '采用为补丁' }).last().click()
     await running.page.getByText('已提出补丁', { exact: true }).waitFor()
     const mid = await running.page.evaluate(async ({ projectId, chapterA, chapterB }) => {
       const patchesA = await window.workspace.patches.list(projectId, chapterA)
@@ -465,7 +659,8 @@ try {
     assert.equal(mid.bProposed, 0, '当前章不应有补丁')
     assert.equal(mid.bodyB, '同字原文。最后一次输入会保存。')
     assert.ok(!mid.bodyA.includes('续写候选'), '接受前来源章正文不应写入候选')
-    // createPatch 会打开提案抽屉，挡住「打开来源章节」；先关再回来源章
+    // createPatch 会打开提案抽屉，挡住「打开来源章节」；先关（窄屏先关同行者抽屉）再回来源章
+    await closeAssistantDrawer(running.page)
     const drawer = running.page.locator('.patch-drawer')
     if (await drawer.count()) await drawer.getByRole('button', { name: '关闭' }).click()
     await openChapter(running.page, '第一章')
@@ -517,21 +712,27 @@ try {
   await record('摘要请求中正文变化不会写成 fresh', async () => {
     streamDelay = 2_000
     const editor = running.page.locator('.manuscript-editor')
-    await running.page.getByRole('button', { name: '理解本章' }).click()
-    await running.page.getByRole('button', { name: '理解中…' }).waitFor()
+    let assistant = await openAssistantDrawer(running.page)
+    await assistant.getByRole('button', { name: '理解本章' }).click()
+    await assistant.getByRole('button', { name: '理解中…' }).waitFor()
+    await closeAssistantDrawer(running.page)
     await editor.fill('摘要请求发出后发生修改')
     await openChapter(running.page, '第二章')
-    await running.page.getByText(/章节理解失败：/).waitFor({ timeout: 15_000 })
+    assistant = await openAssistantDrawer(running.page)
+    await assistant.getByText(/章节理解失败：/).waitFor({ timeout: 15_000 })
+    await closeAssistantDrawer(running.page)
     const status = await running.page.evaluate(({ projectId, chapterA }) => window.workspace.digests.status(projectId, chapterA), ids)
     assert.notEqual(status.state, 'fresh')
     streamDelay = 450
   })
 
   await record('Provider 意外 EOF 在 UI 与持久层标为错误', async () => {
-    await running.page.getByRole('button', { name: '续写', exact: true }).click()
-    await running.page.getByPlaceholder('和同行者聊聊这部作品…').fill('EOF 测试')
-    await running.page.getByRole('button', { name: '发送' }).click()
-    await running.page.getByText(/模型流在完成标记前中断/).waitFor({ timeout: 15_000 })
+    const assistant = await openAssistantDrawer(running.page)
+    await assistant.getByRole('button', { name: '续写', exact: true }).click()
+    await assistant.getByPlaceholder('和同行者聊聊这部作品…').fill('EOF 测试')
+    await assistant.getByRole('button', { name: '发送' }).click()
+    await assistant.getByText(/模型流在完成标记前中断/).waitFor({ timeout: 15_000 })
+    await closeAssistantDrawer(running.page)
     const state = await running.page.evaluate(async (projectId) => {
       const [thread] = await window.workspace.chat.listThreads(projectId)
       const messages = await window.workspace.chat.listMessages(projectId, thread.id, undefined, 50)
@@ -542,10 +743,12 @@ try {
 
   await record('Provider 长请求可取消且不会标为完成', async () => {
     streamDelay = 2_000
-    await running.page.getByPlaceholder('和同行者聊聊这部作品…').fill('请续写取消测试')
-    await running.page.getByRole('button', { name: '发送' }).click()
-    await running.page.getByTitle('取消请求').click()
-    await running.page.getByText(/请求已取消/).waitFor({ timeout: 10_000 })
+    const assistant = await openAssistantDrawer(running.page)
+    await assistant.getByPlaceholder('和同行者聊聊这部作品…').fill('请续写取消测试')
+    await assistant.getByRole('button', { name: '发送' }).click()
+    await assistant.getByTitle('取消请求').click()
+    await assistant.getByText(/请求已取消/).waitFor({ timeout: 10_000 })
+    await closeAssistantDrawer(running.page)
     const state = await running.page.evaluate(async (projectId) => {
       const [thread] = await window.workspace.chat.listThreads(projectId)
       const messages = await window.workspace.chat.listMessages(projectId, thread.id, undefined, 50)
@@ -567,9 +770,11 @@ try {
       return { unsaved, saved }
     }, { anthropicBaseUrl })
     assert.deepEqual(tested, { unsaved: { ok: true }, saved: { ok: true } })
-    await running.page.getByPlaceholder('和同行者聊聊这部作品…').fill('请续写 Anthropic 一句')
-    await running.page.getByRole('button', { name: '发送' }).click()
-    await running.page.getByText('Anthropic 候选', { exact: true }).first().waitFor({ timeout: 15_000 })
+    const assistant = await openAssistantDrawer(running.page)
+    await assistant.getByPlaceholder('和同行者聊聊这部作品…').fill('请续写 Anthropic 一句')
+    await assistant.getByRole('button', { name: '发送' }).click()
+    await assistant.getByText('Anthropic 候选', { exact: true }).first().waitFor({ timeout: 15_000 })
+    await closeAssistantDrawer(running.page)
     const streamed = anthropicRequests.find((item) => item.body.stream === true)
     assert.ok(streamed, '应收到 Anthropic 流式请求')
     assert.equal(streamed.url, '/v1/messages')
@@ -584,7 +789,6 @@ try {
   await record('窄屏 900/1024：同行者抽屉可开关、清单可钉住、编辑区宽度不变', async () => {
     const page = running.page
     const editor = page.locator('.manuscript-editor')
-    const original = page.viewportSize()
     await page.setViewportSize({ width: 1400, height: 860 })
     await editor.click(); await page.keyboard.press('End'); await page.keyboard.type('窄屏甲登场。')
     await waitSaved(page)
@@ -641,8 +845,7 @@ try {
       await drawer.getByRole('button', { name: '关闭同行者' }).click(); await drawer.waitFor({ state: 'detached' })
     }
     await waitSaved(page)
-    await page.setViewportSize(original ?? { width: 1400, height: 860 })
-    await page.locator('.assistant-panel').waitFor()
+    await restoreBaseline(page)
   })
 
 
@@ -762,7 +965,7 @@ try {
     assert.match(await page.getByTestId('blackroom-words').innerText(), /已写 1[0-9] \/ 8 字/)
     await addLockedDelta(page, before)
     await page.getByTestId('blackroom-finish').click()
-    await page.locator('.assistant-panel').waitFor()
+    await waitAssistantShown(page)
     await page.locator('.works-rail').waitFor()
     assert.equal(await page.getByTestId('blackroom-bar').count(), 0)
     const last = await page.evaluate((projectId) => window.workspace.focus.lastSession(projectId), ids.projectId)
@@ -796,7 +999,7 @@ try {
     await page.getByLabel('紧急出屋确认').fill('我要出屋')
     await addLockedDelta(page, before)
     await page.getByRole('button', { name: '确认出屋' }).click()
-    await page.locator('.assistant-panel').waitFor()
+    await waitAssistantShown(page)
     const last = await page.evaluate((projectId) => window.workspace.focus.lastSession(projectId), ids.projectId)
     assert.equal(last.endedBy, 'emergency')
   })
@@ -811,12 +1014,11 @@ try {
     assert.match(await page.getByTestId('blackroom-remaining').innerText(), /剩余 00:00/)
     await addLockedDelta(page, before)
     await page.getByTestId('blackroom-finish').click()
-    await page.locator('.assistant-panel').waitFor()
+    await waitAssistantShown(page)
   })
 
   await record('F15 × 窄屏 900px：抽屉开着时进入小黑屋 → 抽屉关闭、打开按钮不可见、网络 0', async () => {
     const page = running.page
-    const original = page.viewportSize()
     await page.setViewportSize({ width: 900, height: 800 })
     const openButton = page.getByRole('button', { name: '打开同行者' })
     await openButton.click()
@@ -844,8 +1046,7 @@ try {
     await page.getByTestId('blackroom-bar').waitFor({ state: 'detached' })
     await openButton.waitFor()
     assert.equal(await page.locator('.assistant-drawer').count(), 0, '出屋后抽屉保持关闭')
-    await page.setViewportSize(original ?? { width: 1400, height: 860 })
-    await page.locator('.assistant-panel').waitFor()
+    await restoreBaseline(page)
   })
 
   // ───── F14 人物悬停（e2e ⑨–⑫）。只读卡片、此别名不提示（重启保持）、小黑屋内悬停且网络 0、20 万字降级 ─────
@@ -1628,7 +1829,7 @@ try {
     await addLockedDelta(page, before)
     await page.getByRole('button', { name: '确认出屋' }).click()
     await page.getByTestId('blackroom-bar').waitFor({ state: 'detached' })
-    await page.locator('.assistant-panel').waitFor()
+    await waitAssistantShown(page)
   })
 
   // ───── F13 校对词表（e2e ⑪–⑭ + 忽略重启保持）。批量只生成提案、全部接受、快照恢复原文、单条 Ctrl+Z、小黑屋不自动校对且网络 0 ─────
@@ -1782,7 +1983,6 @@ try {
 
   await record('P3 小修⑦ 侧栏最小宽度：状态徽标单行，删除按钮可见可点', async () => {
     const page = running.page
-    const original = page.viewportSize()
     await page.setViewportSize({ width: 1000, height: 800 })
     try {
       const row = page.locator('.chapter-row', { hasText: '词表单条章' }).first()
@@ -1798,12 +1998,11 @@ try {
       await page.getByRole('button', { name: '确认删除' }).waitFor()
       await page.getByRole('button', { name: '取消' }).click()
       await page.getByRole('button', { name: '确认删除' }).waitFor({ state: 'detached' })
-    } finally { await page.setViewportSize(original ?? { width: 1600, height: 900 }) }
+    } finally { await page.setViewportSize(baseline) }
   })
 
   await record('P3 小修⑦ 250px 侧栏：第491章 / 第499章 章号完整可见（不被省略号截成「第49…」），1024 / 1000 实测', async () => {
     const page = running.page
-    const original = page.viewportSize()
     const titles = Array.from({ length: 9 }, (_, i) => `第${491 + i}章 雾港夜行`)
     const created = await page.evaluate(async ({ projectId, titles }) => {
       const tree = await window.workspace.documents.tree(projectId)
@@ -1881,7 +2080,7 @@ try {
       assert.ok(tabbed.prefixRight <= tabbed.boxLeft, `Tab 聚焦时章号不被按钮盖住：${JSON.stringify(tabbed)}`)
     } finally {
       await page.evaluate(async ({ projectId, created }) => { for (const id of created) await window.workspace.documents.delete(projectId, id) }, { projectId: ids.projectId, created })
-      await page.setViewportSize(original ?? { width: 1600, height: 900 })
+      await page.setViewportSize(baseline)
       await page.reload()
       await page.getByRole('button', { name: '继续写作' }).click()
       await page.locator('.manuscript-editor').waitFor()
@@ -2647,7 +2846,7 @@ try {
     assert.equal(await page.getByTestId('book-replace-error').count(), 0)
     // 后台检查点进行期间：IPC 往返、普通保存（第2章，未参与替换）、切章读取（第500章）各 ≤300ms；然后等检查点结束记录耗时
     const probeCheckpoint = (label) => page.evaluate(async ({ projectId, label }) => {
-      const d = window.workspace.diagnostics
+      const d = { walCheckpoint: window.workspace.__devWalCheckpoint }
       const before = await d.walCheckpoint()
       let t = performance.now(); await window.workspace.projects.list(true); const ipcMs = performance.now() - t
       const tree = await window.workspace.documents.tree(projectId)
@@ -2719,7 +2918,7 @@ try {
       }, { projectId: book.id, started: saveStarted })
     }, join(process.cwd(), 'e2e-artifacts', `first-keystroke-after-replace-${process.platform}.cpuprofile`))
     // P3 PR-44 commit 1：主进程侧计时（diagnostics 通道，非打包）——替换后第一次普通保存的 COMMIT 不应再同步做大检查点
-    const walAfterSave = await page.evaluate(() => window.workspace.diagnostics.walCheckpoint())
+    const walAfterSave = await page.evaluate(() => window.workspace.__devWalCheckpoint())
     const firstCommit = walAfterSave.commits.find((c) => c.at >= saveStarted)
     process.stdout.write(`P3 book-replace first save after replace: main COMMIT ${firstCommit?.commitMs}ms autoCheckpoint=${firstCommit?.autoCheckpoint} (limit 50ms); releases ${JSON.stringify(walAfterSave.releases)}; commits since keystroke ${JSON.stringify(walAfterSave.commits.filter((c) => c.at >= saveStarted))}\n`)
     assert.ok(firstCommit, '替换后第一次保存应有主进程 COMMIT 记录')
@@ -2830,11 +3029,18 @@ try {
       return { p50: q(0.5), p95: q(0.95), max: s.at(-1), n: s.length }
     }
     // [KEYDIAG] 各阶段记录后台检查点状态（busy / WAL 文件字节 / 最近一次 PASSIVE 结果），便于 grep 对照
+    // 诊断：只记日志，接口不可用或调用异常都不抛（返回 undefined）
     const keyDiag = async (stage) => {
-      const d = await page.evaluate(() => window.workspace.diagnostics.walCheckpoint())
-      const info = { stage, busy: d.busy, walBytes: d.walBytes, runs: d.runs, autoCheckpoint: d.autoCheckpoint, last: d.last && { ok: d.last.ok, ms: d.last.ms, log: d.last.log, checkpointed: d.last.checkpointed } }
-      process.stdout.write(`[KEYDIAG] ${JSON.stringify(info)}\n`)
-      return d
+      try {
+        const d = await page.evaluate(() => typeof window.workspace.__devWalCheckpoint === 'function' ? window.workspace.__devWalCheckpoint() : null)
+        if (!d) { process.stdout.write(`[KEYDIAG] ${JSON.stringify({ stage, diag: 'NOT_AVAILABLE' })}\n`); return undefined }
+        const info = { stage, busy: d.busy, walBytes: d.walBytes, runs: d.runs, autoCheckpoint: d.autoCheckpoint, last: d.last && { ok: d.last.ok, ms: d.last.ms, log: d.last.log, checkpointed: d.last.checkpointed } }
+        process.stdout.write(`[KEYDIAG] ${JSON.stringify(info)}\n`)
+        return d
+      } catch (error) {
+        process.stdout.write(`[KEYDIAG] ${JSON.stringify({ stage, diagError: String(error) })}\n`)
+        return undefined
+      }
     }
     // 测按键前确定性等后台安静：worker 空闲（busy=false）且 WAL 文件连续 1s 不再增长；最近一次 PASSIVE 的 log/checkpointed 只记录不作门槛
     // （待回写 ≤1MB 时不会再触发 PASSIVE，last 可能长期停在未完成，作门槛会假超时）。WAL 文件本身不缩（未设 journal_size_limit，见 wal-checkpointer.ts 头注释），所以「回落」按待回写量判断。
@@ -2842,7 +3048,9 @@ try {
     const waitQuiet = async (label) => {
       const started = Date.now(); let stableSince = Date.now(); let prev = -1; let d
       for (;;) {
-        d = await page.evaluate(() => window.workspace.diagnostics.walCheckpoint())
+        // 测量前置（不是诊断）：拿不到就明确失败，不跳过、不退化为固定等待
+        d = await page.evaluate(() => typeof window.workspace.__devWalCheckpoint === 'function' ? window.workspace.__devWalCheckpoint() : null)
+        if (!d) assert.fail(`${label} 前置接口不可用 __devWalCheckpoint（e2e 应为 isPackaged=false 构建）`)
         if (d.walBytes !== prev) { prev = d.walBytes; stableSince = Date.now() }
         if (!d.busy && Date.now() - stableSince >= 1000) break
         if (Date.now() - started > 60_000) assert.fail(`${label} 等后台安静超时 60s：busy=${d.busy} walBytes=${d.walBytes} last=${JSON.stringify(d.last)}`)
@@ -2890,7 +3098,6 @@ try {
     assert.ok(modal.width > modal.treeWidth, `重命名弹窗 ${modal.width}px 不应被限制在章树宽度 ${modal.treeWidth}px 内`)
     await dialog.getByRole('button', { name: '取消' }).click()
     // ④ 窄侧栏（1024 宽，侧栏列 250px）：章树仍占满可用高度、行宽等于章树内容宽、章名不溢出到行外
-    const viewport = page.viewportSize()
     await page.setViewportSize({ width: 1024, height: 800 }); await page.waitForTimeout(300)
     const narrow = await page.evaluate(() => {
       const tree = document.querySelector('.manuscript-tree'); const sidebar = document.querySelector('.project-sidebar')
@@ -2903,7 +3110,7 @@ try {
     assert.ok(narrow.tree > 100 && Math.abs(narrow.tree - narrow.available) <= 2, `窄屏章树高度 ${narrow.tree} 应接近 ${narrow.available}`)
     assert.ok(narrow.rowWidth > 0 && narrow.rowWidth <= narrow.treeInner, `窄屏章行宽 ${narrow.rowWidth} 应在章树内容宽 ${narrow.treeInner} 内`)
     assert.ok(narrow.titleInRow, '窄屏章名不溢出到行外')
-    if (viewport) await page.setViewportSize(viewport); else await page.setViewportSize({ width: 1400, height: 860 })
+    await page.setViewportSize(baseline)
     await page.waitForTimeout(300)
     await keyDiag('big-before-quiet')
     await waitQuiet('big')
@@ -2991,11 +3198,13 @@ try {
     }, other.id)
     assert.doesNotMatch(otherAi, /小黑屋|FocusLockError|FOCUS_LOCKED/, `另一本书的 AI 不应受锁影响，实际 ${otherAi}`)
     const otherHits = fixtureHits + anthropicRequests.length
-    await page.getByPlaceholder('和同行者聊聊这部作品…').fill('锁定时在另一本书里提问')
-    await page.getByRole('button', { name: '发送' }).click()
+    const assistant = await openAssistantDrawer(page)
+    await assistant.getByPlaceholder('和同行者聊聊这部作品…').fill('锁定时在另一本书里提问')
+    await assistant.getByRole('button', { name: '发送' }).click()
     for (let waited = 0; fixtureHits + anthropicRequests.length <= otherHits && waited < 5_000; waited += 100) await page.waitForTimeout(100)
     assert.ok(fixtureHits + anthropicRequests.length > otherHits, '另一本书的对话应确实出站')
     assert.equal(await page.locator('.message-content', { hasText: '正在小黑屋中' }).count(), 0, '另一本书不应出现小黑屋报错')
+    await closeAssistantDrawer(page)
     // 回到被锁那本：经作品库切回，锁定照常
     await page.locator('.works-rail button[title="作品库"]').click()
     await page.getByTestId('focus-lock-return').click()
@@ -3007,7 +3216,7 @@ try {
     await page.getByLabel('紧急出屋确认').fill('我要出屋')
     await addLockedDelta(page, before)
     await page.getByRole('button', { name: '确认出屋' }).click()
-    await page.locator('.assistant-panel').waitFor()
+    await waitAssistantShown(page)
     assert.deepEqual(await page.evaluate(() => window.workspace.focus.lockedProjects()), [])
     await page.evaluate((id) => window.workspace.projects.archive(id, true), other.id)
   })
