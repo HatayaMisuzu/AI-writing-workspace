@@ -8,7 +8,7 @@
  * worker PASSIVE 收敛（checkpointed == log）→ 小保存 → 释放读连接 → 再一次小保存。
  * 修复设计（database.ts releaseAutoCheckpoint / checkRestartWait，wal-restart ④）：不主动做 RESTART；PASSIVE 收敛后等 WAL 自然回到文件头（读连接释放 read mark 后下一次写从 WAL 文件头开始），确认之后才恢复 wal_autocheckpoint；
  * WAL 还没回到文件头（读连接仍占 read mark）时不恢复，每次普通写 COMMIT 后（checkRestartWait）再读 -shm 头判断；
- * 兜底：待回写 > 6MB / 等待 ≥ 30s / worker 不可用 / -shm 头读不到时直接恢复（本用例不应触发兜底）。所以断言是：
+ * 兜底：待回写 > 6MB / 等待 ≥ 30s / worker 不可用或连续失败 / -shm 头读不到或校验失败时直接恢复（完整条件以 database.ts restartWaitFallback 为准）（本用例不应触发兜底）。所以断言是：
  *   (a) 保存时要么 autocheckpoint 尚未恢复（=0），要么本次写从文件头开始（mxFrame 很小）；
  *   (b) COMMIT 里没有同步回写（nBackfill 前后不变，且后台 worker 不在跑）。
  * 断言不依赖计时。诊断字段见 CommitRecord（database.ts）。

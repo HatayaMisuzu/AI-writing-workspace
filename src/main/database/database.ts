@@ -13,7 +13,7 @@ export const QUIT_CLOSE_LIMIT_MS = 5_000
  * - 预留段：主连接在预算内主动做一次 wal_checkpoint(TRUNCATE)，再 close（照常回写，此时 WAL 已空，close 很快）。
  * - 预留段耗时与「待回写量」成正比（(mxFrame − nBackfill) × 帧大小，即 WAL 里还没回写进主库的帧；已回写完的大 -wal 文件
  *   退出时只截断、不回写）。db.close() / 检查点是同步调用、无法中途超时：只有待回写量 ≤ WAL_QUIT_BOUND_BYTES（CI 两平台实测取慢者
- *   再留余量）时保证总时长 < QUIT_CLOSE_LIMIT_MS；超过则不保证 5s，但照常回写、已提交数据安全。
+ *   再留余量）时，CI 实测总时长 < QUIT_CLOSE_LIMIT_MS；但慢磁盘上即使待回写量不大也可能超过 5s（对外口径：通常几秒内退出）。超过时照常回写；进程被中途强杀时数据是否完整未验证（0.4.1 做 Windows 硬终止实验）。
  * - 平时的待回写量沿用 main 的维护方式：普通保存由 SQLite 自身 wal_autocheckpoint（1000 页）在 COMMIT 后做 PASSIVE，
  *   批量写由 WalCheckpointer 后台 PASSIVE（暂停 / 释放）。PR-51 不另加定期写回（与 autocheckpoint 功能重复，且与保存重叠时
  *   Windows 保存变慢）。不设 journal_size_limit（实测拖慢释放后首存）；-wal 靠复用不再增长，退出时 TRUNCATE 截断到 0。
@@ -195,7 +195,7 @@ export class AppDatabase {
    * 应用退出用（will-quit，在所有窗口关窗握手——渲染进程 flush 最后一次保存并提交——之后）。P3 PR-53：
    * 1) worker 段：等后台检查点 worker 关闭，硬上限 limitMs − reserveMs，到点 terminate（未完成的回写留在 WAL）。
    * 2) 预留段：主连接主动 wal_checkpoint(TRUNCATE)（失败/BUSY 只记录），再 close（照常回写剩余部分）。
-   * 待回写量 ≤ WAL_QUIT_BOUND_BYTES 时总时长 < limitMs；更多不保证时限，但不跳过回写、不丢已提交数据。
+   * 待回写量 ≤ WAL_QUIT_BOUND_BYTES 时 CI 实测总时长 < limitMs（慢磁盘上不保证）；超过时不保证时限，但不跳过回写；中途被强杀的情况未验证。
    */
   async closeForQuit(limitMs = QUIT_CLOSE_LIMIT_MS, reserveMs = QUIT_FINAL_RESERVE_MS): Promise<QuitResult> {
     const started = performance.now()
