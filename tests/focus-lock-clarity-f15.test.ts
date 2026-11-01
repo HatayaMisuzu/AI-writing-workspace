@@ -78,6 +78,8 @@ const expectTitledNoPrefix = (error: Error): void => {
   expect(userErrorMessage(new Error(`Error invoking remote method 'x': ${String(error)}`))).toBe(error.message)
 }
 
+/** 必须命中 memory-intent.ts 的 positiveHint，否则 extractAndCreate 在出站前本地短路，「出站 0 次」类断言白过。「记住：」是否算意图属产品问题，0.4.1 待议。 */
+const MEMORY_INTENT_INPUT = '记一下：主角怕水'
 beforeEach(() => { rawFetchCalls = 0; setRawFetchForTests(async () => { rawFetchCalls += 1; return new Response('{"data":[]}', { status: 200 }) }) })
 afterEach(() => { installFocusEgressLock(undefined); installEgressGate(undefined); setRawFetchForTests(undefined) })
 
@@ -141,9 +143,9 @@ describe('F15 / P3 锁定期间出站清单（被锁那本拒绝且零出站；�
   })
   it('R5 memories:extract-intent（记忆意图抽取）：被锁那本 → 拒绝、零出站；另一本书 → 放行并出站', async () => {
     const { locked, other } = setup()
-    expectTitledNoPrefix(await rejection('memories:extract-intent', locked.id, 'msg-1', '记住：主角怕水'))
+    expectTitledNoPrefix(await rejection('memories:extract-intent', locked.id, 'msg-1', MEMORY_INTENT_INPUT))
     expect(rawFetchCalls).toBe(0)
-    await notFocusLocked('memories:extract-intent', other.id, 'msg-1', '记住：主角怕水')
+    await notFocusLocked('memories:extract-intent', other.id, 'msg-1', MEMORY_INTENT_INPUT)
     expect(rawFetchCalls).toBeGreaterThan(0)
   })
   it('R6 providers:test（已保存服务测试连接）：非作品请求 → 锁定时放行并出站', async () => {

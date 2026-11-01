@@ -71,6 +71,8 @@ const mockResponse = (init?: RequestInit): Response => {
   return new Response(JSON.stringify({ choices: [{ message: { content: '{"memories":[]}' } }], data: [{ id: 'mock' }] }), { status: 200, headers: { 'content-type': 'application/json' } })
 }
 
+/** 必须命中 memory-intent.ts 的 positiveHint，否则 extractAndCreate 在出站前本地短路，「出站 0 次」类断言白过。「记住：」是否算意图属产品问题，0.4.1 待议。 */
+const MEMORY_INTENT_INPUT = '记一下：主角怕水'
 const CHAPTER_TEXT = '他在坐席上，雨落在港口。'
 const setup = () => {
   ipc.handlers.clear(); ipc.listeners.clear(); sent.length = 0
@@ -136,7 +138,7 @@ describe('DR1 按作品判断：A 在小黑屋、B 不在', () => {
   })
   it('DR1-5 B 的 memories:extract-intent 放行并出站', async () => {
     const env = setup(); lockA(env)
-    notFocusLocked((await settle('memories:extract-intent', env.b.project.id, 'msg-1', '记住：主角怕水')).error)
+    notFocusLocked((await settle('memories:extract-intent', env.b.project.id, 'msg-1', MEMORY_INTENT_INPUT)).error)
     expect(rawFetchCalls).toBeGreaterThan(0)
   })
 })
@@ -156,7 +158,7 @@ describe('DR2 A 在小黑屋：A 自己的请求仍被拦，零出站', () => {
       ['ai:preview-context', { threadId: thread.id, task: { mode: 'discussion', writePermission: 'none', userIntent: '聊聊', projectId: env.a.project.id, documentId: env.a.chapter.id } }],
       ['digests:run', env.a.project.id, env.a.chapter.id],
       ['proofreading:run', env.a.project.id, env.a.chapter.id],
-      ['memories:extract-intent', env.a.project.id, 'msg-1', '记住：主角怕水']
+      ['memories:extract-intent', env.a.project.id, 'msg-1', MEMORY_INTENT_INPUT]
     ]
     for (const [channel, ...args] of calls) {
       const { error } = await settle(channel, ...args)
@@ -267,7 +269,7 @@ describe('DR5 枚举出站 IPC：每条都带 projectId 或「非作品」标记
       current = channel
       if (channel === 'ai:start') await aiStart(env, env.b, 'enum-1')
       else if (channel === 'digests:run' || channel === 'proofreading:run') await settle(channel, bId, env.b.chapter.id)
-      else if (channel === 'memories:extract-intent') await settle(channel, bId, 'msg-1', '记住：主角怕水')
+      else if (channel === 'memories:extract-intent') await settle(channel, bId, 'msg-1', MEMORY_INTENT_INPUT)
       else if (channel === 'providers:test') await settle(channel, 'p', 'mock')
       else await settle(channel, { baseUrl: 'http://localhost:11434/v1', apiKey: 'k', modelId: 'mock', providerId: 'p' })
       const list = seen.get(channel) ?? []
@@ -319,14 +321,14 @@ describe('DR7 标记只用确实存在的作品：不存在的 projectId 不标�
   it('DR7-2 A 被锁时，以不存在的作品 id 调 memories:extract-intent：入口不拦，但出站无标记 → 全局兜底拒绝，fetch 0 次', async () => {
     const env = setup(); lockA(env)
     expect(env.focus.isLocked('ghost-project')).toBe(false)
-    await settle('memories:extract-intent', 'ghost-project', 'msg-1', '记住：主角怕水')
+    await settle('memories:extract-intent', 'ghost-project', 'msg-1', MEMORY_INTENT_INPUT)
     expect(rawFetchCalls).toBe(0)
   })
   it('DR7-3 对照：无锁时同一调用确实出站，且出站时无标记（证明 DR7-2 的 0 次来自兜底而非提前失败）', async () => {
     setup()
     const seen: Array<EgressContext | undefined> = []
     onRawFetch = () => { seen.push(egressContext.currentEgressContext()) }
-    await settle('memories:extract-intent', 'ghost-project', 'msg-1', '记住：主角怕水')
+    await settle('memories:extract-intent', 'ghost-project', 'msg-1', MEMORY_INTENT_INPUT)
     expect(rawFetchCalls).toBeGreaterThan(0)
     expect(seen.every((item) => item === undefined)).toBe(true)
   })
@@ -354,14 +356,14 @@ describe('DR8 二次出站：标记穿过 await / 定时器回调，判定发生
     const seen: Array<EgressContext | undefined> = []
     onRawFetch = () => { seen.push(egressContext.currentEgressContext()) }
     brokenThenValid()
-    notFocusLocked((await settle('memories:extract-intent', env.b.project.id, 'msg-1', '记住：主角怕水')).error)
+    notFocusLocked((await settle('memories:extract-intent', env.b.project.id, 'msg-1', MEMORY_INTENT_INPUT)).error)
     expect(rawFetchCalls).toBe(2)
     expect(seen).toEqual([{ projectId: env.b.project.id }, { projectId: env.b.project.id }])
   })
   it('DR8-2 B 的第一次出站进行中 B 进了小黑屋 → 第二次出站在发出那一刻被拒（只发出 1 次）', async () => {
     const env = setup()
     brokenThenValid(() => { env.focus.start(env.b.project.id, { mode: 'words', words: 100 }) })
-    await settle('memories:extract-intent', env.b.project.id, 'msg-1', '记住：主角怕水')
+    await settle('memories:extract-intent', env.b.project.id, 'msg-1', MEMORY_INTENT_INPUT)
     expect(env.focus.isLocked(env.b.project.id)).toBe(true)
     expect(rawFetchCalls).toBe(1)
   })
