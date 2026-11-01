@@ -44,6 +44,7 @@
 - P3 PR-1：章内查找替换（Ctrl+F/H）+ 本章大纲跳转（[#39](https://github.com/HatayaMisuzu/AI-writing-workspace/pull/39)，[`c380373`](https://github.com/HatayaMisuzu/AI-writing-workspace/commit/c380373)）
 - P3 PR-2a：全书查找（只查找，按章分组，10 万处截断）[B+]（[#40](https://github.com/HatayaMisuzu/AI-writing-workspace/pull/40)，[`24b44bb`](https://github.com/HatayaMisuzu/AI-writing-workspace/commit/24b44bb)）
 - P3 PR-2b：全书替换（单事务）+ 快照整批恢复 [A]（[#41](https://github.com/HatayaMisuzu/AI-writing-workspace/pull/41)，[`25df475`](https://github.com/HatayaMisuzu/AI-writing-workspace/commit/25df475)）
+- P3：小黑屋改为只锁当前作品（A 级）（[#66](https://github.com/HatayaMisuzu/AI-writing-workspace/pull/66)，[`6f26b76`](https://github.com/HatayaMisuzu/AI-writing-workspace/commit/6f26b76)）
 
 ### 修复
 
