@@ -68,6 +68,9 @@ type S = ReturnType<typeof open>
 async function saveRun(s: S, n: number, gapMs = 0) {
   const save: number[] = []; const commit: number[] = []
   let peak = 0; let unread = 0; let helperUnread = 0; let slow = 0
+  // 只记录的诊断：每次提交的序号 / 时刻 / commitMs / 待回写量 / 提交前 worker 是否忙（任何异常吞掉，不影响用例）
+  const trace: TraceRow[] = []
+  const t0 = performance.now()
   for (let i = 0; i < n; i += 1) {
     const t = performance.now()
     s.docs.saveContent({ projectId: s.project.id, documentId: s.chapter.id, editorJson: doc(text(i)), plainText: text(i) })
@@ -79,9 +82,21 @@ async function saveRun(s: S, n: number, gapMs = 0) {
     if (pending === undefined) unread += 1; else if (pending > peak) peak = pending
     const h = readWalState(s.path, 1)
     if (!h.wal.ok || !h.shm.ok) helperUnread += 1
+    try {
+      const rec = s.db.commits.at(-1)
+      trace.push({ seq: i, tMs: Math.round(performance.now() - t0), commitMs: c, pending: pending ?? null, busy: rec?.checkpointerBusy ?? null, peak })
+    } catch { /* 诊断失败不影响用例 */ }
     if (gapMs > 0) await sleep(gapMs); else await tick()
   }
-  return { save, commit, peak, unread, helperUnread, slow }
+  return { save, commit, peak, unread, helperUnread, slow, trace }
+}
+type TraceRow = { seq: number; tMs: number; commitMs: number; pending: number | null; busy: boolean | null; peak: number }
+/** 只打日志：慢提交（>50ms）明细 + 每次提交的紧凑序列；任何异常吞掉 */
+const logTrace = (tag: string, scenario: string, trace: TraceRow[]): void => {
+  try {
+    log(`${tag}-SLOW`, { scenario, slow: trace.filter((r) => r.commitMs > 50) })
+    log(`${tag}-SEQ`, { scenario, cols: 'seq,tMs,commitMs,pending,busy', rows: trace.map((r) => [r.seq, r.tMs, r.commitMs, r.pending, r.busy === null ? null : r.busy ? 1 : 0]) })
+  } catch { /* 诊断失败不影响用例 */ }
 }
 
 describe('H-W6 1：连续保存的待回写上界', () => {
@@ -99,6 +114,7 @@ describe('H-W6 1：连续保存的待回写上界', () => {
       pendingPeakBytes: r.peak, cpPendingPeakBytes: cp.pendingPeakBytes, unreadSnaps: r.unread, helper136Unread: r.helperUnread,
       backfillRequests: cp.backfillRequests, runs: cp.runs, pendingReadFailures: cp.pendingReadFailures, last: cp.last
     })
+    logTrace('HW6DIAG', 'burst-300', r.trace)
     expect(r.unread).toBe(0)
     expect(r.peak).toBeLessThanOrEqual(BACKFILL_BOUND_BYTES)
     expect(cp.pendingPeakBytes).toBeLessThanOrEqual(BACKFILL_BOUND_BYTES)
@@ -124,6 +140,44 @@ describe('H-W6 1：连续保存的待回写上界', () => {
     const r = await saveRun(s, 300)
     log('HW6FIX', { scenario: 'burst-300', group: 'A-1000-control', save: stats(r.save), commit: stats(r.commit), slowCommits: r.slow, pendingPeakBytes: r.peak })
     expect(r.commit).toHaveLength(300)
+  })
+})
+
+describe('H-W6 1b：注入慢回写（只记录，不断言 8MB）', () => {
+  // worker 第 i 次尝试先卡 delaySchedule[i] ms 再 PASSIVE：模拟慢盘上回写轮次卡几百 ms 到 ~2s，期间 noteCommit/requestIfPending 遇 busy 直接 return
+  const DELAY_SCHEDULE = [300, 0, 800, 0, 1500, 0, 2000, 0, 500, 0, 1200, 0, 1800, 0, 700, 0, 2000, 0, 400, 0, 1000, 0, 1600, 0]
+  it('burst-300 + delaySchedule：记录每次提交序号/时刻/待回写量/worker 忙与峰值；只断言注入生效（至少一轮回写墙钟 ≥ 300ms）', async () => {
+    const s = open({ checkpointer: { inject: { delaySchedule: DELAY_SCHEDULE } } })
+    const cp = s.db.checkpointer!
+    // 记录每一轮（request 返回的 outcome，含注入延迟的墙钟 endedAt - startedAt）
+    const rounds: Array<{ startedAt: number; wallMs: number; ok: boolean; attempts: number; workerMs: number; error?: string }> = []
+    const seen = new Set<Promise<unknown>>()
+    const request = cp.request.bind(cp)
+    cp.request = () => {
+      const p = request()
+      if (!seen.has(p)) {
+        seen.add(p)
+        void p.then((o) => { try { rounds.push({ startedAt: o.startedAt ?? 0, wallMs: (o.endedAt ?? 0) - (o.startedAt ?? 0), ok: o.ok, attempts: o.attempts, workerMs: o.ms, error: o.error }) } catch { /* 只记录 */ } })
+      }
+      return p
+    }
+    const started = performance.now()
+    const startedWall = Date.now()
+    const r = await saveRun(s, 300)
+    const totalMs = Math.round(performance.now() - started)
+    await s.db.checkpointIdle()
+    const maxWall = rounds.reduce((m, x) => Math.max(m, x.wallMs), 0)
+    try {
+      log('HW6INJ', {
+        scenario: 'burst-300-inject', delaySchedule: DELAY_SCHEDULE, totalMs, commit: stats(r.commit), slowCommits: r.slow,
+        pendingPeakBytes: r.peak, cpPendingPeakBytes: cp.pendingPeakBytes, over8MB: r.peak > BACKFILL_BOUND_BYTES || cp.pendingPeakBytes > BACKFILL_BOUND_BYTES,
+        unreadSnaps: r.unread, backfillRequests: cp.backfillRequests, runs: cp.runs, maxRoundWallMs: maxWall,
+        rounds: rounds.map((x) => ({ ...x, startedAt: x.startedAt - startedWall }))
+      })
+      logTrace('HW6INJ', 'burst-300-inject', r.trace)
+    } catch { /* 只记录 */ }
+    // 唯一断言：注入确实生效（第 0 次尝试注入 300ms，该轮墙钟必 ≥ 300ms）
+    expect(maxWall).toBeGreaterThanOrEqual(300)
   })
 })
 
