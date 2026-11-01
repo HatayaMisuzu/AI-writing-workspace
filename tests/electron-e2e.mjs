@@ -3192,6 +3192,10 @@ try {
     await page.waitForTimeout(2_500) // 跨过 App 2s 一次的锁状态轮询
     assert.equal(await page.getByTestId('focus-lock-notice').count(), 0, '其他作品不显示全局锁提示')
     assert.equal(await page.getByTestId('blackroom-bar').count(), 0)
+    // P3 U5：切过去后当前作品确实是另一本（作品栏高亮项 = 旁边的书），被锁那本仍锁定
+    assert.equal(await page.locator('.works-rail .work-tile.active').getAttribute('title'), '旁边的书', '切换后当前作品应为另一本书')
+    assert.equal((await page.evaluate((projectId) => window.workspace.focus.status(projectId), other.id)).locked, false, '另一本书不应被锁')
+    assert.equal((await page.evaluate((projectId) => window.workspace.focus.status(projectId), ids.projectId)).locked, true, '切到另一本时原书仍锁定')
     const otherAi = await page.evaluate(async (projectId) => {
       const [chapter] = (await window.workspace.documents.tree(projectId)).filter((node) => node.type === 'chapter')
       try { await window.workspace.digests.run(projectId, chapter.id); return 'resolved' } catch (error) { return String(error?.message ?? error) }
@@ -3209,6 +3213,9 @@ try {
     await page.locator('.works-rail button[title="作品库"]').click()
     await page.getByTestId('focus-lock-return').click()
     await page.getByTestId('blackroom-bar').waitFor()
+    // P3 U5：切回后当前作品是原书（不再是另一本），且原书仍锁定
+    assert.notEqual(await page.locator('.works-rail .work-tile.active').getAttribute('title').catch(() => null), '旁边的书', '切回后当前作品不应仍是另一本书')
+    assert.equal((await page.evaluate((projectId) => window.workspace.focus.status(projectId), ids.projectId)).locked, true, '切回后原书仍应锁定')
     before = await snapshotNetwork(page)
     assert.equal(await page.getByTestId('focus-lock-notice').count(), 0)
     assert.equal(await page.locator('.assistant-panel').count(), 0)
