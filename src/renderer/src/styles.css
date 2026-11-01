@@ -130,7 +130,7 @@ button.danger-button { color: #fff; background: var(--danger); border-color: var
 .workspace-actions button { border: 0; background: transparent; font-size: 12px; color: #555e5a; }
 .workspace-actions kbd { font-size: 10px; color: #999; border: 0; }
 .workspace-actions > span { flex: 1; }
-/* 窄屏（1081–1200）：编辑列只剩约 193px，而工具栏最小内容宽约 593px。编辑区可收缩（min-width:0），工具栏在自身内部横向滚动，不再撑宽 .manuscript-with-outline 把它横向滚走；细纲保持作者的开合状态，不自动收起 */
+/* 窄屏（窗口 minWidth 1000 起，窄布局断点 max-width: 1080px，见 WorkspaceScreen.tsx:27）：编辑列只剩约 193px，而工具栏最小内容宽约 593px。编辑区可收缩（min-width:0），工具栏在自身内部横向滚动，不再撑宽 .manuscript-with-outline 把它横向滚走；细纲保持作者的开合状态，不自动收起 */
 .editor-pane { min-width: 0; min-height: 0; display: grid; grid-template-rows: 43px 1fr 28px; position: relative; }
 .editor-toolbar { min-width: 0; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; display: flex; align-items: center; gap: 4px; padding: 0 13px; border-bottom: 1px solid #ecece7; }
 .toolbar-button { border-color: transparent; background: transparent; font-size: 12px; min-height: 30px; }
