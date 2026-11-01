@@ -286,12 +286,37 @@ describe('E / 3：备份在大 WAL、检查点未完成时导出 → 导入新�
 
 describe('2：worker 关闭与应用退出', () => {
   it('closeAsync 在检查点进行中：等当前检查点跑完、worker 关闭连接退出，再关主连接；重开库数据完整', async () => {
-    const s = setup(20, { checkpointer: { inject: { delayMs: 300 } } })
+    // 同步方式（不依赖 Windows 耗时）：第 0 次尝试无延迟，用来在批量写之前把 worker 线程与其 DB 连接预热好（冷启动 Worker + 打开连接在 Windows 上可达秒级，
+    // 原用例里这段耗时落在“进行中那一轮”里，与 close() 的 2s terminate 赛跑）；之后每次尝试固定卡 300ms，进行中那一轮 ≈ 300ms + 小 WAL 的 PASSIVE。
+    const T0 = performance.now()
+    const ts: Record<string, number | boolean | string | null> = {}
+    const mark = (k: string, v?: boolean | string | null): void => { try { ts[k] = v === undefined ? Math.round((performance.now() - T0) * 10) / 10 : v } catch { /* 只记录 */ } }
+    const attempts: Array<{ at: number; ok: boolean; ms: number; error?: string }> = []
+    const s = setup(20, { checkpointer: { inject: { delaySchedule: [0, 300, 300, 300, 300, 300, 300, 300, 300, 300, 300, 300] }, onAttempt: (a) => { try { attempts.push({ at: Math.round(performance.now() - T0), ok: a.ok, ms: Math.round(a.ms), error: a.error }) } catch { /* 只记录 */ } } } })
+    const cp = s.db.checkpointer!
+    await cp.request() // 预热：确定性等 worker 起好、连接打开、第 0 次尝试结束
+    mark('warmDone')
     s.docs.replaceBatch({ projectId: s.project.id, items: items(s), ...meta })
     const expected = chapterHashes(s.db.raw, s.project.id)
-    const cp = s.db.checkpointer!
+    mark('batchDone')
+    // 只记录：关闭各阶段时间戳（close 调用、close 消息发给 worker、当前那轮结束、worker exit、是否走了 2s terminate）
+    try {
+      const w = (cp as unknown as { worker?: { postMessage(m: unknown): void; terminate(): Promise<number>; once(e: 'exit', f: () => void): void } }).worker
+      mark('workerAtClose', Boolean(w)); mark('inFlightAtClose', cp.attemptInFlight); mark('terminated', false)
+      if (w) {
+        const post = w.postMessage.bind(w)
+        w.postMessage = (m: unknown) => { try { if ((m as { type?: string })?.type === 'close') mark('closeMsgPosted') } catch { /* 只记录 */ } post(m) }
+        const term = w.terminate.bind(w)
+        w.terminate = () => { mark('terminated', true); mark('terminateAt'); return term() }
+        w.once('exit', () => mark('workerExit'))
+      }
+      void cp.currentRound().then(() => mark('roundEnd'), () => mark('roundEnd'))
+    } catch { /* 只记录 */ }
     expect(cp.busy).toBe(true)
+    mark('closeCalled')
     await s.db.closeAsync()
+    mark('closeResolved')
+    try { process.stdout.write(`CLOSE288 ${process.platform} ${JSON.stringify({ ts, attempts, last: cp.last })}\n`) } catch { /* 只记录 */ }
     expect(s.db.closed).toBe(true); expect(cp.closed).toBe(true)
     expect((cp as unknown as { worker?: unknown }).worker).toBeUndefined()
     expect(cp.last?.ok).toBe(true)
