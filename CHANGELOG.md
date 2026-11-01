@@ -44,6 +44,7 @@
 - P3 PR-1：章内查找替换（Ctrl+F/H）+ 本章大纲跳转（[#39](https://github.com/HatayaMisuzu/AI-writing-workspace/pull/39)，[`c380373`](https://github.com/HatayaMisuzu/AI-writing-workspace/commit/c380373)）
 - P3 PR-2a：全书查找（只查找，按章分组，10 万处截断）[B+]（[#40](https://github.com/HatayaMisuzu/AI-writing-workspace/pull/40)，[`24b44bb`](https://github.com/HatayaMisuzu/AI-writing-workspace/commit/24b44bb)）
 - P3 PR-2b：全书替换（单事务）+ 快照整批恢复 [A]（[#41](https://github.com/HatayaMisuzu/AI-writing-workspace/pull/41)，[`25df475`](https://github.com/HatayaMisuzu/AI-writing-workspace/commit/25df475)）
+- P3：小黑屋改为只锁当前作品（A 级）（[#66](https://github.com/HatayaMisuzu/AI-writing-workspace/pull/66)，[`6f26b76`](https://github.com/HatayaMisuzu/AI-writing-workspace/commit/6f26b76)）
 
 ### 修复
 
@@ -51,10 +52,10 @@
 - O1：新对话清空上下文排除态（与切换对话一致）（[#10](https://github.com/HatayaMisuzu/AI-writing-workspace/pull/10)，[`2a1f08b`](https://github.com/HatayaMisuzu/AI-writing-workspace/commit/2a1f08b)）
 - P3: 词表导入 1MB 上限（stat 先检查）+ 小黑屋 spec 补充（A 级）（[#38](https://github.com/HatayaMisuzu/AI-writing-workspace/pull/38)，[`1aae3d0`](https://github.com/HatayaMisuzu/AI-writing-workspace/commit/1aae3d0)）
 - fix(db): quiet checkpoint release before autocheckpoint restore (A)（[#42](https://github.com/HatayaMisuzu/AI-writing-workspace/pull/42)，[`6ca96b8`](https://github.com/HatayaMisuzu/AI-writing-workspace/commit/6ca96b8)）
-- P3：will-quit 5s 上限 + diagnostics 门控（无 dbPath）+ quiet===true（A）（[#43](https://github.com/HatayaMisuzu/AI-writing-workspace/pull/43)，[`4d6d5fd`](https://github.com/HatayaMisuzu/AI-writing-workspace/commit/4d6d5fd)）
+- P3：will-quit 退出上限（通常几秒内退出；慢磁盘上待回写量不大时也可能超过 5 秒；已保存内容不受影响）+ diagnostics 门控（无 dbPath）+ quiet===true（A）（[#43](https://github.com/HatayaMisuzu/AI-writing-workspace/pull/43)，[`4d6d5fd`](https://github.com/HatayaMisuzu/AI-writing-workspace/commit/4d6d5fd)）
 - P3：长段 Ctrl+End / 校对定位到段末不再卡住（renderer）[B+]（[#44](https://github.com/HatayaMisuzu/AI-writing-workspace/pull/44)，[`8678446`](https://github.com/HatayaMisuzu/AI-writing-workspace/commit/8678446)）
 - P3 夜间小修：空书名、记忆提案报错文案、关闭校对折叠选区、重命名同步大标题、窄侧栏徽标（B+）（[#47](https://github.com/HatayaMisuzu/AI-writing-workspace/pull/47)，[`9fe3f12`](https://github.com/HatayaMisuzu/AI-writing-workspace/commit/9fe3f12)）
-- P3 PR-53（A）：退出预算按工作量限制——worker 段硬上限 + 退出前检查点 + journal_size_limit/定期写回；WAL ≤ 8MB 时总时长 < 5s（[#51](https://github.com/HatayaMisuzu/AI-writing-workspace/pull/51)，[`5679058`](https://github.com/HatayaMisuzu/AI-writing-workspace/commit/5679058)）
+- P3 PR-53（A）：退出预算按工作量限制——worker 段硬上限 + 退出前检查点 + journal_size_limit/定期写回；退出时长：通常几秒内退出；慢磁盘上待回写量不大时也可能超过 5 秒；已保存内容不受影响（[#51](https://github.com/HatayaMisuzu/AI-writing-workspace/pull/51)，[`5679058`](https://github.com/HatayaMisuzu/AI-writing-workspace/commit/5679058)）
 
 ### 性能
 
