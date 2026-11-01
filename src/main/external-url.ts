@@ -3,5 +3,5 @@ export const isAllowedExternalUrl = (raw: string): boolean => {
   catch { return false }
 }
 
-/** F15：window.open 外链交给系统浏览器前的判定；小黑屋锁定期间一律不打开。 */
+/** window.open 外链交给系统浏览器前的判定。第二个参数为 true 时不打开；P3 起 main/index.ts 传 false（外链不受小黑屋影响）。 */
 export const shouldOpenExternal = (raw: string, focusLocked: boolean): boolean => !focusLocked && isAllowedExternalUrl(raw)

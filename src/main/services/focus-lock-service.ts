@@ -21,11 +21,11 @@ export class FocusLockError extends Error {
   override toString(): string { return this.message }
 }
 
-/** 锁定文案：带上被锁作品的书名（F15 锁定可见性）。全部拒绝是有意设计：任一作品锁定 → 所有作品的 AI 与出站请求都拒绝。 */
+/** 锁定文案：带上被锁作品的书名（F15 锁定可见性）。小黑屋只锁这一本：被锁作品的 AI 与出站请求拒绝，其他作品不受影响。 */
 export function focusLockedMessage(titles: readonly string[], scope: 'ai' | 'network' = 'ai'): string {
   const named = titles.length ? titles.map((title) => `《${title}》`).join('、') : '某部作品'
   const what = scope === 'ai' ? ' AI 功能' : '联网请求'
-  return `${named}正在小黑屋中：锁定期间所有作品的${what}都已关闭，回到${named}出屋后可用。`
+  return `${named}正在小黑屋中：这本书的${what}已关闭，出屋后可用；其他作品不受影响。`
 }
 
 type SettingsBag = Record<string, unknown>
@@ -187,19 +187,17 @@ export class FocusLockService {
 }
 
 /**
- * 主进程 AI / 测试连接入口守门：任一作品锁定 → 直接拒绝（code FOCUS_LOCKED），不触达 Provider。
- * 有意不按作品区分：锁定期间整个应用零出站（见 03-f15-spec.md「锁定期间拒绝的出站请求」）。
+ * 全局判定：任一作品锁定 → 拒绝（code FOCUS_LOCKED）。
+ * P3 起 IPC 入口不再使用（入口按作品判断，见 assertNotFocusLocked）；与出站「无标记兜底」同一语义，保留给兜底与测试对照。
  */
 export function assertNoFocusLockAnywhere(focus: Pick<FocusLockService, 'lockedProjects'>): void {
   const locked = focus.lockedProjects()
   if (locked.length) throw new FocusLockError('FOCUS_LOCKED', focusLockedMessage(locked.map((item) => item.title)))
 }
-/** 按作品调用的入口：判定同样是「任一作品锁定」（含本作品）；本作品被锁时书名排在前面。 */
+/** 按作品调用的入口：只看这本作品是否在小黑屋（P3 小黑屋只锁当前作品）；别的书被锁不影响本书。 */
 export function assertNotFocusLocked(focus: Pick<FocusLockService, 'lockedProjects'>, projectId: string): void {
-  const locked = focus.lockedProjects()
-  if (!locked.length) return
-  const ordered = [...locked.filter((item) => item.projectId === projectId), ...locked.filter((item) => item.projectId !== projectId)]
-  throw new FocusLockError('FOCUS_LOCKED', focusLockedMessage(ordered.map((item) => item.title)))
+  const locked = focus.lockedProjects().filter((item) => item.projectId === projectId)
+  if (locked.length) throw new FocusLockError('FOCUS_LOCKED', focusLockedMessage(locked.map((item) => item.title)))
 }
 
 /** 取不到书名时的占位书名。 */
@@ -214,5 +212,17 @@ export function focusEgressCheck(focus: Pick<FocusLockService, 'lockedProjects'>
     try { locked = focus.lockedProjects() } catch { return true }
     if (!locked.length) return false
     return locked.map((item) => item.title?.trim() || FOCUS_LOCK_PLACEHOLDER_TITLE)
+  }
+}
+/**
+ * 供 installFocusEgressLock 的按作品判定：这本未锁定 → false；锁定 → 书名（空书名用占位书名）；
+ * 查询失败 → 占位书名（fail-closed，按锁定处理）。
+ */
+export function focusProjectEgressCheck(focus: Pick<FocusLockService, 'lockedProjects'>): (projectId: string) => false | string {
+  return (projectId) => {
+    let locked: FocusLockedProject[]
+    try { locked = focus.lockedProjects() } catch { return FOCUS_LOCK_PLACEHOLDER_TITLE }
+    const hit = locked.find((item) => item.projectId === projectId)
+    return hit ? (hit.title?.trim() || FOCUS_LOCK_PLACEHOLDER_TITLE) : false
   }
 }

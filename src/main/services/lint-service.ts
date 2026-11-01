@@ -36,7 +36,7 @@ export async function readWordlistFile(path: string, io: { stat: typeof stat; re
 
 export class LintService {
   private readonly documents: DocumentService
-  constructor(private readonly db: AppDatabase, private readonly isLocked: (projectId: string) => boolean = () => false) {
+  constructor(private readonly db: AppDatabase) {
     this.documents = new DocumentService(db)
   }
 
@@ -153,9 +153,8 @@ export class LintService {
   }
 
   // ---------- 检查 ----------
-  /** IPC linter:run：保存后自动 / 抽屉手动。小黑屋中 → 不运行（组长决定 3）。 */
+  /** IPC linter:run：保存后自动 / 抽屉手动。纯本地、不出站；P3 起小黑屋锁定时也照常运行（是否自动触发由界面决定）。 */
   run(projectId: string, documentId: string, text: string, sourceRevision = -1): LintResult {
-    if (this.isLocked(projectId)) return { issues: [], longChapter: false, skipped: 'focus-locked', elapsedMs: 0 }
     const started = performance.now()
     const result = lintProject({ text, documentId, sourceRevision, globalText: this.getGlobalText(), projectText: this.getProjectText(projectId), rules: this.getRules(projectId) })
     const issues = this.applyIgnores(projectId, documentId, result.issues, true)
@@ -178,7 +177,7 @@ export class LintService {
       const results: BookCheckChapter[] = []
       let timedOut = false
       for (const [index, node] of chapters.entries()) {
-        if (state.cancelled || this.isLocked(projectId)) { state.cancelled = true; break }
+        if (state.cancelled) break
         if (now() - started > limit) { timedOut = true; break }
         const content = this.documents.getContent(projectId, node.id)
         const lint = lintProject({ text: content.plainText, documentId: node.id, sourceRevision: content.revision, globalText, projectText, rules })

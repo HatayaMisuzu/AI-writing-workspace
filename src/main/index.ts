@@ -38,7 +38,8 @@ if (!app.requestSingleInstanceLock()) {
     win.webContents.on('will-navigate', (event) => { event.preventDefault() })
     attachCloseHandshake(win)
     win.webContents.setWindowOpenHandler(({ url }) => {
-      if (shouldOpenExternal(url, isFocusEgressLocked())) void shell.openExternal(url)
+      // P3 小黑屋只锁当前作品：外链由系统浏览器打开，属「非作品」请求，不看锁（renderer 自身的网络策略不变）
+      if (shouldOpenExternal(url, false)) void shell.openExternal(url)
       return { action: 'deny' }
     })
     if (process.env.ELECTRON_RENDERER_URL) void win.loadURL(process.env.ELECTRON_RENDERER_URL)

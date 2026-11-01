@@ -27,7 +27,6 @@ export function ProofingView({ project, tree, locked, onOpenChapter }: { project
     setProjectText(lists.projectText); setGlobalText(lists.globalText); setRules(nextRules); setWhitelistText(nextRules.reduplicationWhitelist.join('\n'))
   }, [project.id])
   useEffect(() => { void load() }, [load])
-  if (locked) return null
   const guard = async (task: () => Promise<unknown>, ok: string): Promise<void> => {
     try { await task(); setNotice({ ok: true, text: ok }) } catch (error) { setNotice({ ok: false, text: userErrorMessage(error) }) }
   }
@@ -43,6 +42,22 @@ export function ProofingView({ project, tree, locked, onOpenChapter }: { project
     finally { setRunId(undefined) }
   }
   const volumes = tree.filter((node) => node.type === 'volume')
+  const checkSection = <section data-testid="book-check-section"><h3>检查本卷 / 全书</h3>
+    <div className="proofread-actions">
+      <select aria-label="检查范围" value={volumeId} onChange={(event) => setVolumeId(event.target.value)}><option value="">全书</option>{volumes.map((volume) => <option key={volume.id} value={volume.id}>{volume.title}</option>)}</select>
+      <button className="primary" disabled={Boolean(runId)} onClick={() => void runBook()}>开始检查</button>
+      {runId && <button onClick={() => void window.workspace.lint.cancelBookCheck(runId)}>取消</button>}
+      {progress && runId && <span role="status">已检查 {progress.done} / {progress.total} 章</span>}
+    </div>
+    {book && <div data-testid="book-check-result"><p>{book.cancelled ? '已取消。' : book.timedOut ? '超过 180 秒上限，已停止。' : '检查完成。'}共 {book.total} 条，耗时 {(book.elapsedMs / 1000).toFixed(1)} 秒。结果只做定位，请打开章节后处理。</p>
+      <ul>{book.chapters.map((chapter) => <li key={chapter.documentId}><button onClick={() => onOpenChapter(chapter.documentId)}>{chapter.title}</button> {chapter.count} 条（{Object.entries(chapter.groups).map(([group, count]) => `${GROUP_LABEL[group as LintGroup]} ${count}`).join('、')}）{chapter.longChapter ? ' · 章节过长，只查了标点' : ''}</li>)}</ul></div>}
+  </section>
+  // P3 小黑屋：锁定时只保留整本检查（全书 / 本卷），纯本地、不出站；词表编辑与规则开关等出屋后再改。AI 校对在锁定时本就不显示。
+  if (locked) return <section className="prompt-templates-view proofing-view" data-testid="proofing-view">
+    <header><h2>整本检查</h2><p>小黑屋中只保留本地检查：不联网、不调用 AI。结果只做定位，点章节名回到正文处理。</p></header>
+    {notice && <div className={notice.ok ? 'inline-notice' : 'inline-error'} role={notice.ok ? 'status' : 'alert'}>{notice.text}</div>}
+    {checkSection}
+  </section>
   return <section className="prompt-templates-view proofing-view" data-testid="proofing-view">
     <header><h2>校对与词表</h2><p>纯本地检查，不联网、不调用 AI。词表结果只在校对抽屉里计数，不在正文加下划线。</p></header>
     {notice && <div className={notice.ok ? 'inline-notice' : 'inline-error'} role={notice.ok ? 'status' : 'alert'}>{notice.text}</div>}
@@ -77,15 +92,6 @@ export function ProofingView({ project, tree, locked, onOpenChapter }: { project
         <label><span>叠词白名单（每行一个，不报）</span><textarea aria-label="叠词白名单" rows={4} value={whitelistText} onChange={(event) => setWhitelistText(event.target.value)} /></label>
         <button onClick={() => void saveRules({ ...rules, reduplicationWhitelist: whitelistText.split(/\s+/).filter(Boolean) })}>保存白名单</button></div>}
     </section>}
-    <section><h3>检查本卷 / 全书</h3>
-      <div className="proofread-actions">
-        <select aria-label="检查范围" value={volumeId} onChange={(event) => setVolumeId(event.target.value)}><option value="">全书</option>{volumes.map((volume) => <option key={volume.id} value={volume.id}>{volume.title}</option>)}</select>
-        <button className="primary" disabled={Boolean(runId)} onClick={() => void runBook()}>开始检查</button>
-        {runId && <button onClick={() => void window.workspace.lint.cancelBookCheck(runId)}>取消</button>}
-        {progress && runId && <span role="status">已检查 {progress.done} / {progress.total} 章</span>}
-      </div>
-      {book && <div data-testid="book-check-result"><p>{book.cancelled ? '已取消。' : book.timedOut ? '超过 180 秒上限，已停止。' : '检查完成。'}共 {book.total} 条，耗时 {(book.elapsedMs / 1000).toFixed(1)} 秒。结果只做定位，请打开章节后处理。</p>
-        <ul>{book.chapters.map((chapter) => <li key={chapter.documentId}><button onClick={() => onOpenChapter(chapter.documentId)}>{chapter.title}</button> {chapter.count} 条（{Object.entries(chapter.groups).map(([group, count]) => `${GROUP_LABEL[group as LintGroup]} ${count}`).join('、')}）{chapter.longChapter ? ' · 章节过长，只查了标点' : ''}</li>)}</ul></div>}
-    </section>
+    {checkSection}
   </section>
 }
